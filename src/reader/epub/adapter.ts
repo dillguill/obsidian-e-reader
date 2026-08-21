@@ -23,7 +23,6 @@ import type { Locator } from "../../core/types";
 import type { EpubFlow } from "../../settings/settings-model";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
 import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine, SearchHit } from "../engine";
-import { highlightColor } from "../highlight-style";
 import { fractionToPercent } from "../progress";
 import { clampScale } from "../zoom";
 
@@ -223,6 +222,7 @@ export class EpubEngine implements ReaderEngine {
   private container: HTMLElement | null = null;
   private lastCfi: string | null = null;
   private contextMenuHandler: ((position: { x: number; y: number }) => void) | null = null;
+  private selectionEndHandler: (() => void) | null = null;
   private changeHandler: (() => void) | null = null;
   private textScale: number;
   private flowMode: EpubFlow;
@@ -291,6 +291,11 @@ export class EpubEngine implements ReaderEngine {
           y: event.clientY + (frameRect?.top ?? 0),
         });
       });
+      // Selection gestures, like the context menu, do not cross the iframe
+      // boundary and have to be attached per section.
+      const fireSelectionEnd = (): void => this.selectionEndHandler?.();
+      contents.document.addEventListener("mouseup", fireSelectionEnd);
+      contents.document.addEventListener("touchend", fireSelectionEnd);
       this.addNavigationGestures(contents);
       // A section that arrives later still gets the vault's theme and
       // whatever highlights belong to it.
@@ -669,7 +674,7 @@ export class EpubEngine implements ReaderEngine {
       // The overlay lives inside the iframe, out of reach of styles.css, so
       // the colour has to be resolved here and passed as an attribute.
       rendition.annotations.highlight(cfiRange, { id: highlight.id }, undefined, "ereader-hl", {
-        fill: highlightColor(this.container, highlight.type),
+        fill: highlight.color,
         "fill-opacity": "0.3",
         "mix-blend-mode": "multiply",
       });
@@ -703,6 +708,16 @@ export class EpubEngine implements ReaderEngine {
     this.contextMenuHandler = handler;
   }
 
+  onSelectionEnd(handler: () => void): void {
+    this.selectionEndHandler = handler;
+  }
+
+  clearSelection(): void {
+    // Each section is its own document with its own selection.
+    for (const contents of this.rendition?.getContents() ?? []) {
+      contents.window.getSelection()?.removeAllRanges();
+    }
+  }
 
   async outline(): Promise<OutlineNode[]> {
     const book = this.book;
@@ -732,6 +747,7 @@ export class EpubEngine implements ReaderEngine {
 
   destroy(): void {
     this.contextMenuHandler = null;
+    this.selectionEndHandler = null;
     this.changeHandler = null;
     this.turning = false;
     this.turnBlocked = false;

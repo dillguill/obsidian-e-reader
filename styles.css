@@ -171,6 +171,24 @@
   pointer-events: none;
 }
 
+/* Armed highlight mode reads off the button in the colour it will write, so
+   it is obvious which type the next drag becomes. */
+.ereader-toolbar__button.is-active {
+  color: var(--ereader-active-hl, var(--text-accent));
+}
+
+/* Colour chip beside a type name in the highlight-type picker. MenuItem
+   exposes no DOM element, so this rides in on setTitle's fragment form. */
+.ereader-toolbar__swatch {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-inline-end: var(--size-4-2);
+  border-radius: var(--radius-s);
+  vertical-align: baseline;
+  box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+}
+
 .ereader-reader__empty {
   margin: auto;
   padding: var(--size-4-4);

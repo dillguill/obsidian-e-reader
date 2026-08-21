@@ -14,7 +14,7 @@
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { FileView, Menu, Notice, TFile } from "obsidian";
-import { addEntry, listEntries, removeEntry } from "../annotations/store";
+import { addEntry, listEntries, removeEntry, setEntryType } from "../annotations/store";
 import type { Entry } from "../annotations/entry";
 import type { ReaderEvents } from "../core/reader-events";
 import { describeAttachmentLookup, resolveBookAttachment, resolveBookAttachmentPath } from "../core/attachment";
@@ -22,10 +22,11 @@ import { parseLocator, serializeLocator } from "../core/locator";
 import { RESERVED_ENTRY_TYPE, type Locator } from "../core/types";
 import type { Settings } from "../settings/settings-model";
 import { createEpubEngine } from "./epub/adapter";
-import type { EngineSelection, OutlineNode, PaintedHighlight, ReaderEngine } from "./engine";
+import type { DisplayOption, EngineSelection, OutlineNode, PaintedHighlight, ReaderEngine } from "./engine";
 import { createPdfEngine } from "./pdf/adapter";
 import { type ReadingPosition, positionChanged, shouldFlushNow } from "./position";
 import { clampProgress } from "./progress";
+import { highlightColor } from "./highlight-style";
 import { ReaderToolbar } from "./toolbar";
 import { toolbarState } from "./toolbar-model";
 import { stepScale } from "./zoom";
@@ -60,8 +61,10 @@ export class ReaderView extends FileView {
    * costs a load of every section named in the TOC to resolve each href to a
    * CFI, which is far too slow to repeat on every sidebar render. */
   private cachedOutline: OutlineNode[] | null = null;
-  /** The book note's bookmark entries, for the toolbar's filled state. */
-  private bookmarks: Entry[] = [];
+  /** The book note's entries, as last read. The context menu looks one up by
+   * id when the reader right-clicks a painted highlight, and the bookmark
+   * button reads the bookmarks out of it. */
+  private entries: Entry[] = [];
   /**
    * Signature of the entries last applied. The reader writes progress into
    * the book note's frontmatter every couple of seconds, and every one of
@@ -69,6 +72,13 @@ export class ReaderView extends FileView {
    * each time, for a change that cannot possibly have touched an entry.
    */
   private lastEntrySignature: string | null = null;
+  /**
+   * Whether a completed drag becomes a highlight straight away. Deliberately
+   * NOT persisted: a reader that comes back to an armed book and silently
+   * turns its first drag into a note has been ambushed, and re-arming costs
+   * one click.
+   */
+  private highlightMode = false;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -111,8 +121,16 @@ export class ReaderView extends FileView {
       zoomIn: () => void this.zoom(1),
       zoomOut: () => void this.zoom(-1),
       goToPage: (page) => void this.goToPage(page),
-      displayOptions: () => this.engine?.displayOptions() ?? [],
-      toggleHighlights: () => void this.toggleHighlights(),
+      displayOptions: () => this.displayOptions(),
+      toggleHighlightMode: () => this.setHighlightMode(!this.highlightMode),
+      annotationTypes: () => this.getSettings().annotationTypes,
+      chooseHighlightType: (name) => {
+        this.getSettings().reader.activeAnnotationType = name;
+        this.saveSettings();
+        // Choosing a type is how most readers will start highlighting, so it
+        // arms rather than making them click the button as well.
+        this.setHighlightMode(true);
+      },
       toggleBookmark: () => void this.toggleBookmark(),
     });
     this.toolbar.setVisible(false);
@@ -156,7 +174,7 @@ export class ReaderView extends FileView {
     this.engine?.destroy();
     this.engine = null;
     this.cachedOutline = null;
-    this.bookmarks = [];
+    this.entries = [];
     this.lastEntrySignature = null;
     this.lastWritten = null;
     this.lastFlushAt = 0;
@@ -194,8 +212,9 @@ export class ReaderView extends FileView {
     this.engine?.destroy();
     this.engine = null;
     this.cachedOutline = null;
-    this.bookmarks = [];
+    this.entries = [];
     this.lastEntrySignature = null;
+    this.highlightMode = false;
     this.toolbar?.setVisible(false);
     this.clearViewport();
 
@@ -247,6 +266,7 @@ export class ReaderView extends FileView {
     }
     this.engine = engine;
     engine.onContextMenu((position) => this.showAnnotationMenu(position));
+    engine.onSelectionEnd(() => void this.onSelectionEnd());
     engine.onChange(() => this.updateToolbar());
     this.toolbar?.setVisible(true);
 
@@ -341,6 +361,26 @@ export class ReaderView extends FileView {
 
   // ------------------------------------------------------------- toolbar
 
+  /**
+   * The engine's own options plus the reader-level ones. Whether saved
+   * highlights are drawn is a property of the view, not of the format, so it
+   * is appended here rather than duplicated in both adapters.
+   */
+  private displayOptions(): DisplayOption[] {
+    const engineOptions = this.engine?.displayOptions() ?? [];
+    return [
+      ...engineOptions,
+      {
+        section: "appearance",
+        id: "show-highlights",
+        label: "Show saved highlights",
+        icon: "highlighter",
+        checked: this.getSettings().reader.showHighlights,
+        apply: () => this.toggleHighlights(),
+      },
+    ];
+  }
+
   private updateToolbar(): void {
     const engine = this.engine;
     if (!this.toolbar) return;
@@ -348,12 +388,15 @@ export class ReaderView extends FileView {
       this.toolbar.setVisible(false);
       return;
     }
-    const pages = engine.pageState();
+    const settings = this.getSettings();
+    const activeType = this.activeType();
     this.toolbar.update(
       toolbarState({
-        pages,
+        pages: engine.pageState(),
         scale: engine.scale(),
-        highlightsShown: this.getSettings().reader.showHighlights,
+        highlightMode: this.highlightMode,
+        activeType,
+        activeColor: activeType === "" ? "" : highlightColor(settings.annotationTypes, activeType),
         bookmarked: this.currentBookmark() !== null,
       }),
     );
@@ -384,7 +427,7 @@ export class ReaderView extends FileView {
     const note = this.bookNote();
     const engine = this.engine;
     if (!note || !engine) {
-      this.bookmarks = [];
+      this.entries = [];
       this.lastEntrySignature = null;
       this.updateToolbar();
       return;
@@ -399,13 +442,16 @@ export class ReaderView extends FileView {
     if (this.engine !== engine) return; // the book changed while we read
 
     const showHighlights = this.getSettings().reader.showHighlights;
-    const signature = `${showHighlights}\u0000${entries
+    const palette = this.getSettings()
+      .annotationTypes.map((type) => `${type.name}:${type.color}`)
+      .join(",");
+    const signature = `${showHighlights}\u0000${palette}\u0000${entries
       .map((entry) => [entry.id, entry.type, entry.exact, entry.anchor.prefix ?? "", entry.anchor.suffix ?? ""].join("\u0001"))
       .join("\u0002")}`;
     if (signature === this.lastEntrySignature) return;
     this.lastEntrySignature = signature;
 
-    this.bookmarks = entries.filter((entry) => entry.type === BOOKMARK_TYPE);
+    this.entries = entries;
 
     const painted: PaintedHighlight[] = showHighlights
       ? entries
@@ -414,6 +460,7 @@ export class ReaderView extends FileView {
             id: entry.id,
             type: entry.type,
             exact: entry.exact,
+            color: highlightColor(this.getSettings().annotationTypes, entry.type),
             ...(entry.anchor.prefix === undefined ? {} : { prefix: entry.anchor.prefix }),
             ...(entry.anchor.suffix === undefined ? {} : { suffix: entry.anchor.suffix }),
             ...(entry.anchor.hint === undefined ? {} : { hint: entry.anchor.hint }),
@@ -425,6 +472,44 @@ export class ReaderView extends FileView {
       console.error("[e-reader] failed to paint saved highlights", error);
     }
     this.updateToolbar();
+  }
+
+  /** The configured type highlight mode writes, or empty when there are none. */
+  private activeType(): string {
+    const settings = this.getSettings();
+    const active = settings.reader.activeAnnotationType;
+    if (active !== "" && settings.annotationTypes.some((type) => type.name === active)) return active;
+    return settings.annotationTypes[0]?.name ?? "";
+  }
+
+  private setHighlightMode(on: boolean): void {
+    this.highlightMode = on && this.activeType() !== "";
+    if (on && this.activeType() === "") {
+      new Notice("E-Reader: add a highlight type in settings before using highlight mode.");
+    }
+    this.updateToolbar();
+  }
+
+  /**
+   * A drag finished inside the book. In highlight mode that becomes a
+   * highlight there and then — no menu — and the selection is cleared so the
+   * same words cannot be highlighted twice by an idle second release.
+   */
+  private async onSelectionEnd(): Promise<void> {
+    if (!this.highlightMode) return;
+    const type = this.activeType();
+    if (type === "") return;
+    const selection = this.selection();
+    if (!selection || selection.exact === "") return;
+    this.clearSelection();
+    await this.createEntry(type, selection);
+  }
+
+  private clearSelection(): void {
+    // The selection lives in whichever document the engine rendered into —
+    // an EPUB's iframe, or the host document for a PDF — and `activeWindow`
+    // is not necessarily either, so the engine's own root is asked instead.
+    this.engine?.clearSelection();
   }
 
   private async toggleHighlights(): Promise<void> {
@@ -441,7 +526,8 @@ export class ReaderView extends FileView {
     const engine = this.engine;
     const here = engine?.pageState()?.current;
     if (!engine || here === undefined) return null;
-    for (const entry of this.bookmarks) {
+    for (const entry of this.entries) {
+      if (entry.type !== BOOKMARK_TYPE) continue;
       const hint = entry.anchor.hint;
       if (hint && engine.pageNumberFor(hint) === here) return entry;
     }
@@ -459,37 +545,127 @@ export class ReaderView extends FileView {
       await this.createEntry(BOOKMARK_TYPE, null);
       return;
     }
-    try {
-      await removeEntry(this.app, note, existing.id);
-    } catch (error) {
-      console.error("[e-reader] failed to remove a bookmark", error);
-      new Notice("E-Reader: could not remove that bookmark — see the console.");
+    await this.deleteEntry(note, existing);
+  }
+
+  /**
+   * The entry whose painted highlight sits under `position`, or null.
+   *
+   * Both engines put their overlay in the HOST document — a PDF's boxes are
+   * children of the page element, and epub.js's marks-pane appends its SVG
+   * beside the iframe rather than inside it — so both are reachable from here
+   * and both report client rects in the same coordinate space the context
+   * menu was given. Hit-testing is by rect rather than `elementFromPoint`
+   * because both overlays are deliberately `pointer-events: none`, and must
+   * stay that way so they never swallow a text selection.
+   */
+  private entryAt(position: { x: number; y: number }): Entry | null {
+    const root = this.contentRoot;
+    if (!root) return null;
+    for (const el of Array.from(root.querySelectorAll<HTMLElement>(".ereader-hl[data-id]"))) {
+      const rect = el.getBoundingClientRect();
+      if (position.x < rect.left || position.x > rect.right) continue;
+      if (position.y < rect.top || position.y > rect.bottom) continue;
+      const id = el.dataset["id"];
+      const entry = this.entries.find((candidate) => candidate.id === id);
+      if (entry) return entry;
     }
+    return null;
   }
 
   private showAnnotationMenu(position: { x: number; y: number }): void {
     const menu = new Menu();
-    const selection = this.selection();
+    const note = this.bookNote();
     const types = this.getSettings().annotationTypes;
 
+    // Right-clicking something that already exists should act on THAT thing.
+    // Offering "highlight this selection" on top of a highlight, or "add a
+    // bookmark" on a page that already has one, is the menu ignoring what is
+    // in front of it.
+    const existing = this.entryAt(position);
+    if (existing && note) {
+      this.addEntryItems(menu, note, existing, types);
+      menu.showAtPosition(position);
+      return;
+    }
+
+    const selection = this.selection();
     if (selection) {
       for (const type of types) {
         menu.addItem((item) =>
           item
-            .setTitle(`Highlight — ${type}`)
+            .setTitle(`Highlight — ${type.name}`)
             .setIcon("highlighter")
-            .onClick(() => void this.createEntry(type, selection)),
+            .onClick(() => void this.createEntry(type.name, selection)),
         );
       }
       menu.addSeparator();
     }
+
+    const bookmark = this.currentBookmark();
+    if (bookmark && note) {
+      menu.addItem((item) =>
+        item
+          .setTitle("Remove bookmark")
+          .setIcon("bookmark-minus")
+          .onClick(() => void this.deleteEntry(note, bookmark)),
+      );
+    } else {
+      menu.addItem((item) =>
+        item
+          .setTitle("Add bookmark here")
+          .setIcon("bookmark")
+          .onClick(() => void this.createEntry(BOOKMARK_TYPE, null)),
+      );
+    }
+    menu.showAtPosition(position);
+  }
+
+  /** Actions on one existing entry: recolour it, copy it, or take it away. */
+  private addEntryItems(menu: Menu, note: TFile, entry: Entry, types: readonly { name: string }[]): void {
+    const isBookmark = entry.type === BOOKMARK_TYPE;
+    if (!isBookmark) {
+      for (const type of types) {
+        if (type.name === entry.type) continue;
+        menu.addItem((item) =>
+          item
+            .setTitle(`Change to — ${type.name}`)
+            .setIcon("highlighter")
+            .onClick(() => void this.changeEntryType(note, entry, type.name)),
+        );
+      }
+      menu.addItem((item) =>
+        item
+          .setTitle("Copy text")
+          .setIcon("copy")
+          .onClick(() => void navigator.clipboard.writeText(entry.exact)),
+      );
+      menu.addSeparator();
+    }
     menu.addItem((item) =>
       item
-        .setTitle("Add bookmark here")
-        .setIcon("bookmark")
-        .onClick(() => void this.createEntry(BOOKMARK_TYPE, null)),
+        .setTitle(isBookmark ? "Remove bookmark" : "Delete highlight")
+        .setIcon("trash-2")
+        .onClick(() => void this.deleteEntry(note, entry)),
     );
-    menu.showAtPosition(position);
+  }
+
+  private async changeEntryType(note: TFile, entry: Entry, type: string): Promise<void> {
+    try {
+      await setEntryType(this.app, note, entry.id, type);
+    } catch (error) {
+      console.error("[e-reader] failed to change an entry's type", error);
+      new Notice("E-Reader: could not change that highlight — see the console.");
+    }
+  }
+
+  private async deleteEntry(note: TFile, entry: Entry): Promise<void> {
+    try {
+      await removeEntry(this.app, note, entry.id);
+    } catch (error) {
+      console.error("[e-reader] failed to remove an entry", error);
+      new Notice("E-Reader: could not remove that entry — see the console.");
+    }
   }
 
   /**

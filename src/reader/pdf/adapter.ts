@@ -24,7 +24,6 @@ import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
 import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine, SearchHit } from "../engine";
-import { highlightColor } from "../highlight-style";
 import { pdfPageToPercent } from "../progress";
 import { type SpreadMode, spreadRows } from "../spread";
 import { clampScale, fitRowSize, fitScale } from "../zoom";
@@ -499,14 +498,18 @@ export class PdfEngine implements ReaderEngine {
       if (highlight.suffix !== undefined) context.suffix = highlight.suffix;
       const range = rangeForQuote(source, highlight.exact, context);
       if (!range) continue;
-      const color = highlightColor(this.container, highlight.type);
       for (const rect of Array.from(range.getClientRects())) {
         if (rect.width <= 0 || rect.height <= 0) continue;
         const box = layerEl.createDiv({ cls: "ereader-hl" });
+        // The reader hit-tests these by rect on right-click, so each box has
+        // to say which entry it belongs to. epub.js's overlay does the same
+        // through marks-pane, which writes the annotation's `data` out as
+        // dataset entries — hence `data-id` on both sides.
+        box.dataset["id"] = highlight.id;
         box.dataset["type"] = highlight.type;
         // The visible page is the canvas UNDER this layer, so the box has to
         // blend rather than cover; styles.css sets the blend mode.
-        box.style.background = color;
+        box.style.background = highlight.color;
         box.style.left = `${rect.left - pageRect.left}px`;
         box.style.top = `${rect.top - pageRect.top}px`;
         box.style.width = `${rect.width}px`;

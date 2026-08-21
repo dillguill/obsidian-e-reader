@@ -160,8 +160,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
         const selection = view?.selection() ?? null;
         if (!view || !selection) return false;
         if (!checking) {
-          const type = this.settings.annotationTypes[0] ?? "highlight";
-          void view.createEntry(type, selection);
+          void view.createEntry(this.activeHighlightType(), selection);
         }
         return true;
       },
@@ -183,6 +182,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     // way to disable a core plugin (`app.internalPlugins` is not public API),
     // and re-applying it behind the reader's back would be worse than the
     // honest limitation stated in the setting's description.
+    //
     this.app.workspace.onLayoutReady(() => {
       // A saved workspace can restore a pane the reader has since switched
       // off, so the toggles are applied here too, not only when they change.
@@ -191,6 +191,13 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
         this.app.workspace.detachLeavesOfType(NATIVE_OUTLINE_VIEW_TYPE);
       }
     });
+  }
+
+  /** The type a highlight is written as. Falls back when every type has been removed. */
+  private activeHighlightType(): string {
+    const active = this.settings.reader.activeAnnotationType;
+    if (active !== "") return active;
+    return this.settings.annotationTypes[0]?.name ?? "highlight";
   }
 
   /** Closes any pane the reader has just switched off. Called from the settings tab. */

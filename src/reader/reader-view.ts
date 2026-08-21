@@ -120,11 +120,9 @@ export class ReaderView extends FileView {
 
     const attachment = await resolveBookAttachmentPath(this.app, bookNote);
     if (!attachment) {
-      const detail = await describeAttachmentLookup(this.app, bookNote);
-      const box = root.createDiv({ cls: "ereader-reader__empty" });
-      box.createDiv({ text: "No readable attachment (.epub or .pdf) found on this note." });
-      box.createEl("pre", { text: detail });
-      console.error("[e-reader] attachment lookup failed\n" + detail);
+      // Nothing to read: fall back to the note itself rather than a dead end.
+      console.debug("[e-reader] no attachment; opening the note\n" + (await describeAttachmentLookup(this.app, bookNote)));
+      await this.leaf.openFile(bookNote);
       return;
     }
 

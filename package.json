@@ -1,0 +1,22 @@
+{
+  "name": "obsidian-e-reader",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read EPUBs and PDFs in your vault, with a Bases-backed library.",
+  "scripts": {
+    "build": "tsc --noEmit && node esbuild.config.mjs production && node scripts/check-bundle-size.mjs",
+    "dev": "node esbuild.config.mjs",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json"
+  },
+  "devDependencies": {
+    "obsidian": "latest",
+    "typescript": "^5",
+    "esbuild": "^0.24.0",
+    "vitest": "^2.0.0",
+    "@types/node": "^22.0.0",
+    "builtin-modules": "^4.0.0"
+  }
+}

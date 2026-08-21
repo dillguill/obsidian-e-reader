@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-e-reader",
+  "name": "E-Reader",
+  "version": "0.1.0",
+  "minAppVersion": "1.10.0",
+  "description": "Read EPUBs and PDFs in your vault, with a Bases-backed library.",
+  "author": "Dillon",
+  "isDesktopOnly": false
+}

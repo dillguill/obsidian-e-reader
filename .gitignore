@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Build output — shipped via GitHub releases, not committed
+main.js
+*.js.map
+
+# Per-vault plugin state, never shared
+data.json
+
+# Editors
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local scratch
+*.log

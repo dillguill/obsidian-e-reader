@@ -1,0 +1,17 @@
+{
+  // Type-checks tests/**. Separate from tsconfig.json (which type-checks
+  // src/** against the real `obsidian` package, as the production bundle
+  // must) because vitest.config.ts aliases the bare "obsidian" specifier to
+  // tests/fakes/obsidian.ts at *runtime*; tsc needs its own `paths` mapping
+  // to see the same substitution when type-checking test files, otherwise
+  // it resolves "obsidian" to node_modules/obsidian's real (and largely
+  // unconstructable) declarations instead.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "obsidian": ["./tests/fakes/obsidian.ts"]
+    }
+  },
+  "include": ["tests/**/*.ts"]
+}

@@ -1,0 +1,110 @@
+.ereader-library {
+  height: 100%;
+  padding: var(--size-4-4);
+  overflow-y: auto;
+}
+
+.ereader-library__heading {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  margin-bottom: var(--size-4-2);
+}
+
+.ereader-library__group {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--ereader-card-w, 200px), 1fr));
+  gap: var(--size-4-4);
+  margin-bottom: var(--size-4-6);
+}
+
+.ereader-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-2);
+  cursor: pointer;
+  border-radius: var(--radius-m);
+}
+
+.ereader-card:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 3px;
+}
+
+.ereader-cover {
+  position: relative;
+  width: 100%;
+  height: calc(var(--ereader-card-w, 200px) * var(--ereader-ar, 1));
+  min-height: 80px;
+  background: var(--background-secondary);
+  border-radius: var(--radius-m);
+  overflow: hidden;
+  transition: transform 100ms ease;
+}
+
+.ereader-card:hover .ereader-cover {
+  transform: translateY(-2px);
+}
+
+.ereader-cover__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ereader-cover__img.is-contain {
+  object-fit: contain;
+}
+
+.ereader-line {
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ereader-line ~ .ereader-line {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+/* Overlays */
+.ereader-badge {
+  position: absolute;
+  top: var(--size-4-2);
+  right: var(--size-4-2);
+  display: flex;
+  padding: 3px;
+  border-radius: var(--radius-s);
+  background: var(--background-primary);
+  color: var(--text-muted);
+  box-shadow: var(--shadow-s);
+}
+
+.ereader-badge.is-reading { color: var(--text-accent); }
+.ereader-badge.is-finished { color: var(--color-green); }
+
+.ereader-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.ereader-progress__fill {
+  height: 100%;
+  background: var(--interactive-accent);
+}
+
+.ereader-progress.is-percent {
+  height: auto;
+  padding: 2px var(--size-4-1);
+  font-size: var(--font-ui-smaller);
+  color: #fff;
+  text-align: right;
+}

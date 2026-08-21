@@ -13,9 +13,10 @@
 
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerSource from "pdfjs-dist/build/pdf.worker.min.mjs";
-import type { App, TFile } from "obsidian";
+import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
-import type { OutlineNode, ReaderEngine, SearchHit } from "../engine";
+import { activeRange, snapshotFromRange } from "../dom-selection";
+import type { EngineSelection, OutlineNode, ReaderEngine, SearchHit } from "../engine";
 import { pdfPageToPercent } from "../progress";
 
 interface PdfjsViewport {
@@ -109,11 +110,9 @@ export class PdfEngine implements ReaderEngine {
   private scrollEl: HTMLElement | null = null;
   private pageEls: HTMLElement[] = [];
   private observer: IntersectionObserver | null = null;
-  private canvas: HTMLCanvasElement | null = null;
-  private textLayerEl: HTMLElement | null = null;
   private currentPage = 1;
-  private renderToken = 0;
   private workerBlobUrl: string | null = null;
+  private contextMenuHandler: ((position: { x: number; y: number }) => void) | null = null;
 
   constructor(private readonly app: App) {}
 
@@ -187,6 +186,23 @@ export class PdfEngine implements ReaderEngine {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     await page.render({ canvasContext: ctx, viewport }).promise;
+
+    // The text layer is what makes a PDF selectable — without it the page is
+    // just pixels, and there is nothing to highlight. pdf.js positions its
+    // spans from `--scale-factor`, so the container must carry the same scale
+    // the canvas was rendered at.
+    const textLayerEl = pageEl.createDiv({ cls: "ereader-reader__pdf-text" });
+    textLayerEl.setCssProps({ "--scale-factor": String(RENDER_SCALE), "--user-unit": "1" });
+    try {
+      const textLayer = new (pdfjsLib as unknown as PdfjsModule).TextLayer({
+        textContentSource: page.streamTextContent(),
+        container: textLayerEl,
+        viewport,
+      });
+      await textLayer.render();
+    } catch (error) {
+      console.error("[e-reader] failed to render a PDF text layer", pageNumber, error);
+    }
   }
 
   async goTo(locator: Locator): Promise<void> {
@@ -205,6 +221,36 @@ export class PdfEngine implements ReaderEngine {
   progress(): number {
     if (!this.doc) return 0;
     return pdfPageToPercent(this.currentPage, this.doc.numPages);
+  }
+
+  getSelection(): EngineSelection | null {
+    const scrollEl = this.scrollEl;
+    if (!scrollEl) return null;
+    const range = activeRange(scrollEl.win.getSelection());
+    if (!range || !scrollEl.contains(range.commonAncestorContainer)) return null;
+
+    // Anchor context comes from the page the selection starts on: page
+    // boundaries are not sentence boundaries, so walking past one would pull
+    // in text that does not surround the quote on the page.
+    const pageEl = (range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement)?.closest(
+      ".ereader-reader__pdf-page",
+    );
+    const snapshot = snapshotFromRange((pageEl as HTMLElement | null) ?? scrollEl, range);
+    if (!snapshot) return null;
+    const page = Number((pageEl as HTMLElement | null)?.dataset["page"] ?? this.currentPage);
+    return { ...snapshot, locator: { kind: "pdf", page: Number.isFinite(page) && page > 0 ? page : this.currentPage } };
+  }
+
+  onContextMenu(handler: (position: { x: number; y: number }) => void): void {
+    this.contextMenuHandler = handler;
+    const scrollEl = this.scrollEl;
+    if (!scrollEl) return;
+    scrollEl.addEventListener("contextmenu", (event: MouseEvent) => {
+      const current = this.contextMenuHandler;
+      if (!current) return;
+      event.preventDefault();
+      current({ x: event.clientX, y: event.clientY });
+    });
   }
 
   async outline(): Promise<OutlineNode[]> {
@@ -238,53 +284,17 @@ export class PdfEngine implements ReaderEngine {
   }
 
   destroy(): void {
+    this.contextMenuHandler = null;
     this.observer?.disconnect();
     this.observer = null;
     this.pageEls = [];
     this.scrollEl = null;
     this.doc = null;
-    this.canvas = null;
-    this.textLayerEl = null;
     this.container = null;
-    this.renderToken++;
     if (this.workerBlobUrl !== null) {
       URL.revokeObjectURL(this.workerBlobUrl);
       this.workerBlobUrl = null;
     }
-  }
-
-  private async renderPage(pageNumber: number): Promise<void> {
-    const doc = this.doc;
-    const canvas = this.canvas;
-    const textLayerEl = this.textLayerEl;
-    if (!doc || !canvas || !textLayerEl) return;
-
-    const token = ++this.renderToken;
-    const page = await doc.getPage(pageNumber);
-    if (token !== this.renderToken) return;
-
-    const viewport = page.getViewport({ scale: RENDER_SCALE });
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    canvas.style.width = `${viewport.width}px`;
-    canvas.style.height = `${viewport.height}px`;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    await page.render({ canvasContext: ctx, viewport }).promise;
-    if (token !== this.renderToken) return;
-
-    textLayerEl.replaceChildren();
-    textLayerEl.style.width = `${viewport.width}px`;
-    textLayerEl.style.height = `${viewport.height}px`;
-    const textLayer = new (pdfjsLib as unknown as PdfjsModule).TextLayer({
-      textContentSource: page.streamTextContent(),
-      container: textLayerEl,
-      viewport,
-    });
-    await textLayer.render();
-    if (token !== this.renderToken) return;
-
-    this.currentPage = pageNumber;
   }
 }
 

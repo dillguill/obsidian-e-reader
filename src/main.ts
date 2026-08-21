@@ -1,7 +1,8 @@
-import type { BasesAllOptions } from "obsidian";
+import type { BasesAllOptions, WorkspaceLeaf } from "obsidian";
 import { Notice, Plugin } from "obsidian";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
 import { READER_VIEW_TYPE, ReaderView } from "./reader/reader-view";
+import { HIGHLIGHTS_VIEW_TYPE, HighlightsView } from "./sidebar/highlights-view";
 import { type Settings, DEFAULT_SETTINGS, mergeSettings } from "./settings/settings-model";
 
 function libraryViewOptions(): BasesAllOptions[] {
@@ -65,7 +66,8 @@ export default class EReaderPlugin extends Plugin {
   override async onload(): Promise<void> {
     this.settings = mergeSettings(await this.loadData());
 
-    this.registerView(READER_VIEW_TYPE, (leaf) => new ReaderView(leaf));
+    this.registerView(READER_VIEW_TYPE, (leaf) => new ReaderView(leaf, () => this.settings));
+    this.registerView(HIGHLIGHTS_VIEW_TYPE, (leaf) => new HighlightsView(leaf));
 
     // Obsidian does not index unknown extensions, so .epub files are invisible
     // to the vault and to link resolution until a view claims them. Claiming
@@ -82,6 +84,49 @@ export default class EReaderPlugin extends Plugin {
       new Notice("E-Reader: could not register the library view — Bases is not enabled in this vault.");
     }
 
+    this.addCommand({
+      id: "open-highlights",
+      name: "Open highlights",
+      callback: () => void this.revealHighlights(),
+    });
+
+    // Obsidian's own Outline and Properties panes need no registration here:
+    // the reader reports the book note as its active file (see
+    // reader/reader-view.ts), which is the only thing those panes follow.
+    this.addCommand({
+      id: "highlight-selection",
+      name: "Highlight selection",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(ReaderView);
+        const selection = view?.selection() ?? null;
+        if (!view || !selection) return false;
+        if (!checking) {
+          const type = this.settings.annotationTypes[0] ?? "highlight";
+          void view.createEntry(type, selection);
+        }
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "add-bookmark",
+      name: "Add bookmark at the current position",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(ReaderView);
+        if (!view) return false;
+        if (!checking) void view.createEntry("bookmark", null);
+        return true;
+      },
+    });
+  }
+
+  /** Opens the highlights pane in the right sidebar, reusing an existing one. */
+  private async revealHighlights(): Promise<void> {
+    const existing = this.app.workspace.getLeavesOfType(HIGHLIGHTS_VIEW_TYPE);
+    const leaf: WorkspaceLeaf | null = existing[0] ?? this.app.workspace.getRightLeaf(false);
+    if (!leaf) return;
+    if (existing.length === 0) await leaf.setViewState({ type: HIGHLIGHTS_VIEW_TYPE, active: true });
+    await this.app.workspace.revealLeaf(leaf);
   }
 
   override onunload(): void {

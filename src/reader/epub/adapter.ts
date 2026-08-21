@@ -14,9 +14,10 @@
 // ReaderEngine/OutlineNode/SearchHit (../engine.ts).
 
 import ePub from "epubjs";
-import type { App, TFile } from "obsidian";
+import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
-import type { OutlineNode, ReaderEngine, SearchHit } from "../engine";
+import { activeRange, snapshotFromRange } from "../dom-selection";
+import type { EngineSelection, OutlineNode, ReaderEngine, SearchHit } from "../engine";
 import { fractionToPercent } from "../progress";
 
 interface EpubNavItem {
@@ -71,9 +72,23 @@ interface EpubCurrentLocation {
   start: EpubDisplayedLocation;
 }
 
+/** One rendered section's iframe document (epub.js Contents). */
+interface EpubContents {
+  document: Document;
+  window: Window;
+  cfiFromRange(range: Range): string;
+}
+
+interface EpubHook {
+  register(fn: (contents: EpubContents) => void): void;
+}
+
 interface EpubRendition {
   display(target?: string): Promise<void>;
   on(event: "relocated", callback: (location: EpubCurrentLocation) => void): void;
+  /** `hooks.content` runs for each section as it is rendered, giving access to its iframe document. */
+  hooks: { content: EpubHook };
+  getContents(): EpubContents[];
   destroy(): void;
 }
 
@@ -116,6 +131,7 @@ export class EpubEngine implements ReaderEngine {
   private book: EpubBook | null = null;
   private rendition: EpubRendition | null = null;
   private lastCfi: string | null = null;
+  private contextMenuHandler: ((position: { x: number; y: number }) => void) | null = null;
 
   constructor(private readonly app: App) {}
 
@@ -141,6 +157,24 @@ export class EpubEngine implements ReaderEngine {
       this.lastCfi = location.start.cfi;
     });
 
+    // Events inside an iframe do not cross into the host document, so the
+    // context-menu listener has to be attached per rendered section. `hooks.
+    // content` is epub.js's own extension point for exactly this, and runs
+    // again for every section the continuous manager brings in.
+    rendition.hooks.content.register((contents) => {
+      contents.document.addEventListener("contextmenu", (event: MouseEvent) => {
+        const handler = this.contextMenuHandler;
+        if (!handler) return;
+        event.preventDefault();
+        const frame = contents.window.frameElement;
+        const frameRect = frame?.getBoundingClientRect();
+        handler({
+          x: event.clientX + (frameRect?.left ?? 0),
+          y: event.clientY + (frameRect?.top ?? 0),
+        });
+      });
+    });
+
     await rendition.display();
 
     // Whole-book percentage needs the character-offset index epub.js builds
@@ -164,6 +198,31 @@ export class EpubEngine implements ReaderEngine {
     if (!this.book || this.lastCfi === null) return 0;
     const fraction = this.book.locations.percentageFromCfi(this.lastCfi);
     return Number.isFinite(fraction) ? fractionToPercent(fraction) : 0;
+  }
+
+  getSelection(): EngineSelection | null {
+    const rendition = this.rendition;
+    if (!rendition) return null;
+    for (const contents of rendition.getContents()) {
+      const range = activeRange(contents.window.getSelection());
+      if (!range) continue;
+      const snapshot = snapshotFromRange(contents.document.body, range);
+      if (!snapshot) continue;
+      let locator: Locator | null = null;
+      try {
+        locator = { kind: "epub", cfi: contents.cfiFromRange(range) };
+      } catch (error) {
+        // A range CFI is a convenience, not a requirement — the quoted text
+        // is what re-anchors the entry.
+        console.debug("[e-reader] could not build a CFI for the selection", error);
+      }
+      return { ...snapshot, locator };
+    }
+    return null;
+  }
+
+  onContextMenu(handler: (position: { x: number; y: number }) => void): void {
+    this.contextMenuHandler = handler;
   }
 
   async outline(): Promise<OutlineNode[]> {
@@ -193,6 +252,7 @@ export class EpubEngine implements ReaderEngine {
   }
 
   destroy(): void {
+    this.contextMenuHandler = null;
     this.rendition?.destroy();
     this.rendition = null;
     this.book?.destroy();

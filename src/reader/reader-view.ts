@@ -5,7 +5,7 @@
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { FileView, Notice, TFile } from "obsidian";
-import { resolveBookAttachment } from "../core/attachment";
+import { resolveBookAttachmentPath } from "../core/attachment";
 import { parseLocator, serializeLocator } from "../core/locator";
 import type { Locator } from "../core/types";
 import { createEpubEngine } from "./epub/adapter";
@@ -118,7 +118,7 @@ export class ReaderView extends FileView {
     this.engine = null;
     root.empty();
 
-    const attachment = resolveBookAttachment(this.app, bookNote);
+    const attachment = await resolveBookAttachmentPath(this.app, bookNote);
     if (!attachment) {
       root.createDiv({
         cls: "ereader-reader__empty",
@@ -131,7 +131,7 @@ export class ReaderView extends FileView {
     try {
       engine = attachment.extension === "epub" ? createEpubEngine(this.app) : createPdfEngine(this.app);
       const viewport = root.createDiv({ cls: "ereader-reader__viewport" });
-      await engine.open(attachment, viewport);
+      await engine.open(attachment.path, viewport);
     } catch (error) {
       console.error("[e-reader] failed to open book", error);
       root.empty();

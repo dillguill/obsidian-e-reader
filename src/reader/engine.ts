@@ -19,7 +19,7 @@ export interface SearchHit {
 
 export interface ReaderEngine {
   /** Loads `file` and renders it into `container` (an element the caller owns). */
-  open(file: TFile, container: HTMLElement): Promise<void>;
+  open(path: string, container: HTMLElement): Promise<void>;
   goTo(locator: Locator): Promise<void>;
   /** Null before the first render has settled. */
   currentLocator(): Locator | null;

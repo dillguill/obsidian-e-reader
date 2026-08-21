@@ -118,6 +118,59 @@
   background: var(--background-primary);
 }
 
+/* Reader toolbar.
+   Deliberately shaped like Obsidian's own PDF toolbar — zoom out, divider,
+   zoom in, a display-options dropdown, then the page box — but under this
+   plugin's own class names. `.pdf-toolbar` and `.pdf-page-input` belong to
+   the PDF view specifically and themes style them assuming a real PDF is
+   behind them, so the handful of layout rules is restated rather than
+   borrowed. The generic chrome (`clickable-icon`) still is Obsidian's. */
+.ereader-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: var(--size-4-2);
+  padding: var(--size-4-1) var(--size-4-3);
+  background: var(--background-primary);
+  border-bottom: var(--border-width) solid var(--background-modifier-border);
+  overflow-x: auto;
+}
+
+.ereader-toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1);
+}
+
+.ereader-toolbar__divider {
+  width: var(--border-width);
+  height: var(--icon-size);
+  background-color: var(--background-modifier-border);
+}
+
+.ereader-toolbar__spacer {
+  width: var(--size-4-3);
+}
+
+.ereader-toolbar__page {
+  width: 7ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ereader-toolbar__count {
+  white-space: nowrap;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ereader-toolbar__button.is-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 .ereader-reader__empty {
   margin: auto;
   padding: var(--size-4-4);
@@ -138,16 +191,6 @@
 .ereader-reader__viewport .epub-container {
   flex: 1 1 auto;
   min-height: 0;
-}
-
-.ereader-reader__pdf-viewport {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  justify-content: center;
-  padding: var(--size-4-4);
-  position: relative;
 }
 
 .ereader-reader__pdf-canvas {
@@ -231,6 +274,41 @@
 }
 
 .ereader-reader__pdf-canvas { display: block; max-width: 100%; height: auto; }
+
+/* One row per spread: one page in single mode, two side by side otherwise
+   (src/reader/spread.ts decides which pages share a row). */
+.ereader-reader__pdf-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--size-4-2);
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+/* Saved highlights, drawn between the canvas and the text layer so that
+   selecting text still works over them. The visible page is the canvas
+   beneath, so the boxes blend rather than cover; their colour is set inline
+   from the vault's theme (src/reader/highlight-style.ts). */
+.ereader-reader__pdf-highlights {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ereader-reader__pdf-highlights .ereader-hl {
+  position: absolute;
+  border-radius: 2px;
+  mix-blend-mode: multiply;
+}
+
+/* "Adapt to theme": the filter goes on the whole page, not just the canvas,
+   so painted highlights invert along with the page they sit on rather than
+   turning black over an inverted one. */
+.theme-dark .ereader-reader__pdf-scroll.is-themed .ereader-reader__pdf-page {
+  filter: invert(1) hue-rotate(180deg);
+}
 
 /* Highlights & notes sidebar */
 .ereader-highlights {

@@ -40,6 +40,12 @@ export function normalizeQuote(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Extra characters read either side of a candidate before normalising, to
+ * absorb whitespace the normalisation will collapse away.
+ */
+const CONTEXT_SLACK = 8;
+
 function allIndexesOf(haystack: string, needle: string): number[] {
   if (needle === "") return [];
   const found: number[] = [];
@@ -68,11 +74,23 @@ export function resolveInText(text: string, exact: string, context?: Partial<Con
 
   // Score by how much of the recorded context still agrees, so an edit that
   // shortened one side does not disqualify an otherwise unique match.
+  //
+  // Both sides are normalised before comparing, because a stored prefix or
+  // suffix is normalised AND trimmed (dom-selection.ts) while the text being
+  // searched still carries the whitespace that separated it from the quote.
+  // The slices are taken deliberately wide: normalising collapses runs of
+  // whitespace, so a slice of exactly `prefix.length` can come up short.
+  // Extra characters are harmless — the two comparisons run from the
+  // boundary outwards and ignore whatever lies beyond the shorter string.
+  const wantedBefore = normalizeQuote(prefix);
+  const wantedAfter = normalizeQuote(suffix);
   let best: { at: number; score: number } | null = null;
   let tied = false;
   for (const at of candidates) {
-    const beforeScore = commonSuffixLength(text.slice(Math.max(0, at - prefix.length), at), prefix);
-    const afterScore = commonPrefixLength(text.slice(at + exact.length, at + exact.length + suffix.length), suffix);
+    const before = normalizeQuote(text.slice(Math.max(0, at - prefix.length - CONTEXT_SLACK), at));
+    const after = normalizeQuote(text.slice(at + exact.length, at + exact.length + suffix.length + CONTEXT_SLACK));
+    const beforeScore = commonSuffixLength(before, wantedBefore);
+    const afterScore = commonPrefixLength(after, wantedAfter);
     const score = beforeScore + afterScore;
     if (best === null || score > best.score) {
       best = { at, score };

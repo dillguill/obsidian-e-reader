@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { DEFAULT_SETTINGS, mergeSettings } from "../../src/settings/settings-model";
 import { RESERVED_ENTRY_TYPE } from "../../src/core/types";
+import { MAX_SCALE, MIN_SCALE } from "../../src/reader/zoom";
 
 describe("DEFAULT_SETTINGS", () => {
   it("uses the marker property `type` with value `book`", () => {
@@ -106,7 +107,91 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         furthestRead: "furthest-position",
       },
       annotationTypes: ["idea", "question"],
+      readers: { epub: "plugin", pdf: "default" },
+      panes: { outline: false, highlights: true, hideNativeOutline: true },
+      catalog: { url: "https://example.org/opds" },
+      reader: {
+        pdfScale: 1.25,
+        pdfSpread: "even",
+        pdfAdaptToTheme: true,
+        epubTextScale: 1.1,
+        epubFlow: "paginated",
+        showHighlights: false,
+      },
     };
     expect(mergeSettings(custom)).toEqual(custom);
+  });
+});
+
+describe("reader engine choice", () => {
+  it("defaults both formats to this plugin's own reader", () => {
+    expect(DEFAULT_SETTINGS.readers).toEqual({ epub: "plugin", pdf: "plugin" });
+  });
+
+  it("keeps a valid saved choice", () => {
+    expect(mergeSettings({ readers: { pdf: "default" } }).readers).toEqual({ epub: "plugin", pdf: "default" });
+  });
+
+  it("falls back per-format for an unrecognised choice", () => {
+    expect(mergeSettings({ readers: { epub: "foliate", pdf: 7 } }).readers).toEqual(DEFAULT_SETTINGS.readers);
+  });
+});
+
+describe("sidebar pane toggles", () => {
+  it("ships both of this plugin's panes enabled and leaves Obsidian's outline alone", () => {
+    expect(DEFAULT_SETTINGS.panes).toEqual({ outline: true, highlights: true, hideNativeOutline: false });
+  });
+
+  it("keeps valid saved toggles and falls back per-field", () => {
+    expect(mergeSettings({ panes: { outline: false, highlights: "yes" } }).panes).toEqual({
+      outline: false,
+      highlights: true,
+      hideNativeOutline: false,
+    });
+  });
+});
+
+describe("catalog settings", () => {
+  it("ships with no catalog configured", () => {
+    expect(DEFAULT_SETTINGS.catalog.url).toBe("");
+  });
+
+  it("keeps a saved url and ignores a non-string one", () => {
+    expect(mergeSettings({ catalog: { url: "https://example.org/opds" } }).catalog.url).toBe("https://example.org/opds");
+    expect(mergeSettings({ catalog: { url: 42 } }).catalog.url).toBe("");
+  });
+});
+
+describe("remembered reader preferences", () => {
+  it("defaults to actual size, single pages, scrolled text, and highlights shown", () => {
+    expect(DEFAULT_SETTINGS.reader).toEqual({
+      pdfScale: 1,
+      pdfSpread: "single",
+      pdfAdaptToTheme: false,
+      epubTextScale: 1,
+      epubFlow: "scrolled",
+      showHighlights: true,
+    });
+  });
+
+  it("keeps saved scales and modes", () => {
+    const merged = mergeSettings({
+      reader: { pdfScale: 1.5, pdfSpread: "odd", epubFlow: "paginated", showHighlights: false },
+    });
+    expect(merged.reader.pdfScale).toBe(1.5);
+    expect(merged.reader.pdfSpread).toBe("odd");
+    expect(merged.reader.epubFlow).toBe("paginated");
+    expect(merged.reader.showHighlights).toBe(false);
+  });
+
+  it("clamps a saved scale into the supported zoom range", () => {
+    expect(mergeSettings({ reader: { pdfScale: 99 } }).reader.pdfScale).toBe(MAX_SCALE);
+    expect(mergeSettings({ reader: { epubTextScale: 0 } }).reader.epubTextScale).toBe(MIN_SCALE);
+  });
+
+  it("falls back for an unrecognised spread mode or flow", () => {
+    const merged = mergeSettings({ reader: { pdfSpread: "triple", epubFlow: "sideways" } });
+    expect(merged.reader.pdfSpread).toBe("single");
+    expect(merged.reader.epubFlow).toBe("scrolled");
   });
 });

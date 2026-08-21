@@ -187,10 +187,22 @@
 
 /* epub.js's own container div (renderTo's {width:'100%',height:'100%'}
    already sizes it inline; flex/min-height here just keeps it filling the
-   viewport reliably inside our flex layout). */
+   viewport reliably inside our flex layout).
+
+   `overflow-x` needs the !important because epub.js writes the `overflow`
+   SHORTHAND inline — `auto` on both axes for scrolled flow — and an inline
+   shorthand beats a stylesheet longhand. It sizes the section's iframe from
+   the container width before the content has forced a vertical scrollbar, so
+   the iframe ends up scrollbar-width too wide and the page gains a few
+   pixels of pointless horizontal travel. Only the vertical axis should move
+   here. Paginated flow already uses `hidden` and drives `scrollLeft`
+   programmatically, which is unaffected. Genuinely wide content — a code
+   block, a table — is kept in bounds by the injected theme instead, so
+   nothing is clipped to buy this. */
 .ereader-reader__viewport .epub-container {
   flex: 1 1 auto;
   min-height: 0;
+  overflow-x: hidden !important;
 }
 
 .ereader-reader__pdf-canvas {

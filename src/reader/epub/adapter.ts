@@ -16,6 +16,7 @@
 // engine instance and rewrite the value on the way through — see
 // `patchIframeSandbox` below.
 
+import { vendorUrl } from "../vendor-path";
 import type { App, TFile } from "obsidian";
 import type { Locator } from "../../core/types";
 import type { OutlineNode, ReaderEngine, SearchHit } from "../engine";
@@ -28,7 +29,7 @@ import { fractionToPercent } from "../progress";
 // resolution on such a literal too. A variable specifier is invisible to
 // both, so this loads lazily at runtime and never touches the tsc/esbuild
 // module graphs. (Verified against this repo's esbuild.config.mjs/tsconfig.)
-const VIEW_MODULE_PATH = "./vendor/foliate-js/view.js";
+const VIEW_MODULE_PATH = "foliate-js/view.js";
 
 interface FoliateLocation {
   cfi?: string;
@@ -129,7 +130,7 @@ export class EpubEngine implements ReaderEngine {
   async open(file: TFile, container: HTMLElement): Promise<void> {
     this.destroy();
 
-    await import(VIEW_MODULE_PATH); // registers the `foliate-view` custom element
+    await import(/* @vite-ignore */ vendorUrl(VIEW_MODULE_PATH)); // registers the `foliate-view` custom element
 
     const data = await this.app.vault.readBinary(file);
     const webFile = new File([data], file.name);

@@ -21,7 +21,11 @@ export function extractAttachmentLinkpaths(
   const attachments = frontmatter?.[propertyName];
   const list: unknown[] = Array.isArray(attachments) ? attachments : attachments ? [attachments] : [];
   const linkpaths: string[] = [];
-  for (const item of list) {
+  // An unquoted `- [[Book.epub]]` is valid YAML flow-sequence syntax, so it
+  // parses as a NESTED ARRAY rather than a string. Quoted links arrive as
+  // strings. Flatten one level so both spellings resolve.
+  const flat: unknown[] = list.flatMap((item) => (Array.isArray(item) ? (item as unknown[]) : [item]));
+  for (const item of flat) {
     if (typeof item !== "string") continue;
     const linkpath = item.replace(/^\[\[|\]\]$/g, "").split("|")[0]?.trim();
     if (linkpath) linkpaths.push(linkpath);

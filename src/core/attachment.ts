@@ -118,3 +118,24 @@ export async function resolveBookAttachmentPath(
   const name = path.split("/").pop() ?? path;
   return { path, extension: name.split(".").pop()?.toLowerCase() ?? "", name };
 }
+
+
+/** Human-readable account of why resolution failed, shown in the reader's empty state. */
+export async function describeAttachmentLookup(
+  app: App,
+  bookNote: TFile,
+  propertyName = "attachments",
+): Promise<string> {
+  const cache = app.metadataCache.getFileCache(bookNote);
+  const raw = cache?.frontmatter?.[propertyName];
+  const links = (cache?.frontmatterLinks ?? [])
+    .filter((l) => l.key === propertyName || l.key.startsWith(`${propertyName}.`))
+    .map((l) => l.link);
+  const parsed = extractAttachmentLinkpaths(cache?.frontmatter, propertyName);
+  return [
+    `note: ${bookNote.path}`,
+    `frontmatter.${propertyName}: ${JSON.stringify(raw)}`,
+    `frontmatterLinks: ${JSON.stringify(links)}`,
+    `parsed linkpaths: ${JSON.stringify(parsed)}`,
+  ].join("\n");
+}

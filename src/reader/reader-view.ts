@@ -5,7 +5,7 @@
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { FileView, Notice, TFile } from "obsidian";
-import { resolveBookAttachmentPath } from "../core/attachment";
+import { describeAttachmentLookup, resolveBookAttachmentPath } from "../core/attachment";
 import { parseLocator, serializeLocator } from "../core/locator";
 import type { Locator } from "../core/types";
 import { createEpubEngine } from "./epub/adapter";
@@ -120,10 +120,11 @@ export class ReaderView extends FileView {
 
     const attachment = await resolveBookAttachmentPath(this.app, bookNote);
     if (!attachment) {
-      root.createDiv({
-        cls: "ereader-reader__empty",
-        text: "No readable attachment (.epub or .pdf) found on this note.",
-      });
+      const detail = await describeAttachmentLookup(this.app, bookNote);
+      const box = root.createDiv({ cls: "ereader-reader__empty" });
+      box.createDiv({ text: "No readable attachment (.epub or .pdf) found on this note." });
+      box.createEl("pre", { text: detail });
+      console.error("[e-reader] attachment lookup failed\n" + detail);
       return;
     }
 

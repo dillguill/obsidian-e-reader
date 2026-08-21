@@ -81,3 +81,27 @@ describe("resolveBookAttachment", () => {
     expect(resolveBookAttachment(app, note)).toBeNull();
   });
 });
+
+describe("extractAttachmentLinkpaths — real-world YAML shapes", () => {
+  it("finds a link nested three deep, which is how `- [[Book.epub]]` parses", () => {
+    // A YAML list item containing two flow sequences: [[["Book.epub"]]]
+    expect(extractAttachmentLinkpaths({ attachments: [[["Tao Te Ching.epub"]]] })).toEqual([
+      "Tao Te Ching.epub",
+    ]);
+  });
+
+  it("still handles a quoted link, which parses as a plain string", () => {
+    expect(extractAttachmentLinkpaths({ attachments: ["[[Book.pdf]]"] })).toEqual(["Book.pdf"]);
+  });
+
+  it("handles a bare filename", () => {
+    expect(extractAttachmentLinkpaths({ attachments: ["Book.pdf"] })).toEqual(["Book.pdf"]);
+  });
+
+  it("handles several links at mixed depths", () => {
+    expect(extractAttachmentLinkpaths({ attachments: [[["A.epub"]], "[[B.pdf]]"] })).toEqual([
+      "A.epub",
+      "B.pdf",
+    ]);
+  });
+});

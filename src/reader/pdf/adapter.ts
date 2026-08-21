@@ -27,7 +27,7 @@ import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHig
 import { highlightColor } from "../highlight-style";
 import { pdfPageToPercent } from "../progress";
 import { type SpreadMode, spreadRows } from "../spread";
-import { clampScale, fitScale } from "../zoom";
+import { clampScale, fitRowSize, fitScale } from "../zoom";
 
 interface PdfjsViewport {
   width: number;
@@ -152,6 +152,7 @@ export class PdfEngine implements ReaderEngine {
   private workerBlobUrl: string | null = null;
   private pdfjs: PdfjsModule | null = null;
   private contextMenuHandler: ((position: { x: number; y: number }) => void) | null = null;
+  private selectionEndHandler: (() => void) | null = null;
   private changeHandler: (() => void) | null = null;
   /** A page's size at scale 1, for the fit-to-width/height calculations. */
   private baseSize: { width: number; height: number } = { width: 0, height: 0 };
@@ -260,15 +261,28 @@ export class PdfEngine implements ReaderEngine {
     pageEl.dataset["rendered"] = "1";
 
     const page = await doc.getPage(pageNumber);
+    // Two viewports, and the difference is what keeps text sharp. `viewport`
+    // is the CSS-pixel geometry: it sizes the page box and positions the text
+    // layer. `renderViewport` is that multiplied by the display's device
+    // pixel ratio, and is what the canvas is actually rasterised at. Sizing
+    // the bitmap in CSS pixels — as this did — hands a 1x image to a 2x
+    // display, which the browser then upscales, and every glyph comes out
+    // soft.
     const viewport = page.getViewport({ scale: this.renderScale });
-    const canvas = pageEl.createEl("canvas", { cls: "ereader-reader__pdf-canvas" });
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
+    const ratio = pageEl.win.devicePixelRatio || 1;
+    const renderViewport = page.getViewport({ scale: this.renderScale * ratio });
+
     pageEl.style.width = `${viewport.width}px`;
     pageEl.style.height = `${viewport.height}px`;
+
+    const canvas = pageEl.createEl("canvas", { cls: "ereader-reader__pdf-canvas" });
+    canvas.width = renderViewport.width;
+    canvas.height = renderViewport.height;
+    // The canvas fills the page box through CSS (styles.css), so the larger
+    // bitmap is displayed at the CSS size rather than overflowing it.
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    await page.render({ canvasContext: ctx, viewport }).promise;
+    await page.render({ canvasContext: ctx, viewport: renderViewport }).promise;
 
     // Saved highlights are drawn beneath the text layer so that selecting
     // text still works over them.
@@ -345,15 +359,12 @@ export class PdfEngine implements ReaderEngine {
   }
 
   displayOptions(): DisplayOption[] {
-    const scrollEl = this.scrollEl;
-    // The fit calculations measure the scroll box rather than the page,
-    // because the padding around a page is part of what it has to fit inside.
-    const available = {
-      width: (scrollEl?.clientWidth ?? 0) - PAGE_MARGIN,
-      height: (scrollEl?.clientHeight ?? 0) - PAGE_MARGIN,
-    };
-    const fitWidth = fitScale(available, this.baseSize, "width");
-    const fitHeight = fitScale(available, this.baseSize, "height");
+    const available = this.availableSize();
+    // A fit mode fits the whole ROW, which in a spread mode is two pages and
+    // the gap between them.
+    const row = fitRowSize(this.baseSize, this.spread === "single" ? 1 : 2, this.rowGap());
+    const fitWidth = fitScale(available, row, "width");
+    const fitHeight = fitScale(available, row, "height");
     const at = (value: number): boolean => Math.abs(this.renderScale - value) < 0.01;
 
     const spreadOption = (mode: SpreadMode, label: string, icon: string): DisplayOption => ({
@@ -412,6 +423,34 @@ export class PdfEngine implements ReaderEngine {
         },
       },
     ];
+  }
+
+  /**
+   * The space a row actually has to fit into: the scroll box's padding box
+   * (clientWidth/Height already exclude any scrollbar) less its own padding.
+   * Measured rather than hardcoded — a constant duplicating the stylesheet
+   * would silently mis-fit the moment the padding changed.
+   */
+  private availableSize(): { width: number; height: number } {
+    const scrollEl = this.scrollEl;
+    if (!scrollEl) return { width: 0, height: 0 };
+    const style = scrollEl.win.getComputedStyle(scrollEl);
+    const px = (value: string): number => {
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    return {
+      width: scrollEl.clientWidth - px(style.paddingLeft) - px(style.paddingRight),
+      height: scrollEl.clientHeight - px(style.paddingTop) - px(style.paddingBottom),
+    };
+  }
+
+  /** The gap between two pages of a spread, from the stylesheet. */
+  private rowGap(): number {
+    const rowEl = this.scrollEl?.querySelector<HTMLElement>(".ereader-reader__pdf-row");
+    if (!rowEl) return 0;
+    const parsed = Number.parseFloat(rowEl.win.getComputedStyle(rowEl).columnGap);
+    return Number.isFinite(parsed) ? parsed : 0;
   }
 
   private savePreferences(): void {
@@ -514,6 +553,21 @@ export class PdfEngine implements ReaderEngine {
     });
   }
 
+  clearSelection(): void {
+    this.scrollEl?.win.getSelection()?.removeAllRanges();
+  }
+
+  onSelectionEnd(handler: () => void): void {
+    this.selectionEndHandler = handler;
+    const scrollEl = this.scrollEl;
+    if (!scrollEl) return;
+    // The text layer is a child of the scroll box, so a release anywhere in
+    // the document bubbles to here.
+    const fire = (): void => this.selectionEndHandler?.();
+    scrollEl.addEventListener("mouseup", fire);
+    scrollEl.addEventListener("touchend", fire);
+  }
+
   async outline(): Promise<OutlineNode[]> {
     if (!this.doc) return [];
     const items = await this.doc.getOutline();
@@ -546,6 +600,7 @@ export class PdfEngine implements ReaderEngine {
 
   destroy(): void {
     this.contextMenuHandler = null;
+    this.selectionEndHandler = null;
     this.changeHandler = null;
     this.observer?.disconnect();
     this.observer = null;
@@ -561,9 +616,6 @@ export class PdfEngine implements ReaderEngine {
     }
   }
 }
-
-/** Total horizontal/vertical padding around a page inside the scroll box (styles.css). */
-const PAGE_MARGIN = 32;
 
 export function createPdfEngine(app: App, options: PdfEngineOptions): ReaderEngine {
   return new PdfEngine(app, options);

@@ -60,3 +60,18 @@ export function fitScale(available: Size, page: Size, mode: "width" | "height"):
   if (!(availableExtent > 0) || !(pageExtent > 0)) return 1;
   return clampScale(availableExtent / pageExtent);
 }
+
+/**
+ * The size a whole rendered row occupies at scale 1, which is what a fit mode
+ * actually has to fit. In a spread mode that is two pages plus the gap
+ * between them — fitting a single page there would render the row at twice
+ * the width of the pane.
+ */
+export function fitRowSize(page: Size, pagesPerRow: number, gap: number): Size {
+  const count = Math.max(1, Math.floor(pagesPerRow));
+  const usableGap = Number.isFinite(gap) ? gap : 0;
+  return {
+    width: page.width * count + usableGap * (count - 1),
+    height: page.height,
+  };
+}

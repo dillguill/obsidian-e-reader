@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_SCALE, MIN_SCALE, SCALE_STEPS, fitScale, stepScale } from "../../src/reader/zoom";
+import { MAX_SCALE, MIN_SCALE, SCALE_STEPS, fitRowSize, fitScale, stepScale } from "../../src/reader/zoom";
 
 describe("SCALE_STEPS", () => {
   it("is sorted ascending and spans MIN_SCALE to MAX_SCALE", () => {
@@ -64,5 +64,27 @@ describe("fitScale", () => {
 
   it("returns 1 when the container has not been laid out yet", () => {
     expect(fitScale({ width: 0, height: 0 }, { width: 300, height: 400 }, "width")).toBe(1);
+  });
+});
+
+describe("fitRowSize", () => {
+  const page = { width: 300, height: 400 };
+
+  it("is just the page when a row holds one", () => {
+    expect(fitRowSize(page, 1, 8)).toEqual(page);
+  });
+
+  // Fit-width in a spread mode has to fit the whole row — two pages and the
+  // gap between them — or a two-page spread ends up twice as wide as the pane.
+  it("counts both pages and the gap when a row holds two", () => {
+    expect(fitRowSize(page, 2, 8)).toEqual({ width: 608, height: 400 });
+  });
+
+  it("adds no gap for a single page even when one is configured", () => {
+    expect(fitRowSize(page, 1, 40).width).toBe(300);
+  });
+
+  it("treats a non-finite gap as none rather than poisoning the width", () => {
+    expect(fitRowSize(page, 2, Number.NaN).width).toBe(600);
   });
 });

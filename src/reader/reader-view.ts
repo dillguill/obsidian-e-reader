@@ -15,12 +15,13 @@
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { FileView, Menu, Notice, TFile } from "obsidian";
 import { addEntry } from "../annotations/store";
+import type { ReaderEvents } from "../core/reader-events";
 import { describeAttachmentLookup, resolveBookAttachmentPath } from "../core/attachment";
 import { parseLocator, serializeLocator } from "../core/locator";
 import type { Locator } from "../core/types";
 import type { Settings } from "../settings/settings-model";
 import { createEpubEngine } from "./epub/adapter";
-import type { EngineSelection, ReaderEngine } from "./engine";
+import type { EngineSelection, OutlineNode, ReaderEngine } from "./engine";
 import { createPdfEngine } from "./pdf/adapter";
 import { type ReadingPosition, positionChanged, shouldFlushNow } from "./position";
 import { clampProgress } from "./progress";
@@ -50,10 +51,15 @@ export class ReaderView extends FileView {
   private lastWritten: ReadingPosition | null = null;
   private lastFlushAt = 0;
   private loadToken = 0;
+  /** The open book's table of contents. Built once per book — for an EPUB it
+   * costs a load of every section named in the TOC to resolve each href to a
+   * CFI, which is far too slow to repeat on every sidebar render. */
+  private cachedOutline: OutlineNode[] | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
     private readonly getSettings: () => Settings,
+    private readonly events: ReaderEvents,
   ) {
     super(leaf);
     this.navigation = true;
@@ -85,6 +91,7 @@ export class ReaderView extends FileView {
     this.contentRoot = this.contentEl.createDiv({ cls: "ereader-reader" });
     this.registerInterval(
       window.setInterval(() => {
+        this.announcePosition();
         void this.flushPosition(false);
       }, POSITION_FLUSH_INTERVAL_MS),
     );
@@ -108,6 +115,7 @@ export class ReaderView extends FileView {
     await this.flushPosition(true);
     this.engine?.destroy();
     this.engine = null;
+    this.cachedOutline = null;
     this.lastWritten = null;
     this.lastFlushAt = 0;
     this.contentRoot?.empty();
@@ -132,6 +140,7 @@ export class ReaderView extends FileView {
 
     this.engine?.destroy();
     this.engine = null;
+    this.cachedOutline = null;
     root.empty();
 
     // Opening an .epub straight from the file explorer gives us the book
@@ -180,12 +189,42 @@ export class ReaderView extends FileView {
     }
     this.lastWritten = this.currentPosition();
     this.lastFlushAt = Date.now();
+    this.announcePosition();
   }
 
-  /** Scrolls this reader to `locator`. Used by the highlights sidebar. */
+  /**
+   * The open book's own table of contents, empty when it declares none. The
+   * outline pane falls back to the note's headings in that case (FR-025a).
+   */
+  async outline(): Promise<OutlineNode[]> {
+    if (this.cachedOutline) return this.cachedOutline;
+    const engine = this.engine;
+    if (!engine) return [];
+    try {
+      const nodes = await engine.outline();
+      this.cachedOutline = nodes;
+      return nodes;
+    } catch (error) {
+      console.error("[e-reader] failed to read the book's contents", error);
+      return [];
+    }
+  }
+
+  /** Where the reader is now, for panes that indicate the current section. */
+  currentLocator(): Locator | null {
+    return this.engine?.currentLocator() ?? null;
+  }
+
+  private announcePosition(): void {
+    if (!this.file) return;
+    this.events.emitPosition(this.file.path, this.currentLocator());
+  }
+
+  /** Scrolls this reader to `locator`. Used by the sidebar panes. */
   async goToLocator(locator: Locator): Promise<void> {
     try {
       await this.engine?.goTo(locator);
+      this.announcePosition();
     } catch (error) {
       console.error("[e-reader] failed to navigate to a locator", error);
     }

@@ -1,8 +1,10 @@
 import type { BasesAllOptions, WorkspaceLeaf } from "obsidian";
 import { Notice, Plugin } from "obsidian";
+import { ReaderEvents } from "./core/reader-events";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
 import { READER_VIEW_TYPE, ReaderView } from "./reader/reader-view";
 import { HIGHLIGHTS_VIEW_TYPE, HighlightsView } from "./sidebar/highlights-view";
+import { OUTLINE_VIEW_TYPE, OutlineView } from "./sidebar/outline-view";
 import { type Settings, DEFAULT_SETTINGS, mergeSettings } from "./settings/settings-model";
 
 function libraryViewOptions(): BasesAllOptions[] {
@@ -62,12 +64,15 @@ function libraryViewOptions(): BasesAllOptions[] {
  */
 export default class EReaderPlugin extends Plugin {
   override settings: Settings = DEFAULT_SETTINGS;
+  /** The reader's own event channel, so sidebar panes can follow it without a workspace-wide event name. */
+  private readonly readerEvents = new ReaderEvents();
 
   override async onload(): Promise<void> {
     this.settings = mergeSettings(await this.loadData());
 
-    this.registerView(READER_VIEW_TYPE, (leaf) => new ReaderView(leaf, () => this.settings));
+    this.registerView(READER_VIEW_TYPE, (leaf) => new ReaderView(leaf, () => this.settings, this.readerEvents));
     this.registerView(HIGHLIGHTS_VIEW_TYPE, (leaf) => new HighlightsView(leaf));
+    this.registerView(OUTLINE_VIEW_TYPE, (leaf) => new OutlineView(leaf, this.readerEvents));
 
     // Obsidian does not index unknown extensions, so .epub files are invisible
     // to the vault and to link resolution until a view claims them. Claiming
@@ -87,12 +92,19 @@ export default class EReaderPlugin extends Plugin {
     this.addCommand({
       id: "open-highlights",
       name: "Open highlights",
-      callback: () => void this.revealHighlights(),
+      callback: () => void this.revealPane(HIGHLIGHTS_VIEW_TYPE),
     });
 
-    // Obsidian's own Outline and Properties panes need no registration here:
-    // the reader reports the book note as its active file (see
-    // reader/reader-view.ts), which is the only thing those panes follow.
+    this.addCommand({
+      id: "open-outline",
+      name: "Open book outline",
+      callback: () => void this.revealPane(OUTLINE_VIEW_TYPE),
+    });
+
+    // Obsidian's own Properties pane needs no registration here: the reader
+    // reports the book note as its active file (see reader/reader-view.ts),
+    // which is the only thing that pane follows. Its Outline pane cannot be
+    // reused the same way — see sidebar/outline-view.ts for why.
     this.addCommand({
       id: "highlight-selection",
       name: "Highlight selection",
@@ -120,12 +132,12 @@ export default class EReaderPlugin extends Plugin {
     });
   }
 
-  /** Opens the highlights pane in the right sidebar, reusing an existing one. */
-  private async revealHighlights(): Promise<void> {
-    const existing = this.app.workspace.getLeavesOfType(HIGHLIGHTS_VIEW_TYPE);
+  /** Opens one of this plugin's panes in the right sidebar, reusing an existing one. */
+  private async revealPane(viewType: string): Promise<void> {
+    const existing = this.app.workspace.getLeavesOfType(viewType);
     const leaf: WorkspaceLeaf | null = existing[0] ?? this.app.workspace.getRightLeaf(false);
     if (!leaf) return;
-    if (existing.length === 0) await leaf.setViewState({ type: HIGHLIGHTS_VIEW_TYPE, active: true });
+    if (existing.length === 0) await leaf.setViewState({ type: viewType, active: true });
     await this.app.workspace.revealLeaf(leaf);
   }
 

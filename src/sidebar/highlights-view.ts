@@ -15,7 +15,7 @@ import { Component, ItemView, Menu, Notice, setIcon } from "obsidian";
 import type { Entry, MalformedEntry } from "../annotations/entry";
 import { listEntries, removeEntry, setEntryComment } from "../annotations/store";
 import { compareLocators } from "../core/locator";
-import { READER_VIEW_TYPE, ReaderView } from "../reader/reader-view";
+import { activeReaderFor, revealReader } from "./active-reader";
 
 export const HIGHLIGHTS_VIEW_TYPE = "ereader-highlights";
 
@@ -195,13 +195,11 @@ export class HighlightsView extends ItemView {
   private async openEntry(file: TFile, entry: Entry, preferNote: boolean): Promise<void> {
     const hint = entry.anchor.hint;
     if (!preferNote && hint) {
-      for (const leaf of this.app.workspace.getLeavesOfType(READER_VIEW_TYPE)) {
-        const view = leaf.view;
-        if (view instanceof ReaderView && view.file === file) {
-          this.app.workspace.setActiveLeaf(leaf, { focus: true });
-          await view.goToLocator(hint);
-          return;
-        }
+      const reader = activeReaderFor(this.app, file);
+      if (reader) {
+        revealReader(this.app, reader);
+        await reader.goToLocator(hint);
+        return;
       }
     }
     await this.app.workspace.openLinkText(`${file.path}#^${entry.id}`, file.path, false);

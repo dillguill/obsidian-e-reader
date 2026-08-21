@@ -161,10 +161,10 @@ rendering engines. Paths follow the structure in [plan.md](./plan.md).
 
 **Independent Test**: Open books with and without a table of contents; confirm nesting, navigation, current-position indication, and the empty state.
 
-- [ ] T063 [P] [US4] Write failing tests in `tests/unit/outline.test.ts` for nesting, the note fallback, and the empty case (FR-025, FR-025a, FR-027)
-- [ ] T064 [US4] Implement table-of-contents extraction in both adapters
-- [X] T065 [US4] ~~Implement `src/sidebar/outline-view.ts`~~ — **superseded**: Obsidian's own Outline pane already follows the reader. Its base class tracks the workspace `file-open` event, which `FileView.loadFile()` fires; the reader now loads through `loadFile` so the native pane (and the native Properties pane) resolve against the book note with no view of our own. A book-file table of contents remains available from each engine's `outline()` for in-reader navigation.
-- [ ] T066 [US4] Implement current-position indication as the reader scrolls (FR-026)
+- [X] T063 [P] [US4] Write failing tests in `tests/unit/outline-model.test.ts` for nesting, the note fallback, and the empty case (FR-025, FR-025a, FR-027)
+- [X] T064 [US4] Implement table-of-contents extraction in both adapters
+- [X] T065 [US4] Implement `src/sidebar/outline-view.ts` with the book-note fallback when the file declares no contents. Obsidian's own Outline pane cannot serve this: `getHeadings()` returns `metadataCache.getFileCache(file).headings` and nothing else, so it lists the note's markdown headings and never the book's table of contents. (The native **Properties** pane does work unchanged, because the reader reports the book note as its active file.)
+- [X] T066 [US4] Implement current-position indication as the reader scrolls (FR-026)
 - [ ] T067 [US4] Verify quickstart scenario S4
 
 **Checkpoint**: Long-form navigation is usable.

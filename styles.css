@@ -339,38 +339,23 @@
   content: none;
 }
 
-/* Book outline sidebar */
+/* Outline sidebar */
 .ereader-outline {
   padding: var(--size-4-2);
   overflow-y: auto;
 }
 
-.ereader-outline__list {
-  display: flex;
-  flex-direction: column;
+/* Outline rows reuse Obsidian's own tree chrome (.tree-item, .tree-item-self,
+   .tree-item-children, .collapse-icon), which is pure CSS — indentation, the
+   indentation guide, hover and active states and the caret rotation all come
+   from the app stylesheet. The one thing it does not provide is hiding a
+   collapsed subtree: Obsidian's trees drop those nodes in JS instead, so
+   there is no rule to inherit. */
+.ereader-outline .tree-item.is-collapsed > .tree-item-children {
+  display: none;
 }
 
-.ereader-outline__row {
-  padding: var(--size-2-2) var(--size-4-2);
-  padding-left: calc(var(--size-4-2) + var(--ereader-outline-depth, 0) * var(--size-4-4));
-  border-radius: var(--radius-s);
-  color: var(--text-muted);
-  font-size: var(--font-ui-small);
-  line-height: var(--line-height-tight);
-  cursor: pointer;
-}
-
-.ereader-outline__row:hover {
-  background: var(--background-modifier-hover);
-  color: var(--text-normal);
-}
-
-.ereader-outline__row.is-active {
-  color: var(--text-accent);
-  font-weight: var(--font-medium);
-}
-
-.ereader-outline__row:focus-visible {
-  outline: 2px solid var(--interactive-accent);
-  outline-offset: -2px;
+/* Keeps leaf labels aligned with collapsible ones, which have a caret. */
+.ereader-outline .tree-item-self.mod-leaf .collapse-icon {
+  width: 10px;
 }

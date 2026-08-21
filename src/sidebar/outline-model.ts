@@ -70,3 +70,46 @@ export function activeRowIndex(rows: OutlineRow[], current: Locator | null): num
   }
   return active;
 }
+
+/**
+ * The row containing a cursor sitting on `line`: the last heading at or
+ * before it. The note-heading counterpart of {@link activeRowIndex}.
+ */
+export function activeRowIndexForLine(rows: OutlineRow[], line: number | null): number {
+  if (line === null) return -1;
+  let active = -1;
+  for (let i = 0; i < rows.length; i++) {
+    const target = (rows[i] as OutlineRow).target;
+    if (target.kind !== "note") continue;
+    if (target.line <= line) active = i;
+  }
+  return active;
+}
+
+/**
+ * Rows to show for `query`: those whose label matches, plus every ancestor of
+ * a match, so a nested hit is never shown floating free of its context. An
+ * empty query keeps everything.
+ */
+export function filterRows(rows: OutlineRow[], query: string): OutlineRow[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return rows;
+
+  const keep = new Array<boolean>(rows.length).fill(false);
+  // Walk backwards so a match can mark the ancestors already passed over: the
+  // nearest preceding row at each shallower depth is that row's ancestry.
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i] as OutlineRow;
+    if (!row.label.toLowerCase().includes(needle)) continue;
+    keep[i] = true;
+    let depth = row.depth;
+    for (let j = i - 1; j >= 0 && depth > 0; j--) {
+      const ancestor = rows[j] as OutlineRow;
+      if (ancestor.depth < depth) {
+        keep[j] = true;
+        depth = ancestor.depth;
+      }
+    }
+  }
+  return rows.filter((_, index) => keep[index]);
+}

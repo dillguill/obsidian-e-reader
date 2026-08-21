@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { OutlineNode } from "../../src/reader/engine";
-import { activeRowIndex, rowsFromHeadings, rowsFromOutline } from "../../src/sidebar/outline-model";
+import {
+  activeRowIndex,
+  activeRowIndexForLine,
+  filterRows,
+  rowsFromHeadings,
+  rowsFromOutline,
+} from "../../src/sidebar/outline-model";
 
 const page = (n: number): OutlineNode["locator"] => ({ kind: "pdf", page: n });
 
@@ -78,5 +84,43 @@ describe("activeRowIndex", () => {
   it("ignores note-heading rows, which carry no reading position", () => {
     const noteRows = rowsFromHeadings([{ heading: "Notes", level: 1, line: 0 }]);
     expect(activeRowIndex(noteRows, page(5))).toBe(-1);
+  });
+});
+
+describe("activeRowIndexForLine", () => {
+  const rows = rowsFromHeadings([
+    { heading: "Intro", level: 1, line: 0 },
+    { heading: "Body", level: 1, line: 10 },
+    { heading: "Detail", level: 2, line: 14 },
+  ]);
+
+  it("picks the last heading at or before the cursor", () => {
+    expect(activeRowIndexForLine(rows, 12)).toBe(1);
+    expect(activeRowIndexForLine(rows, 14)).toBe(2);
+  });
+
+  it("reports nothing above the first heading, or with no cursor", () => {
+    expect(activeRowIndexForLine(rowsFromHeadings([{ heading: "Body", level: 1, line: 5 }]), 2)).toBe(-1);
+    expect(activeRowIndexForLine(rows, null)).toBe(-1);
+  });
+});
+
+describe("filterRows", () => {
+  const rows = rowsFromOutline(toc);
+
+  it("keeps everything for an empty query", () => {
+    expect(filterRows(rows, "  ")).toHaveLength(rows.length);
+  });
+
+  it("keeps a nested match together with its ancestors", () => {
+    expect(filterRows(rows, "a section").map((row) => row.label)).toEqual(["Part One", "Chapter 2", "A section"]);
+  });
+
+  it("matches case-insensitively and keeps every hit", () => {
+    expect(filterRows(rows, "part").map((row) => row.label)).toEqual(["Part One", "Part Two"]);
+  });
+
+  it("is empty when nothing matches", () => {
+    expect(filterRows(rows, "zzz")).toEqual([]);
   });
 });

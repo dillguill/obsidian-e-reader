@@ -117,7 +117,7 @@ export class PdfEngine implements ReaderEngine {
 
   constructor(private readonly app: App) {}
 
-  async open(file: TFile, container: HTMLElement): Promise<void> {
+  async open(path: string, container: HTMLElement): Promise<void> {
     this.destroy();
 
     const pdfjsModule = pdfjsLib as unknown as PdfjsModule;
@@ -125,7 +125,7 @@ export class PdfEngine implements ReaderEngine {
     this.workerBlobUrl = URL.createObjectURL(blob);
     pdfjsModule.GlobalWorkerOptions.workerSrc = this.workerBlobUrl;
 
-    const data = await this.app.vault.readBinary(file);
+    const data = await this.app.vault.adapter.readBinary(path);
     const loadingTask = pdfjsModule.getDocument({ data });
     this.doc = await loadingTask.promise;
 

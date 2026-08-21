@@ -275,6 +275,22 @@ export class Vault extends Events {
     return [...this._files.values()];
   }
 
+  /** Raw filesystem view, which unlike the Vault is not filtered by extension. */
+  adapter = {
+    exists: async (path: string): Promise<boolean> =>
+      this._files.has(path) || this._binaryContents.has(path),
+    readBinary: async (path: string): Promise<ArrayBuffer> =>
+      this._binaryContents.get(path) ?? new ArrayBuffer(0),
+    list: async (dir: string): Promise<{ files: string[]; folders: string[] }> => {
+      const prefix = dir === "" ? "" : `${dir}/`;
+      const files = [...this._files.keys(), ...this._binaryContents.keys()].filter(
+        (p) => p.startsWith(prefix) && !p.slice(prefix.length).includes("/"),
+      );
+      return { files, folders: [] };
+    },
+    getResourcePath: (path: string): string => `app://fake/${path}`,
+  };
+
   /** Internal store, shared read/write with MetadataCache/FileManager in this file. */
   _files = new Map<string, TFile>();
   _contents = new Map<string, string>();

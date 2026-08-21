@@ -119,10 +119,10 @@ export class EpubEngine implements ReaderEngine {
 
   constructor(private readonly app: App) {}
 
-  async open(file: TFile, container: HTMLElement): Promise<void> {
+  async open(path: string, container: HTMLElement): Promise<void> {
     this.destroy();
 
-    const data = await this.app.vault.readBinary(file);
+    const data = await this.app.vault.adapter.readBinary(path);
     const book = ePub(data) as unknown as EpubBook;
     this.book = book;
     await book.ready;

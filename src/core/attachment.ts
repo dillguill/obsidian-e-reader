@@ -5,6 +5,7 @@
 // src/reader/reader-view.ts.
 
 import type { App, TFile } from "obsidian";
+import { findFileByName } from "./find-file";
 
 const READABLE_EXTENSIONS = new Set(["epub", "pdf"]);
 
@@ -83,4 +84,37 @@ function basename(linkpath: string): string {
   const withoutSubpath = linkpath.split("#")[0] ?? linkpath;
   const parts = withoutSubpath.split("/");
   return (parts[parts.length - 1] ?? withoutSubpath).trim();
+}
+
+
+/**
+ * Resolves a book note's attachment to a vault-relative PATH, falling back to
+ * a filesystem search when the Vault does not track the extension (.epub is
+ * not indexed, so no vault-level API can find it).
+ */
+export async function resolveBookAttachmentPath(
+  app: App,
+  bookNote: TFile,
+  propertyName = "attachments",
+): Promise<{ path: string; extension: string; name: string } | null> {
+  const indexed = resolveBookAttachment(app, bookNote, propertyName);
+  if (indexed) return { path: indexed.path, extension: indexed.extension, name: indexed.name };
+
+  const cache = app.metadataCache.getFileCache(bookNote);
+  const candidates: string[] = [];
+  for (const link of cache?.frontmatterLinks ?? []) {
+    if (link.key === propertyName || link.key.startsWith(`${propertyName}.`)) candidates.push(link.link);
+  }
+  candidates.push(...extractAttachmentLinkpaths(cache?.frontmatter, propertyName));
+
+  const readable = candidates.filter((c) => {
+    const ext = c.split(".").pop()?.toLowerCase() ?? "";
+    return READABLE_EXTENSIONS.has(ext);
+  });
+  if (readable.length === 0) return null;
+
+  const path = await findFileByName(app, readable);
+  if (!path) return null;
+  const name = path.split("/").pop() ?? path;
+  return { path, extension: name.split(".").pop()?.toLowerCase() ?? "", name };
 }

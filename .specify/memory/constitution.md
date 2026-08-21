@@ -151,7 +151,7 @@ what is required.
 **Compliance review**: every pull request verifies compliance with these principles. Violations
 MUST be remediated at the root cause; suppressing a symptom with a workaround, a retry loop, or a
 corrective background task is itself a violation. If a principle proves genuinely wrong, amend it
-rather than route around it. Runtime development guidance for agents lives in `AGENTS.md`, which
-MUST stay consistent with this document.
+rather than route around it. Any day-to-day development guidance kept outside this document MUST
+stay consistent with it.
 
 **Version**: 1.1.0 | **Ratified**: 2026-08-20 | **Last Amended**: 2026-08-20

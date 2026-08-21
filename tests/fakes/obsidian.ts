@@ -191,6 +191,7 @@ export interface BlockCache {
 }
 
 export interface CachedMetadata {
+  frontmatterLinks?: FrontmatterLinkCache[];
   frontmatter?: Record<string, unknown>;
   sections?: SectionCache[];
   blocks?: Record<string, BlockCache>;
@@ -270,6 +271,10 @@ function buildBlocks(body: string): Record<string, BlockCache> {
 // ---------------------------------------------------------------------------
 
 export class Vault extends Events {
+  getFiles(): TFile[] {
+    return [...this._files.values()];
+  }
+
   /** Internal store, shared read/write with MetadataCache/FileManager in this file. */
   _files = new Map<string, TFile>();
   _contents = new Map<string, string>();

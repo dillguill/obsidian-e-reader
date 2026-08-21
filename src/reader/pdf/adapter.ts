@@ -106,6 +106,9 @@ async function outlineFromPdf(doc: PdfjsDocument, items: PdfjsOutlineItem[]): Pr
 export class PdfEngine implements ReaderEngine {
   private doc: PdfjsDocument | null = null;
   private container: HTMLElement | null = null;
+  private scrollEl: HTMLElement | null = null;
+  private pageEls: HTMLElement[] = [];
+  private observer: IntersectionObserver | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private textLayerEl: HTMLElement | null = null;
   private currentPage = 1;
@@ -127,17 +130,71 @@ export class PdfEngine implements ReaderEngine {
     this.doc = await loadingTask.promise;
 
     this.container = container;
-    const viewport = container.createDiv({ cls: "ereader-reader__pdf-viewport" });
-    this.canvas = viewport.createEl("canvas", { cls: "ereader-reader__pdf-canvas" });
-    this.textLayerEl = viewport.createDiv({ cls: "ereader-reader__pdf-text-layer" });
+    this.scrollEl = container.createDiv({ cls: "ereader-reader__pdf-scroll" });
 
-    await this.renderPage(1);
+    // One placeholder per page, sized from its real viewport so the scrollbar is
+    // correct immediately. Canvases are only rendered as pages come into view —
+    // rendering every page of a large book up front would freeze the app.
+    const doc = this.doc;
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+      const pageEl = this.scrollEl.createDiv({ cls: "ereader-reader__pdf-page" });
+      pageEl.dataset["page"] = String(pageNumber);
+      this.pageEls.push(pageEl);
+    }
+    await this.sizePlaceholders();
+
+    this.observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const pageNumber = Number(( entry.target as HTMLElement).dataset["page"]);
+          if (!pageNumber) continue;
+          if (entry.isIntersecting) {
+            void this.renderPageInto(pageNumber);
+            this.currentPage = pageNumber;
+          }
+        }
+      },
+      { root: this.scrollEl, rootMargin: "200px 0px" },
+    );
+    for (const el of this.pageEls) this.observer.observe(el);
+  }
+
+  /** Gives every placeholder the height of its real page so scrolling is accurate. */
+  private async sizePlaceholders(): Promise<void> {
+    const doc = this.doc;
+    if (!doc) return;
+    const first = await doc.getPage(1);
+    const viewport = first.getViewport({ scale: RENDER_SCALE });
+    for (const el of this.pageEls) {
+      el.style.width = `${viewport.width}px`;
+      el.style.height = `${viewport.height}px`;
+    }
+  }
+
+  private async renderPageInto(pageNumber: number): Promise<void> {
+    const doc = this.doc;
+    const pageEl = this.pageEls[pageNumber - 1];
+    if (!doc || !pageEl || pageEl.dataset["rendered"] === "1") return;
+    pageEl.dataset["rendered"] = "1";
+
+    const page = await doc.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: RENDER_SCALE });
+    const canvas = pageEl.createEl("canvas", { cls: "ereader-reader__pdf-canvas" });
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    pageEl.style.width = `${viewport.width}px`;
+    pageEl.style.height = `${viewport.height}px`;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    await page.render({ canvasContext: ctx, viewport }).promise;
   }
 
   async goTo(locator: Locator): Promise<void> {
     if (locator.kind !== "pdf" || !this.doc) return;
     const page = Math.min(Math.max(1, Math.round(locator.page)), this.doc.numPages);
-    await this.renderPage(page);
+    this.currentPage = page;
+    await this.renderPageInto(page);
+    this.pageEls[page - 1]?.scrollIntoView({ block: "start" });
   }
 
   currentLocator(): Locator | null {
@@ -181,6 +238,10 @@ export class PdfEngine implements ReaderEngine {
   }
 
   destroy(): void {
+    this.observer?.disconnect();
+    this.observer = null;
+    this.pageEls = [];
+    this.scrollEl = null;
     this.doc = null;
     this.canvas = null;
     this.textLayerEl = null;

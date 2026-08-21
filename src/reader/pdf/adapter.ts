@@ -1,6 +1,15 @@
-// PDF adapter: pdfjs-dist, statically imported and bundled straight into
-// main.js (see esbuild.config.mjs — no vendor dir, no dynamic import(), no
-// vault.adapter.getResourcePath() resource-path resolution).
+// PDF adapter: pdfjs-dist, bundled straight into main.js (see
+// esbuild.config.mjs — no vendor dir, no vault.adapter.getResourcePath()
+// resource-path resolution) and imported dynamically so that none of it is
+// evaluated until a PDF is actually opened.
+//
+// The dynamic import is what Principle V requires, and it is safe here in a
+// way an earlier attempt was not: with `format: "cjs"` and `splitting: false`,
+// esbuild keeps the imported module inside main.js and merely defers its
+// evaluation. Nothing is fetched at runtime. The failure that made this look
+// impossible before — "Failed to fetch dynamically imported module:
+// app://obsidian.md/vendor/pdfjs/pdf.min.mjs" — came from importing an
+// unbundled file by relative path, which resolved against the app origin.
 //
 // pdf.js needs its worker script served from a URL it can spin up a Worker
 // from; there is no vendor/ directory to point at anymore, so the worker's
@@ -11,8 +20,6 @@
 // No pdfjs type may leak past this module — callers only see
 // ReaderEngine/OutlineNode/SearchHit (../engine.ts).
 
-import * as pdfjsLib from "pdfjs-dist";
-import pdfWorkerSource from "pdfjs-dist/build/pdf.worker.min.mjs";
 import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
 import { activeRange, snapshotFromRange } from "../dom-selection";
@@ -77,6 +84,23 @@ interface PdfjsModule {
 
 const RENDER_SCALE = 1.5;
 
+/**
+ * Loads pdf.js and its worker source on first use. The promise is cached so a
+ * second book pays nothing, and so two concurrent opens share one evaluation.
+ */
+let pdfjsPromise: Promise<{ lib: PdfjsModule; workerSource: string }> | null = null;
+
+function loadPdfjs(): Promise<{ lib: PdfjsModule; workerSource: string }> {
+  pdfjsPromise ??= (async () => {
+    const [lib, worker] = await Promise.all([
+      import("pdfjs-dist") as Promise<unknown>,
+      import("pdfjs-dist/build/pdf.worker.min.mjs"),
+    ]);
+    return { lib: lib as PdfjsModule, workerSource: worker.default };
+  })();
+  return pdfjsPromise;
+}
+
 async function resolveDestPage(doc: PdfjsDocument, item: PdfjsOutlineItem): Promise<number | null> {
   try {
     const explicitDest = typeof item.dest === "string" ? await doc.getDestination(item.dest) : item.dest;
@@ -112,6 +136,7 @@ export class PdfEngine implements ReaderEngine {
   private observer: IntersectionObserver | null = null;
   private currentPage = 1;
   private workerBlobUrl: string | null = null;
+  private pdfjs: PdfjsModule | null = null;
   private contextMenuHandler: ((position: { x: number; y: number }) => void) | null = null;
 
   constructor(private readonly app: App) {}
@@ -119,8 +144,9 @@ export class PdfEngine implements ReaderEngine {
   async open(path: string, container: HTMLElement): Promise<void> {
     this.destroy();
 
-    const pdfjsModule = pdfjsLib as unknown as PdfjsModule;
-    const blob = new Blob([pdfWorkerSource], { type: "text/javascript" });
+    const { lib: pdfjsModule, workerSource } = await loadPdfjs();
+    this.pdfjs = pdfjsModule;
+    const blob = new Blob([workerSource], { type: "text/javascript" });
     this.workerBlobUrl = URL.createObjectURL(blob);
     pdfjsModule.GlobalWorkerOptions.workerSrc = this.workerBlobUrl;
 
@@ -194,7 +220,7 @@ export class PdfEngine implements ReaderEngine {
     const textLayerEl = pageEl.createDiv({ cls: "ereader-reader__pdf-text" });
     textLayerEl.setCssProps({ "--scale-factor": String(RENDER_SCALE), "--user-unit": "1" });
     try {
-      const textLayer = new (pdfjsLib as unknown as PdfjsModule).TextLayer({
+      const textLayer = new (this.pdfjs as PdfjsModule).TextLayer({
         textContentSource: page.streamTextContent(),
         container: textLayerEl,
         viewport,
@@ -290,6 +316,7 @@ export class PdfEngine implements ReaderEngine {
     this.pageEls = [];
     this.scrollEl = null;
     this.doc = null;
+    this.pdfjs = null;
     this.container = null;
     if (this.workerBlobUrl !== null) {
       URL.revokeObjectURL(this.workerBlobUrl);

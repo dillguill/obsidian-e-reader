@@ -68,6 +68,19 @@ export default class EReaderPlugin extends Plugin {
   private readonly readerEvents = new ReaderEvents();
 
   override async onload(): Promise<void> {
+    try {
+      await this.setUp();
+    } catch (error) {
+      // Obsidian reports a failed onload as a bare "failed to load plugin",
+      // and mobile has no console to look in. Surface the real message on the
+      // device, then rethrow so the failure stays a failure rather than a
+      // half-loaded plugin pretending otherwise.
+      new Notice(`E-Reader failed to load: ${String(error)}`, 15000);
+      throw error;
+    }
+  }
+
+  private async setUp(): Promise<void> {
     this.settings = mergeSettings(await this.loadData());
 
     this.registerView(READER_VIEW_TYPE, (leaf) => new ReaderView(leaf, () => this.settings, this.readerEvents));
@@ -79,14 +92,23 @@ export default class EReaderPlugin extends Plugin {
     // it also makes an EPUB open in the reader from the file explorer.
     this.registerExtensions(["epub"], READER_VIEW_TYPE);
 
-    const registered = this.registerBasesView(LIBRARY_VIEW_TYPE, {
-      name: "Library",
-      icon: "library",
-      factory: (controller, containerEl) => new LibraryView(controller, containerEl),
-      options: libraryViewOptions,
-    });
-    if (!registered) {
-      new Notice("E-Reader: could not register the library view — Bases is not enabled in this vault.");
+    // Bases is an optional integration: the reader and the sidebars stand on
+    // their own without it. `registerBasesView` arrived in 1.10.0 and is
+    // absent on builds without Bases, so this is feature detection rather
+    // than a version check — calling a missing method here would take the
+    // whole plugin down with it.
+    if (typeof this.registerBasesView !== "function") {
+      console.info("[e-reader] this Obsidian build has no Bases API; the library view is unavailable.");
+    } else {
+      const registered = this.registerBasesView(LIBRARY_VIEW_TYPE, {
+        name: "Library",
+        icon: "library",
+        factory: (controller, containerEl) => new LibraryView(controller, containerEl),
+        options: libraryViewOptions,
+      });
+      if (!registered) {
+        new Notice("E-Reader: could not register the library view — Bases is not enabled in this vault.");
+      }
     }
 
     this.addCommand({

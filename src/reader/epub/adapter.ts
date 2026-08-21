@@ -1,8 +1,13 @@
-// EPUB adapter: epub.js, statically imported and bundled straight into
-// main.js (see esbuild.config.mjs — no vendor dir, no dynamic import(),
-// no vault.adapter.getResourcePath() resource-path resolution, all of which
-// previously failed at runtime with "Failed to fetch dynamically imported
-// module" and rendered EPUBs blank).
+// EPUB adapter: epub.js, bundled straight into main.js (see
+// esbuild.config.mjs — no vendor dir, no vault.adapter.getResourcePath()
+// resource-path resolution) and imported dynamically so none of it is
+// evaluated until an EPUB is opened, as Principle V requires.
+//
+// That earlier "Failed to fetch dynamically imported module" was caused by
+// importing an unbundled file by relative path, which resolved against the
+// app origin. With `format: "cjs"` and `splitting: false` esbuild keeps the
+// module inside main.js and only defers its evaluation, so nothing is
+// fetched at runtime and the failure cannot recur.
 //
 // epub.js's own .d.ts (node_modules/epubjs/types) is incomplete/wrong in
 // places verified against node_modules/epubjs/src (e.g. Section.find's
@@ -13,7 +18,6 @@
 // epub.js type may leak past this module — callers only see
 // ReaderEngine/OutlineNode/SearchHit (../engine.ts).
 
-import ePub from "epubjs";
 import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
 import { activeRange, snapshotFromRange } from "../dom-selection";
@@ -127,6 +131,14 @@ async function outlineFromToc(book: EpubBook, items: EpubNavItem[]): Promise<Out
 
 const LOCATIONS_GENERATE_CHARS = 1600;
 
+/** Loads epub.js on first use; the promise is cached across books. */
+let epubjsPromise: Promise<(input: ArrayBuffer) => unknown> | null = null;
+
+function loadEpubjs(): Promise<(input: ArrayBuffer) => unknown> {
+  epubjsPromise ??= import("epubjs").then((module) => module.default as unknown as (input: ArrayBuffer) => unknown);
+  return epubjsPromise;
+}
+
 export class EpubEngine implements ReaderEngine {
   private book: EpubBook | null = null;
   private rendition: EpubRendition | null = null;
@@ -138,6 +150,7 @@ export class EpubEngine implements ReaderEngine {
   async open(path: string, container: HTMLElement): Promise<void> {
     this.destroy();
 
+    const ePub = await loadEpubjs();
     const data = await this.app.vault.adapter.readBinary(path);
     const book = ePub(data) as unknown as EpubBook;
     this.book = book;

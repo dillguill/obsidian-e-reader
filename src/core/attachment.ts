@@ -19,18 +19,20 @@ export function extractAttachmentLinkpaths(
   frontmatter: Record<string, unknown> | null | undefined,
   propertyName = "attachments",
 ): string[] {
-  const attachments = frontmatter?.[propertyName];
-  const list: unknown[] = Array.isArray(attachments) ? attachments : attachments ? [attachments] : [];
+  // `- [[Book.epub]]` in YAML is a list item containing two nested flow
+  // sequences, so the filename arrives THREE levels deep:
+  // [[["Book.epub"]]]. Quoted links arrive as plain strings. Collect every
+  // string at any depth rather than assuming a nesting level.
   const linkpaths: string[] = [];
-  // An unquoted `- [[Book.epub]]` is valid YAML flow-sequence syntax, so it
-  // parses as a NESTED ARRAY rather than a string. Quoted links arrive as
-  // strings. Flatten one level so both spellings resolve.
-  const flat: unknown[] = list.flatMap((item) => (Array.isArray(item) ? (item as unknown[]) : [item]));
-  for (const item of flat) {
-    if (typeof item !== "string") continue;
-    const linkpath = item.replace(/^\[\[|\]\]$/g, "").split("|")[0]?.trim();
-    if (linkpath) linkpaths.push(linkpath);
-  }
+  const collect = (value: unknown): void => {
+    if (typeof value === "string") {
+      const linkpath = value.replace(/^\[\[|\]\]$/g, "").split("|")[0]?.trim();
+      if (linkpath) linkpaths.push(linkpath);
+      return;
+    }
+    if (Array.isArray(value)) for (const item of value) collect(item);
+  };
+  collect(frontmatter?.[propertyName]);
   return linkpaths;
 }
 

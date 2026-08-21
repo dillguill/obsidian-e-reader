@@ -57,6 +57,8 @@ export class Events {
 // ---------------------------------------------------------------------------
 
 /** Mirrors obsidian.d.ts's `BasesPropertyId` exactly (verified against 1.13.1). */
+export interface FrontmatterLinkCache { key: string; link: string; original: string }
+
 export type BasesPropertyId = `${"note" | "formula" | "file"}.${string}`;
 
 // ---------------------------------------------------------------------------

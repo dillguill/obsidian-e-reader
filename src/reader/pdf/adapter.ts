@@ -1,19 +1,22 @@
-// PDF adapter: pdfjs-dist, loaded lazily from the vendored build so it never
-// enters the startup bundle (Principle V / esbuild.config.mjs's `external`
-// list). No pdfjs type may leak past this module — callers only see
+// PDF adapter: pdfjs-dist, statically imported and bundled straight into
+// main.js (see esbuild.config.mjs — no vendor dir, no dynamic import(), no
+// vault.adapter.getResourcePath() resource-path resolution).
+//
+// pdf.js needs its worker script served from a URL it can spin up a Worker
+// from; there is no vendor/ directory to point at anymore, so the worker's
+// minified source is inlined into main.js as a text asset (an esbuild plugin
+// in esbuild.config.mjs loads pdfjs-dist/build/pdf.worker.min.mjs as a
+// string) and turned into a same-origin blob: URL at runtime instead.
+//
+// No pdfjs type may leak past this module — callers only see
 // ReaderEngine/OutlineNode/SearchHit (../engine.ts).
 
-import { vendorUrl } from "../vendor-path";
+import * as pdfjsLib from "pdfjs-dist";
+import pdfWorkerSource from "pdfjs-dist/build/pdf.worker.min.mjs";
 import type { App, TFile } from "obsidian";
 import type { Locator } from "../../core/types";
 import type { OutlineNode, ReaderEngine, SearchHit } from "../engine";
 import { pdfPageToPercent } from "../progress";
-
-// See src/reader/epub/adapter.ts's VIEW_MODULE_PATH comment: held in a
-// variable, and written relative to the bundled main.js (not to this source
-// file), so esbuild never inlines it and tsc never tries to resolve it.
-const PDFJS_MODULE_PATH = "pdfjs/pdf.min.mjs";
-const PDFJS_WORKER_PATH = "pdfjs/pdf.worker.min.mjs";
 
 interface PdfjsViewport {
   width: number;
@@ -101,25 +104,26 @@ async function outlineFromPdf(doc: PdfjsDocument, items: PdfjsOutlineItem[]): Pr
 }
 
 export class PdfEngine implements ReaderEngine {
-  private pdfjsLib: PdfjsModule | null = null;
   private doc: PdfjsDocument | null = null;
   private container: HTMLElement | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private textLayerEl: HTMLElement | null = null;
   private currentPage = 1;
   private renderToken = 0;
+  private workerBlobUrl: string | null = null;
 
   constructor(private readonly app: App) {}
 
   async open(file: TFile, container: HTMLElement): Promise<void> {
     this.destroy();
 
-    const pdfjsLib = (await import(/* @vite-ignore */ vendorUrl(PDFJS_MODULE_PATH))) as PdfjsModule;
-    pdfjsLib.GlobalWorkerOptions.workerSrc = vendorUrl(PDFJS_WORKER_PATH);
-    this.pdfjsLib = pdfjsLib;
+    const pdfjsModule = pdfjsLib as unknown as PdfjsModule;
+    const blob = new Blob([pdfWorkerSource], { type: "text/javascript" });
+    this.workerBlobUrl = URL.createObjectURL(blob);
+    pdfjsModule.GlobalWorkerOptions.workerSrc = this.workerBlobUrl;
 
     const data = await this.app.vault.readBinary(file);
-    const loadingTask = pdfjsLib.getDocument({ data });
+    const loadingTask = pdfjsModule.getDocument({ data });
     this.doc = await loadingTask.promise;
 
     this.container = container;
@@ -178,19 +182,21 @@ export class PdfEngine implements ReaderEngine {
 
   destroy(): void {
     this.doc = null;
-    this.pdfjsLib = null;
     this.canvas = null;
     this.textLayerEl = null;
     this.container = null;
     this.renderToken++;
+    if (this.workerBlobUrl !== null) {
+      URL.revokeObjectURL(this.workerBlobUrl);
+      this.workerBlobUrl = null;
+    }
   }
 
   private async renderPage(pageNumber: number): Promise<void> {
     const doc = this.doc;
-    const pdfjsLib = this.pdfjsLib;
     const canvas = this.canvas;
     const textLayerEl = this.textLayerEl;
-    if (!doc || !pdfjsLib || !canvas || !textLayerEl) return;
+    if (!doc || !canvas || !textLayerEl) return;
 
     const token = ++this.renderToken;
     const page = await doc.getPage(pageNumber);
@@ -209,7 +215,7 @@ export class PdfEngine implements ReaderEngine {
     textLayerEl.replaceChildren();
     textLayerEl.style.width = `${viewport.width}px`;
     textLayerEl.style.height = `${viewport.height}px`;
-    const textLayer = new pdfjsLib.TextLayer({
+    const textLayer = new (pdfjsLib as unknown as PdfjsModule).TextLayer({
       textContentSource: page.streamTextContent(),
       container: textLayerEl,
       viewport,

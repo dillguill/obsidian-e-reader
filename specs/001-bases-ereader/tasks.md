@@ -113,7 +113,7 @@ rendering engines. Paths follow the structure in [plan.md](./plan.md).
 - [X] T039 [P] [US2] Implement `src/reader/pdf/adapter.ts` as the sole importer of pdfjs-dist, behind a dynamic `import()`, with the worker resolved from the vendored chunk — **superseded**: implemented in `src/reader/pdf/adapter.ts` over pdfjs-dist, statically imported for the same reason. See T045.
 - [X] T040 [US2] Implement `src/reader/reader-view.ts` as an `ItemView` that hosts an engine and reports the **book note** as its active file, so Obsidian's own properties, backlinks, and search panes operate on it (FR-014e) — **done**: implemented in `src/reader/reader-view.ts` as a **FileView**, not a bare ItemView, and loading through `FileView.loadFile()` so `file-open` fires and Obsidian's native panes follow the book note
 - [ ] T041 [US2] Resolve which attachment to open when `attachments` lists several, opening the most recently read and asking otherwise (FR-013a)
-- [ ] T042 [US2] Implement text-size and zoom controls per format (FR-017)
+- [X] T042 [US2] Implement text-size and zoom controls per format (FR-017) — a reader toolbar shaped like Obsidian's own PDF toolbar (`src/reader/toolbar.ts`): zoom/text-size steps, a display-options menu (PDF fit modes, spreads, adapt-to-theme; EPUB scrolled/paginated), and a page/location box
 - [ ] T043 [US2] Implement in-book search with streamed results for both engines (FR-016)
 - [ ] T044 [US2] Implement the further-position prompt, applied only on acceptance (FR-015b)
 - [ ] T045 [US2] **Restore lazy loading of the rendering engines, which the plugin currently violates.** Principle V requires them to load on first use and never during startup; the static imports that fixed the dynamic-import failure (T038, T039) mean epub.js and pdf.js are both evaluated when the plugin loads. Find a form of deferred loading that survives Obsidian's module resolution, then add the test guarding the 100 ms startup budget (FR-014d)
@@ -143,7 +143,7 @@ rendering engines. Paths follow the structure in [plan.md](./plan.md).
 - [ ] T053 [US3] Verify in a real vault that `^id` after a blank line attaches to the blockquote and that `%%…%%` is hidden in reading and live-preview; apply the documented fallback if not
 - [X] T054 [US3] Implement `src/annotations/store.ts` for two-way sync, reacting to metadata-cache changes (FR-022)
 - [X] T055 [US3] Implement highlight creation from a selection in both adapters, writing the entry and painting it (FR-016b)
-- [ ] T056 [US3] Implement persistent highlight painting via foliate-js `overlayer.js` for EPUB and a text-layer overlay for PDF
+- [X] T056 [US3] Implement persistent highlight painting — epub.js's own `annotations.highlight` for EPUB (this project renders with epub.js, not foliate-js, so its overlayer was never the vehicle) and a text-layer overlay for PDF, both re-anchored from the quoted text through `src/reader/text-index.ts`
 - [X] T057 [US3] Implement `src/sidebar/highlights-view.ts` listing entries in reading order with unanchored ones grouped after, separated and sorted by creation time
 - [X] T058 [US3] Implement type filtering in the highlights sidebar (FR-020a)
 - [X] T059 [US3] Implement in-place commentary editing (FR-022a)
@@ -271,10 +271,10 @@ Work the original breakdown did not anticipate, recorded after the MVP was in
 the vault and being read from. Each is a real defect or a missing surface, not
 a refinement.
 
-- [ ] T094 Add a settings tab. `Settings` already carries the configurable frontmatter property names and the annotation type set (`src/settings/settings-model.ts`), and nothing can edit any of it — highlight types are stuck at their defaults and property names can only be changed by hand-editing `data.json` (FR-006, FR-020a)
-- [ ] T095 Inject the vault's theme into epub.js's rendered sections. Each section renders inside an iframe that inherits none of Obsidian's CSS, so a dark theme leaves dark text on a dark page and the book is unreadable
+- [X] T094 Add a settings tab. `Settings` already carries the configurable frontmatter property names and the annotation type set (`src/settings/settings-model.ts`), and nothing can edit any of it — highlight types are stuck at their defaults and property names can only be changed by hand-editing `data.json` (FR-006, FR-020a)
+- [X] T095 Inject the vault's theme into epub.js's rendered sections. Each section renders inside an iframe that inherits none of Obsidian's CSS, so a dark theme leaves dark text on a dark page and the book is unreadable
 - [ ] T096 Fix EPUB scroll behaviour. The continuous manager estimates section heights before they render, so scrolling drifts and jumps as real heights arrive
-- [ ] T097 Paint saved highlights back into the document. The sidebar lists them and the reader has no idea they exist, so a passage highlighted yesterday looks untouched today. Same task as T056, kept there for its US3 context — resolve them together
+- [X] T097 Paint saved highlights back into the document. The sidebar lists them and the reader has no idea they exist, so a passage highlighted yesterday looks untouched today. Same task as T056, kept there for its US3 context — resolve them together
 - [ ] T098 Rewrite the reader's frontmatter writes to record `furthest-read` alongside `last-read`, the data half of T030 and T044 (FR-015a)
 
 **Checkpoint**: the plugin is configurable and an EPUB is comfortable to read.

@@ -1,7 +1,7 @@
 // Contract both reader adapters implement (src/reader/epub/adapter.ts,
 // src/reader/pdf/adapter.ts). No engine-specific type (epub.js's Book/
 // Rendition, pdfjs's PDFDocumentProxy, ...) may appear outside its adapter
-// module — callers (reader-view.ts) only ever see this interface.
+// module — callers (reader-view.ts, toolbar.ts) only ever see this interface.
 
 import type { Locator } from "../core/types";
 
@@ -23,6 +23,45 @@ export interface EngineSelection {
   suffix: string;
   /** Where the selection sits, for the entry's `hint`. Null when the engine cannot say. */
   locator: Locator | null;
+}
+
+/**
+ * Where the reader is, as a number the toolbar can show and accept. A PDF
+ * counts real pages; an EPUB has none, so it counts epub.js's generated
+ * locations — a stable index through the book that behaves the same way.
+ */
+export interface PageState {
+  /** 1-based. */
+  current: number;
+  total: number;
+  unit: "page" | "location";
+}
+
+/**
+ * One item in the toolbar's display-options menu. Each adapter declares its
+ * own — fit modes and spreads for a fixed-page book, flow and theme for a
+ * reflowable one — so the toolbar can render the menu without knowing that
+ * either concept exists.
+ */
+export interface DisplayOption {
+  section: "zoom" | "spread" | "layout" | "appearance";
+  /** Stable identity, for tests and for keying the menu item. */
+  id: string;
+  label: string;
+  icon: string;
+  checked: boolean;
+  apply(): void | Promise<void>;
+}
+
+/** A saved entry the engine is being asked to draw into the document. */
+export interface PaintedHighlight {
+  id: string;
+  type: string;
+  exact: string;
+  prefix?: string;
+  suffix?: string;
+  /** The recorded position. A fast path only — the quoted text is the authority. */
+  hint?: Locator;
 }
 
 export interface ReaderEngine {
@@ -47,6 +86,46 @@ export interface ReaderEngine {
    * an Obsidian menu without knowing about iframes or text layers.
    */
   onContextMenu(handler: (position: { x: number; y: number }) => void): void;
+
+  // ------------------------------------------------------------- toolbar
+
+  /** Null until the engine knows where it is — an EPUB's index is built in the background. */
+  pageState(): PageState | null;
+  /** Jumps to a 1-based page (PDF) or location (EPUB). Out-of-range values clamp. */
+  goToPage(page: number): Promise<void>;
+  /**
+   * The page/location number a locator falls on, so the toolbar can tell
+   * whether the current place is already bookmarked. Null when the locator
+   * is for another format, or the engine cannot place it.
+   */
+  pageNumberFor(locator: Locator): number | null;
+  /** Zoom (PDF) or text size (EPUB) as a multiplier of the engine's base; 1 = actual size. */
+  scale(): number;
+  setScale(scale: number): Promise<void>;
+  /** Items for the toolbar's display-options menu. Re-read each time the menu opens. */
+  displayOptions(): DisplayOption[];
+  /**
+   * Registers a handler fired whenever the rendered position or the scale
+   * changed. The toolbar refreshes from this rather than polling — the
+   * reader's own 2-second position flush is far too slow for a page counter.
+   */
+  onChange(handler: () => void): void;
+
+  // ---------------------------------------------------------- highlights
+
+  /**
+   * Draws these highlights into the rendered document, replacing whatever was
+   * drawn before. An empty list clears them. Entries whose quoted text cannot
+   * be found are skipped, never guessed at (FR-024).
+   */
+  paintHighlights(highlights: readonly PaintedHighlight[]): Promise<void>;
+
+  /**
+   * Re-applies anything derived from the vault's theme. Called on Obsidian's
+   * `css-change`. A no-op for engines that render in the host document.
+   */
+  refreshTheme(): void;
+
   /** Releases the worker/listeners/object URLs this engine holds. Idempotent. */
   destroy(): void;
 }

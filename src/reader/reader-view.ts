@@ -14,17 +14,21 @@
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { FileView, Menu, Notice, TFile } from "obsidian";
-import { addEntry } from "../annotations/store";
+import { addEntry, listEntries, removeEntry } from "../annotations/store";
+import type { Entry } from "../annotations/entry";
 import type { ReaderEvents } from "../core/reader-events";
-import { describeAttachmentLookup, resolveBookAttachmentPath } from "../core/attachment";
+import { describeAttachmentLookup, resolveBookAttachment, resolveBookAttachmentPath } from "../core/attachment";
 import { parseLocator, serializeLocator } from "../core/locator";
-import type { Locator } from "../core/types";
+import { RESERVED_ENTRY_TYPE, type Locator } from "../core/types";
 import type { Settings } from "../settings/settings-model";
 import { createEpubEngine } from "./epub/adapter";
-import type { EngineSelection, OutlineNode, ReaderEngine } from "./engine";
+import type { EngineSelection, OutlineNode, PaintedHighlight, ReaderEngine } from "./engine";
 import { createPdfEngine } from "./pdf/adapter";
 import { type ReadingPosition, positionChanged, shouldFlushNow } from "./position";
 import { clampProgress } from "./progress";
+import { ReaderToolbar } from "./toolbar";
+import { toolbarState } from "./toolbar-model";
+import { stepScale } from "./zoom";
 
 export const READER_VIEW_TYPE = "ereader-reader";
 
@@ -39,7 +43,7 @@ export interface ReaderViewState {
 const POSITION_FLUSH_INTERVAL_MS = 2000;
 const PROGRESS_PROPERTY = "progress";
 const LAST_READ_PROPERTY = "last-read";
-const BOOKMARK_TYPE = "bookmark";
+const BOOKMARK_TYPE = RESERVED_ENTRY_TYPE;
 
 function isReaderViewState(state: unknown): state is ReaderViewState {
   return typeof state === "object" && state !== null;
@@ -48,6 +52,7 @@ function isReaderViewState(state: unknown): state is ReaderViewState {
 export class ReaderView extends FileView {
   private engine: ReaderEngine | null = null;
   private contentRoot: HTMLElement | null = null;
+  private toolbar: ReaderToolbar | null = null;
   private lastWritten: ReadingPosition | null = null;
   private lastFlushAt = 0;
   private loadToken = 0;
@@ -55,10 +60,20 @@ export class ReaderView extends FileView {
    * costs a load of every section named in the TOC to resolve each href to a
    * CFI, which is far too slow to repeat on every sidebar render. */
   private cachedOutline: OutlineNode[] | null = null;
+  /** The book note's bookmark entries, for the toolbar's filled state. */
+  private bookmarks: Entry[] = [];
+  /**
+   * Signature of the entries last applied. The reader writes progress into
+   * the book note's frontmatter every couple of seconds, and every one of
+   * those writes fires `metadataCache.changed` — repainting the whole book
+   * each time, for a change that cannot possibly have touched an entry.
+   */
+  private lastEntrySignature: string | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
     private readonly getSettings: () => Settings,
+    private readonly saveSettings: () => void,
     private readonly events: ReaderEvents,
   ) {
     super(leaf);
@@ -89,12 +104,37 @@ export class ReaderView extends FileView {
     // Our own child div — never Obsidian's contentEl directly — so we can
     // freely rebuild it (`.empty()` + repopulate) on every book switch.
     this.contentRoot = this.contentEl.createDiv({ cls: "ereader-reader" });
+    // The toolbar is built once and lives above the viewport, which is what
+    // `loadBook` empties and rebuilds; rebuilding it per book would drop the
+    // listeners with it.
+    this.toolbar = new ReaderToolbar(this.contentRoot, this, {
+      zoomIn: () => void this.zoom(1),
+      zoomOut: () => void this.zoom(-1),
+      goToPage: (page) => void this.goToPage(page),
+      displayOptions: () => this.engine?.displayOptions() ?? [],
+      toggleHighlights: () => void this.toggleHighlights(),
+      toggleBookmark: () => void this.toggleBookmark(),
+    });
+    this.toolbar.setVisible(false);
+
     this.registerInterval(
       window.setInterval(() => {
         this.announcePosition();
         void this.flushPosition(false);
       }, POSITION_FLUSH_INTERVAL_MS),
     );
+
+    // An entry edited in the note — or written by this reader, or by the
+    // highlights pane — arrives here the same way the sidebar sees it.
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        if (file === this.bookNote()) void this.refreshEntries();
+      }),
+    );
+    // An EPUB renders inside iframes that inherit none of the vault's CSS, so
+    // a theme switch has to be pushed into them.
+    this.registerEvent(this.app.workspace.on("css-change", () => this.engine?.refreshTheme()));
+
     if (this.file) await this.loadBook(this.file);
   }
 
@@ -116,9 +156,12 @@ export class ReaderView extends FileView {
     this.engine?.destroy();
     this.engine = null;
     this.cachedOutline = null;
+    this.bookmarks = [];
+    this.lastEntrySignature = null;
     this.lastWritten = null;
     this.lastFlushAt = 0;
-    this.contentRoot?.empty();
+    this.toolbar?.setVisible(false);
+    this.clearViewport();
   }
 
   override async onClose(): Promise<void> {
@@ -133,6 +176,16 @@ export class ReaderView extends FileView {
     return this.file && this.file.extension === "md" ? this.file : null;
   }
 
+  /** The element each engine renders into, rebuilt per book. */
+  private viewportEl(): HTMLElement | null {
+    return this.contentRoot?.querySelector<HTMLElement>(".ereader-reader__viewport") ?? null;
+  }
+
+  private clearViewport(): void {
+    this.viewportEl()?.remove();
+    this.contentRoot?.querySelector(".ereader-reader__empty")?.remove();
+  }
+
   private async loadBook(file: TFile): Promise<void> {
     const root = this.contentRoot;
     if (!root) return;
@@ -141,13 +194,16 @@ export class ReaderView extends FileView {
     this.engine?.destroy();
     this.engine = null;
     this.cachedOutline = null;
-    root.empty();
+    this.bookmarks = [];
+    this.lastEntrySignature = null;
+    this.toolbar?.setVisible(false);
+    this.clearViewport();
 
     // Opening an .epub straight from the file explorer gives us the book
     // itself rather than a note about it; there is nothing to resolve.
     const attachment =
       file.extension === "md"
-        ? await resolveBookAttachmentPath(this.app, file)
+        ? await resolveBookAttachmentPath(this.app, file, this.getSettings().properties.attachments)
         : { path: file.path, extension: file.extension, name: file.name };
 
     if (!attachment) {
@@ -157,14 +213,27 @@ export class ReaderView extends FileView {
       return;
     }
 
+    // "Obsidian default" for a format hands the attachment straight to the
+    // app. Note this is the ONLY thing that setting can do for PDFs: a plugin
+    // cannot claim `.pdf` at all (registerExtensions throws on an
+    // already-registered extension), so a PDF opened from the file explorer
+    // never reaches this view in the first place.
+    if (file.extension === "md" && this.getSettings().readers[attachment.extension === "epub" ? "epub" : "pdf"] === "default") {
+      const target = resolveBookAttachment(this.app, file, this.getSettings().properties.attachments);
+      if (target) {
+        await this.leaf.openFile(target);
+        return;
+      }
+    }
+
     let engine: ReaderEngine;
     try {
-      engine = attachment.extension === "epub" ? createEpubEngine(this.app) : createPdfEngine(this.app);
+      engine = attachment.extension === "epub" ? this.newEpubEngine() : this.newPdfEngine();
       const viewport = root.createDiv({ cls: "ereader-reader__viewport" });
       await engine.open(attachment.path, viewport);
     } catch (error) {
       console.error("[e-reader] failed to open book", error);
-      root.empty();
+      this.clearViewport();
       root.createDiv({ cls: "ereader-reader__empty", text: `Could not open ${attachment.name}: ${String(error)}` });
       new Notice(`E-Reader: could not open ${attachment.name}`);
       return;
@@ -178,6 +247,8 @@ export class ReaderView extends FileView {
     }
     this.engine = engine;
     engine.onContextMenu((position) => this.showAnnotationMenu(position));
+    engine.onChange(() => this.updateToolbar());
+    this.toolbar?.setVisible(true);
 
     const restored = this.readStoredLocator(file);
     if (restored) {
@@ -190,6 +261,38 @@ export class ReaderView extends FileView {
     this.lastWritten = this.currentPosition();
     this.lastFlushAt = Date.now();
     this.announcePosition();
+    this.updateToolbar();
+    await this.refreshEntries();
+  }
+
+  private newPdfEngine(): ReaderEngine {
+    const preferences = this.getSettings().reader;
+    return createPdfEngine(this.app, {
+      scale: preferences.pdfScale,
+      spread: preferences.pdfSpread,
+      adaptToTheme: preferences.pdfAdaptToTheme,
+      onPreferencesChanged: (next) => {
+        const reader = this.getSettings().reader;
+        reader.pdfScale = next.scale;
+        reader.pdfSpread = next.spread;
+        reader.pdfAdaptToTheme = next.adaptToTheme;
+        this.saveSettings();
+      },
+    });
+  }
+
+  private newEpubEngine(): ReaderEngine {
+    const preferences = this.getSettings().reader;
+    return createEpubEngine(this.app, {
+      textScale: preferences.epubTextScale,
+      flow: preferences.epubFlow,
+      onPreferencesChanged: (next) => {
+        const reader = this.getSettings().reader;
+        reader.epubTextScale = next.textScale;
+        reader.epubFlow = next.flow;
+        this.saveSettings();
+      },
+    });
   }
 
   /**
@@ -225,6 +328,7 @@ export class ReaderView extends FileView {
     try {
       await this.engine?.goTo(locator);
       this.announcePosition();
+      this.updateToolbar();
     } catch (error) {
       console.error("[e-reader] failed to navigate to a locator", error);
     }
@@ -233,6 +337,134 @@ export class ReaderView extends FileView {
   /** The current selection in the rendered document, or null. */
   selection(): EngineSelection | null {
     return this.engine?.getSelection() ?? null;
+  }
+
+  // ------------------------------------------------------------- toolbar
+
+  private updateToolbar(): void {
+    const engine = this.engine;
+    if (!this.toolbar) return;
+    if (!engine) {
+      this.toolbar.setVisible(false);
+      return;
+    }
+    const pages = engine.pageState();
+    this.toolbar.update(
+      toolbarState({
+        pages,
+        scale: engine.scale(),
+        highlightsShown: this.getSettings().reader.showHighlights,
+        bookmarked: this.currentBookmark() !== null,
+      }),
+    );
+  }
+
+  private async zoom(direction: 1 | -1): Promise<void> {
+    const engine = this.engine;
+    if (!engine) return;
+    await engine.setScale(stepScale(engine.scale(), direction));
+    this.updateToolbar();
+  }
+
+  private async goToPage(page: number): Promise<void> {
+    await this.engine?.goToPage(page);
+    this.announcePosition();
+    this.updateToolbar();
+  }
+
+  // ---------------------------------------------------------- highlights
+
+  /**
+   * Re-reads the book note's entries and applies them: highlights are painted
+   * into the document (when the toolbar's toggle is on) and bookmarks feed the
+   * bookmark button's filled state. The note is the store, so this runs on
+   * every metadata change rather than caching across edits.
+   */
+  private async refreshEntries(): Promise<void> {
+    const note = this.bookNote();
+    const engine = this.engine;
+    if (!note || !engine) {
+      this.bookmarks = [];
+      this.lastEntrySignature = null;
+      this.updateToolbar();
+      return;
+    }
+    let entries: Entry[] = [];
+    try {
+      entries = (await listEntries(this.app, note)).entries;
+    } catch (error) {
+      console.error("[e-reader] failed to read the book note's entries", error);
+      return;
+    }
+    if (this.engine !== engine) return; // the book changed while we read
+
+    const showHighlights = this.getSettings().reader.showHighlights;
+    const signature = `${showHighlights}\u0000${entries
+      .map((entry) => [entry.id, entry.type, entry.exact, entry.anchor.prefix ?? "", entry.anchor.suffix ?? ""].join("\u0001"))
+      .join("\u0002")}`;
+    if (signature === this.lastEntrySignature) return;
+    this.lastEntrySignature = signature;
+
+    this.bookmarks = entries.filter((entry) => entry.type === BOOKMARK_TYPE);
+
+    const painted: PaintedHighlight[] = showHighlights
+      ? entries
+          .filter((entry) => entry.type !== BOOKMARK_TYPE && entry.exact !== "")
+          .map((entry) => ({
+            id: entry.id,
+            type: entry.type,
+            exact: entry.exact,
+            ...(entry.anchor.prefix === undefined ? {} : { prefix: entry.anchor.prefix }),
+            ...(entry.anchor.suffix === undefined ? {} : { suffix: entry.anchor.suffix }),
+            ...(entry.anchor.hint === undefined ? {} : { hint: entry.anchor.hint }),
+          }))
+      : [];
+    try {
+      await engine.paintHighlights(painted);
+    } catch (error) {
+      console.error("[e-reader] failed to paint saved highlights", error);
+    }
+    this.updateToolbar();
+  }
+
+  private async toggleHighlights(): Promise<void> {
+    const reader = this.getSettings().reader;
+    reader.showHighlights = !reader.showHighlights;
+    this.saveSettings();
+    await this.refreshEntries();
+  }
+
+  // ----------------------------------------------------------- bookmarks
+
+  /** The bookmark sitting on the page the reader is looking at, if any. */
+  private currentBookmark(): Entry | null {
+    const engine = this.engine;
+    const here = engine?.pageState()?.current;
+    if (!engine || here === undefined) return null;
+    for (const entry of this.bookmarks) {
+      const hint = entry.anchor.hint;
+      if (hint && engine.pageNumberFor(hint) === here) return entry;
+    }
+    return null;
+  }
+
+  private async toggleBookmark(): Promise<void> {
+    const note = this.bookNote();
+    if (!note) {
+      new Notice("E-Reader: bookmarks are stored in a book note — open this book from your library.");
+      return;
+    }
+    const existing = this.currentBookmark();
+    if (!existing) {
+      await this.createEntry(BOOKMARK_TYPE, null);
+      return;
+    }
+    try {
+      await removeEntry(this.app, note, existing.id);
+    } catch (error) {
+      console.error("[e-reader] failed to remove a bookmark", error);
+      new Notice("E-Reader: could not remove that bookmark — see the console.");
+    }
   }
 
   private showAnnotationMenu(position: { x: number; y: number }): void {

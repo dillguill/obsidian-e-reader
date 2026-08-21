@@ -50,6 +50,21 @@ describe("anchor", () => {
   it("reports a missing quote as unanchored", () => {
     expect(resolveInText("nothing here", "absent")).toBeNull();
   });
+
+  // A stored prefix/suffix is whitespace-normalised AND trimmed
+  // (dom-selection.ts), so it has lost the space that separated it from the
+  // quote. The text it is matched against still has that space, so the
+  // comparison has to ignore boundary whitespace or every disambiguation
+  // would score zero and the highlight would be dropped as ambiguous.
+  it("disambiguates even though the recorded context was trimmed", () => {
+    const text = "alpha SAME omega ... beta SAME gamma";
+    expect(resolveInText(text, "SAME", { prefix: "beta", suffix: "gamma" })).toBe(26);
+  });
+
+  it("disambiguates when the text runs whitespace the recorded context collapsed", () => {
+    const text = "alpha SAME omega ... beta \n\n  SAME gamma";
+    expect(resolveInText(text, "SAME", { prefix: "beta", suffix: "gamma" })).toBe(text.lastIndexOf("SAME"));
+  });
 });
 
 describe("entry", () => {

@@ -18,13 +18,16 @@
 // string) and turned into a same-origin blob: URL at runtime instead.
 //
 // No pdfjs type may leak past this module — callers only see
-// ReaderEngine/OutlineNode/SearchHit (../engine.ts).
+// ReaderEngine/OutlineNode/SearchHit/... (../engine.ts).
 
 import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
-import { activeRange, snapshotFromRange } from "../dom-selection";
-import type { EngineSelection, OutlineNode, ReaderEngine, SearchHit } from "../engine";
+import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
+import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine, SearchHit } from "../engine";
+import { highlightColor } from "../highlight-style";
 import { pdfPageToPercent } from "../progress";
+import { type SpreadMode, spreadRows } from "../spread";
+import { clampScale, fitScale } from "../zoom";
 
 interface PdfjsViewport {
   width: number;
@@ -82,7 +85,17 @@ interface PdfjsModule {
   }) => PdfjsTextLayer;
 }
 
-const RENDER_SCALE = 1.5;
+/** Preferences this engine owns, handed in at construction and reported back on change. */
+export interface PdfPreferences {
+  scale: number;
+  spread: SpreadMode;
+  adaptToTheme: boolean;
+}
+
+export interface PdfEngineOptions extends PdfPreferences {
+  /** Called whenever a toolbar action changes one of the above, so it can be persisted. */
+  onPreferencesChanged(preferences: PdfPreferences): void;
+}
 
 /**
  * Loads pdf.js and its worker source on first use. The promise is cached so a
@@ -132,14 +145,29 @@ export class PdfEngine implements ReaderEngine {
   private doc: PdfjsDocument | null = null;
   private container: HTMLElement | null = null;
   private scrollEl: HTMLElement | null = null;
+  /** Indexed by page number - 1, whichever row element each one currently sits in. */
   private pageEls: HTMLElement[] = [];
   private observer: IntersectionObserver | null = null;
   private currentPage = 1;
   private workerBlobUrl: string | null = null;
   private pdfjs: PdfjsModule | null = null;
   private contextMenuHandler: ((position: { x: number; y: number }) => void) | null = null;
+  private changeHandler: (() => void) | null = null;
+  /** A page's size at scale 1, for the fit-to-width/height calculations. */
+  private baseSize: { width: number; height: number } = { width: 0, height: 0 };
+  private renderScale: number;
+  private spread: SpreadMode;
+  private themed: boolean;
+  private highlights: readonly PaintedHighlight[] = [];
 
-  constructor(private readonly app: App) {}
+  constructor(
+    private readonly app: App,
+    private readonly options: PdfEngineOptions,
+  ) {
+    this.renderScale = clampScale(options.scale);
+    this.spread = options.spread;
+    this.themed = options.adaptToTheme;
+  }
 
   async open(path: string, container: HTMLElement): Promise<void> {
     this.destroy();
@@ -156,44 +184,73 @@ export class PdfEngine implements ReaderEngine {
 
     this.container = container;
     this.scrollEl = container.createDiv({ cls: "ereader-reader__pdf-scroll" });
+    this.scrollEl.toggleClass("is-themed", this.themed);
 
-    // One placeholder per page, sized from its real viewport so the scrollbar is
-    // correct immediately. Canvases are only rendered as pages come into view —
-    // rendering every page of a large book up front would freeze the app.
+    const first = await this.doc.getPage(1);
+    const unscaled = first.getViewport({ scale: 1 });
+    this.baseSize = { width: unscaled.width, height: unscaled.height };
+
+    await this.layout();
+  }
+
+  // ------------------------------------------------------------- layout
+
+  /**
+   * Builds one element per spread row, each holding one or two page
+   * placeholders sized from the current scale, and starts watching them.
+   * Canvases are only rendered as pages come into view — rendering every page
+   * of a large book up front would freeze the app.
+   */
+  private async layout(): Promise<void> {
     const doc = this.doc;
-    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
-      const pageEl = this.scrollEl.createDiv({ cls: "ereader-reader__pdf-page" });
-      pageEl.dataset["page"] = String(pageNumber);
-      this.pageEls.push(pageEl);
+    const scrollEl = this.scrollEl;
+    if (!doc || !scrollEl) return;
+
+    this.observer?.disconnect();
+    scrollEl.empty();
+    this.pageEls = [];
+
+    for (const row of spreadRows(doc.numPages, this.spread)) {
+      const rowEl = scrollEl.createDiv({ cls: "ereader-reader__pdf-row" });
+      for (const pageNumber of row) {
+        const pageEl = rowEl.createDiv({ cls: "ereader-reader__pdf-page" });
+        pageEl.dataset["page"] = String(pageNumber);
+        // Every placeholder is sized from page 1's viewport. A document whose
+        // pages differ in size scrolls slightly off until each real page
+        // renders and corrects its own box — the alternative is awaiting a
+        // getPage() for every page of the book before showing anything.
+        pageEl.style.width = `${this.baseSize.width * this.renderScale}px`;
+        pageEl.style.height = `${this.baseSize.height * this.renderScale}px`;
+        this.pageEls[pageNumber - 1] = pageEl;
+      }
     }
-    await this.sizePlaceholders();
 
     this.observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          const pageNumber = Number(( entry.target as HTMLElement).dataset["page"]);
+          const pageNumber = Number((entry.target as HTMLElement).dataset["page"]);
           if (!pageNumber) continue;
           if (entry.isIntersecting) {
             void this.renderPageInto(pageNumber);
             this.currentPage = pageNumber;
+            this.changeHandler?.();
           }
         }
       },
-      { root: this.scrollEl, rootMargin: "200px 0px" },
+      { root: scrollEl, rootMargin: "200px 0px" },
     );
     for (const el of this.pageEls) this.observer.observe(el);
   }
 
-  /** Gives every placeholder the height of its real page so scrolling is accurate. */
-  private async sizePlaceholders(): Promise<void> {
-    const doc = this.doc;
-    if (!doc) return;
-    const first = await doc.getPage(1);
-    const viewport = first.getViewport({ scale: RENDER_SCALE });
-    for (const el of this.pageEls) {
-      el.style.width = `${viewport.width}px`;
-      el.style.height = `${viewport.height}px`;
-    }
+  /**
+   * Rebuilds the layout at the current scale and spread, then returns to
+   * `anchorPage`. Everything rendered is discarded: a canvas is rasterised at
+   * one scale and cannot be re-used at another.
+   */
+  private async relayout(anchorPage: number): Promise<void> {
+    await this.layout();
+    await this.goTo({ kind: "pdf", page: anchorPage });
+    this.changeHandler?.();
   }
 
   private async renderPageInto(pageNumber: number): Promise<void> {
@@ -203,7 +260,7 @@ export class PdfEngine implements ReaderEngine {
     pageEl.dataset["rendered"] = "1";
 
     const page = await doc.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: RENDER_SCALE });
+    const viewport = page.getViewport({ scale: this.renderScale });
     const canvas = pageEl.createEl("canvas", { cls: "ereader-reader__pdf-canvas" });
     canvas.width = viewport.width;
     canvas.height = viewport.height;
@@ -213,12 +270,16 @@ export class PdfEngine implements ReaderEngine {
     if (!ctx) return;
     await page.render({ canvasContext: ctx, viewport }).promise;
 
+    // Saved highlights are drawn beneath the text layer so that selecting
+    // text still works over them.
+    pageEl.createDiv({ cls: "ereader-reader__pdf-highlights" });
+
     // The text layer is what makes a PDF selectable — without it the page is
     // just pixels, and there is nothing to highlight. pdf.js positions its
     // spans from `--scale-factor`, so the container must carry the same scale
     // the canvas was rendered at.
     const textLayerEl = pageEl.createDiv({ cls: "ereader-reader__pdf-text" });
-    textLayerEl.setCssProps({ "--scale-factor": String(RENDER_SCALE), "--user-unit": "1" });
+    textLayerEl.setCssProps({ "--scale-factor": String(this.renderScale), "--user-unit": "1" });
     try {
       const textLayer = new (this.pdfjs as PdfjsModule).TextLayer({
         textContentSource: page.streamTextContent(),
@@ -229,6 +290,9 @@ export class PdfEngine implements ReaderEngine {
     } catch (error) {
       console.error("[e-reader] failed to render a PDF text layer", pageNumber, error);
     }
+
+    // A page that arrives after the highlights did still gets them.
+    this.paintPage(pageNumber);
   }
 
   async goTo(locator: Locator): Promise<void> {
@@ -248,6 +312,177 @@ export class PdfEngine implements ReaderEngine {
     if (!this.doc) return 0;
     return pdfPageToPercent(this.currentPage, this.doc.numPages);
   }
+
+  // ------------------------------------------------------------ toolbar
+
+  pageState(): PageState | null {
+    if (!this.doc) return null;
+    return { current: this.currentPage, total: this.doc.numPages, unit: "page" };
+  }
+
+  async goToPage(page: number): Promise<void> {
+    await this.goTo({ kind: "pdf", page });
+  }
+
+  pageNumberFor(locator: Locator): number | null {
+    return locator.kind === "pdf" ? locator.page : null;
+  }
+
+  scale(): number {
+    return this.renderScale;
+  }
+
+  async setScale(scale: number): Promise<void> {
+    const next = clampScale(scale);
+    if (next === this.renderScale) return;
+    this.renderScale = next;
+    this.savePreferences();
+    await this.relayout(this.currentPage);
+  }
+
+  onChange(handler: () => void): void {
+    this.changeHandler = handler;
+  }
+
+  displayOptions(): DisplayOption[] {
+    const scrollEl = this.scrollEl;
+    // The fit calculations measure the scroll box rather than the page,
+    // because the padding around a page is part of what it has to fit inside.
+    const available = {
+      width: (scrollEl?.clientWidth ?? 0) - PAGE_MARGIN,
+      height: (scrollEl?.clientHeight ?? 0) - PAGE_MARGIN,
+    };
+    const fitWidth = fitScale(available, this.baseSize, "width");
+    const fitHeight = fitScale(available, this.baseSize, "height");
+    const at = (value: number): boolean => Math.abs(this.renderScale - value) < 0.01;
+
+    const spreadOption = (mode: SpreadMode, label: string, icon: string): DisplayOption => ({
+      section: "spread",
+      id: `spread-${mode}`,
+      label,
+      icon,
+      checked: this.spread === mode,
+      apply: async () => {
+        if (this.spread === mode) return;
+        this.spread = mode;
+        this.savePreferences();
+        await this.relayout(this.currentPage);
+      },
+    });
+
+    return [
+      {
+        section: "zoom",
+        id: "fit-width",
+        label: "Fit width",
+        icon: "move-horizontal",
+        checked: at(fitWidth),
+        apply: () => this.setScale(fitWidth),
+      },
+      {
+        section: "zoom",
+        id: "fit-height",
+        label: "Fit height",
+        icon: "move-vertical",
+        checked: at(fitHeight),
+        apply: () => this.setScale(fitHeight),
+      },
+      {
+        section: "zoom",
+        id: "actual-size",
+        label: "Actual size",
+        icon: "scan",
+        checked: at(1),
+        apply: () => this.setScale(1),
+      },
+      spreadOption("single", "Single page", "rectangle-vertical"),
+      spreadOption("odd", "Two pages (odd)", "columns-2"),
+      spreadOption("even", "Two pages (even)", "columns-2"),
+      {
+        section: "appearance",
+        id: "adapt-to-theme",
+        label: "Adapt to theme",
+        icon: "palette",
+        checked: this.themed,
+        apply: () => {
+          this.themed = !this.themed;
+          this.scrollEl?.toggleClass("is-themed", this.themed);
+          this.savePreferences();
+          this.changeHandler?.();
+        },
+      },
+    ];
+  }
+
+  private savePreferences(): void {
+    this.options.onPreferencesChanged({
+      scale: this.renderScale,
+      spread: this.spread,
+      adaptToTheme: this.themed,
+    });
+  }
+
+  // --------------------------------------------------------- highlights
+
+  async paintHighlights(highlights: readonly PaintedHighlight[]): Promise<void> {
+    this.highlights = highlights;
+    for (let pageNumber = 1; pageNumber <= this.pageEls.length; pageNumber++) {
+      this.paintPage(pageNumber);
+    }
+  }
+
+  /**
+   * Draws every highlight that belongs on this page as boxes over its text
+   * layer. A highlight carrying a hint is only tried against its own page;
+   * one without a hint is tried against every rendered page, since there is
+   * nothing else to narrow it down by.
+   */
+  private paintPage(pageNumber: number): void {
+    const pageEl = this.pageEls[pageNumber - 1];
+    const layerEl = pageEl?.querySelector<HTMLElement>(".ereader-reader__pdf-highlights");
+    const textEl = pageEl?.querySelector<HTMLElement>(".ereader-reader__pdf-text");
+    if (!pageEl || !layerEl || !textEl) return;
+
+    layerEl.empty();
+    const wanted = this.highlights.filter((highlight) => {
+      const hint = highlight.hint;
+      return hint === undefined || hint.kind !== "pdf" || hint.page === pageNumber;
+    });
+    if (wanted.length === 0) return;
+
+    const source = searchableText(textEl);
+    if (source.index.text === "") return;
+    const pageRect = pageEl.getBoundingClientRect();
+
+    for (const highlight of wanted) {
+      const context: { prefix?: string; suffix?: string } = {};
+      if (highlight.prefix !== undefined) context.prefix = highlight.prefix;
+      if (highlight.suffix !== undefined) context.suffix = highlight.suffix;
+      const range = rangeForQuote(source, highlight.exact, context);
+      if (!range) continue;
+      const color = highlightColor(this.container, highlight.type);
+      for (const rect of Array.from(range.getClientRects())) {
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        const box = layerEl.createDiv({ cls: "ereader-hl" });
+        box.dataset["type"] = highlight.type;
+        // The visible page is the canvas UNDER this layer, so the box has to
+        // blend rather than cover; styles.css sets the blend mode.
+        box.style.background = color;
+        box.style.left = `${rect.left - pageRect.left}px`;
+        box.style.top = `${rect.top - pageRect.top}px`;
+        box.style.width = `${rect.width}px`;
+        box.style.height = `${rect.height}px`;
+      }
+    }
+  }
+
+  refreshTheme(): void {
+    // A PDF renders in the host document, so it already follows the vault's
+    // theme; the only theme-derived thing here is the invert filter, which is
+    // pure CSS keyed off `.theme-dark`.
+  }
+
+  // --------------------------------------------------------------- rest
 
   getSelection(): EngineSelection | null {
     const scrollEl = this.scrollEl;
@@ -311,6 +546,7 @@ export class PdfEngine implements ReaderEngine {
 
   destroy(): void {
     this.contextMenuHandler = null;
+    this.changeHandler = null;
     this.observer?.disconnect();
     this.observer = null;
     this.pageEls = [];
@@ -318,6 +554,7 @@ export class PdfEngine implements ReaderEngine {
     this.doc = null;
     this.pdfjs = null;
     this.container = null;
+    this.highlights = [];
     if (this.workerBlobUrl !== null) {
       URL.revokeObjectURL(this.workerBlobUrl);
       this.workerBlobUrl = null;
@@ -325,6 +562,9 @@ export class PdfEngine implements ReaderEngine {
   }
 }
 
-export function createPdfEngine(app: App): ReaderEngine {
-  return new PdfEngine(app);
+/** Total horizontal/vertical padding around a page inside the scroll box (styles.css). */
+const PAGE_MARGIN = 32;
+
+export function createPdfEngine(app: App, options: PdfEngineOptions): ReaderEngine {
+  return new PdfEngine(app, options);
 }

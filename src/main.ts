@@ -1,6 +1,7 @@
 import type { BasesAllOptions } from "obsidian";
 import { Notice, Plugin } from "obsidian";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
+import { initVendorPaths } from "./reader/vendor-path";
 import { READER_VIEW_TYPE, ReaderView } from "./reader/reader-view";
 import { type Settings, DEFAULT_SETTINGS, mergeSettings } from "./settings/settings-model";
 
@@ -64,6 +65,7 @@ export default class EReaderPlugin extends Plugin {
 
   override async onload(): Promise<void> {
     this.settings = mergeSettings(await this.loadData());
+    initVendorPaths(this.app, this.manifest.dir ?? "");
 
     const registered = this.registerBasesView(LIBRARY_VIEW_TYPE, {
       name: "Library",

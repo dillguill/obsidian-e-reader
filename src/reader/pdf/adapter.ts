@@ -3,6 +3,7 @@
 // list). No pdfjs type may leak past this module — callers only see
 // ReaderEngine/OutlineNode/SearchHit (../engine.ts).
 
+import { vendorUrl } from "../vendor-path";
 import type { App, TFile } from "obsidian";
 import type { Locator } from "../../core/types";
 import type { OutlineNode, ReaderEngine, SearchHit } from "../engine";
@@ -11,8 +12,8 @@ import { pdfPageToPercent } from "../progress";
 // See src/reader/epub/adapter.ts's VIEW_MODULE_PATH comment: held in a
 // variable, and written relative to the bundled main.js (not to this source
 // file), so esbuild never inlines it and tsc never tries to resolve it.
-const PDFJS_MODULE_PATH = "./vendor/pdfjs/pdf.min.mjs";
-const PDFJS_WORKER_PATH = "./vendor/pdfjs/pdf.worker.min.mjs";
+const PDFJS_MODULE_PATH = "pdfjs/pdf.min.mjs";
+const PDFJS_WORKER_PATH = "pdfjs/pdf.worker.min.mjs";
 
 interface PdfjsViewport {
   width: number;
@@ -113,8 +114,8 @@ export class PdfEngine implements ReaderEngine {
   async open(file: TFile, container: HTMLElement): Promise<void> {
     this.destroy();
 
-    const pdfjsLib = (await import(PDFJS_MODULE_PATH)) as PdfjsModule;
-    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_PATH;
+    const pdfjsLib = (await import(/* @vite-ignore */ vendorUrl(PDFJS_MODULE_PATH))) as PdfjsModule;
+    pdfjsLib.GlobalWorkerOptions.workerSrc = vendorUrl(PDFJS_WORKER_PATH);
     this.pdfjsLib = pdfjsLib;
 
     const data = await this.app.vault.readBinary(file);

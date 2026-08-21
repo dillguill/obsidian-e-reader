@@ -255,9 +255,21 @@
   background: var(--text-selection);
 }
 
+/* `flex: 1 1 auto` + `min-width: 0` are load-bearing. Without them this is a
+   `flex: 0 1 auto` item that shrink-wraps its content, so it sits narrower
+   than the pane (leaving a dead strip on the right, and defeating the
+   centring below) and — worse — reports its own content width as
+   `clientWidth`, which is what the fit-to-width calculation measures. Fit
+   width then means "stay exactly as wide as you already are".
+   `overflow: auto` on both axes keeps a page that genuinely is wider than the
+   pane, at actual size, scrolling inside this box rather than pushing the
+   layout sideways. */
 .ereader-reader__pdf-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
   height: 100%;
-  overflow-y: auto;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -270,10 +282,16 @@
   background: #fff;
   box-shadow: var(--shadow-s);
   flex: 0 0 auto;
-  max-width: 100%;
 }
 
-.ereader-reader__pdf-canvas { display: block; max-width: 100%; height: auto; }
+/* The page element is already sized from the rendered viewport, so the canvas
+   simply fills it. It must NOT carry `max-width: 100%`: the page's width and
+   height are both set in pixels, so capping one alone distorts the aspect. */
+.ereader-reader__pdf-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 
 /* One row per spread: one page in single mode, two side by side otherwise
    (src/reader/spread.ts decides which pages share a row). */
@@ -282,19 +300,24 @@
   align-items: flex-start;
   gap: var(--size-4-2);
   flex: 0 0 auto;
-  max-width: 100%;
 }
 
 /* Saved highlights, drawn between the canvas and the text layer so that
    selecting text still works over them. The visible page is the canvas
    beneath, so the boxes blend rather than cover; their colour is set inline
    from the vault's theme (src/reader/highlight-style.ts). */
+/* No `z-index` here, deliberately. A positioned element with a z-index forms
+   a stacking context, and `mix-blend-mode` blends only against the backdrop
+   INSIDE its own stacking context — isolating these boxes from the canvas
+   beneath makes them blend against nothing and paint as solid blocks over the
+   text. With `z-index: auto` no context is formed, the boxes blend with the
+   rendered page, and being absolutely positioned still paints them above the
+   static canvas. The text layer sits above both on its own `z-index: 1`. */
 .ereader-reader__pdf-highlights {
   position: absolute;
   inset: 0;
   overflow: hidden;
   pointer-events: none;
-  z-index: 0;
 }
 
 .ereader-reader__pdf-highlights .ereader-hl {

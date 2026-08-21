@@ -42,8 +42,21 @@ export function extractAttachmentLinkpaths(
  */
 export function resolveBookAttachment(app: App, bookNote: TFile, propertyName = "attachments"): TFile | null {
   const cache = app.metadataCache.getFileCache(bookNote);
-  const linkpaths = extractAttachmentLinkpaths(cache?.frontmatter, propertyName);
-  for (const linkpath of linkpaths) {
+
+  // Preferred: Obsidian's own index of wikilinks found in frontmatter. It is
+  // independent of how the link was quoted, which raw YAML parsing is not —
+  // an unquoted `- [[Book.epub]]` is flow-sequence syntax and parses as a
+  // nested array rather than a string. `key` is the property, indexed
+  // entries appearing as `attachments.0`, `attachments.1`, and so on.
+  for (const link of cache?.frontmatterLinks ?? []) {
+    if (link.key !== propertyName && !link.key.startsWith(`${propertyName}.`)) continue;
+    const dest = app.metadataCache.getFirstLinkpathDest(link.link, bookNote.path);
+    if (dest && READABLE_EXTENSIONS.has(dest.extension)) return dest;
+  }
+
+  // Fallback: plain strings (a bare filename, not a wikilink) never appear in
+  // frontmatterLinks, so parse the raw value too.
+  for (const linkpath of extractAttachmentLinkpaths(cache?.frontmatter, propertyName)) {
     const dest = app.metadataCache.getFirstLinkpathDest(linkpath, bookNote.path);
     if (dest && READABLE_EXTENSIONS.has(dest.extension)) return dest;
   }

@@ -97,7 +97,7 @@ export default class EReaderPlugin extends Plugin {
 
     this.addCommand({
       id: "open-outline",
-      name: "Open book outline",
+      name: "Open outline",
       callback: () => void this.revealPane(OUTLINE_VIEW_TYPE),
     });
 

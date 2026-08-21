@@ -99,24 +99,24 @@ rendering engines. Paths follow the structure in [plan.md](./plan.md).
 ### Tests for User Story 2
 
 - [ ] T030 [P] [US2] Write failing tests in `tests/unit/position.test.ts` for the furthest-position rule — furthest only advances, opening restores last-read, declining a jump changes neither value (FR-015a, FR-015b, FR-015c)
-- [ ] T031 [P] [US2] Write failing tests in `tests/unit/frontmatter.test.ts` for reading and writing book properties without disturbing unrelated frontmatter keys or the note body (FR-019, FR-037)
-- [ ] T032 [P] [US2] Write failing tests in `tests/unit/debounce.test.ts` asserting that an unchanged position produces no write (FR-037a, SC-009)
+- [X] T031 [P] [US2] Write failing tests in `tests/unit/frontmatter.test.ts` for reading and writing book properties without disturbing unrelated frontmatter keys or the note body (FR-019, FR-037) — **superseded**: no shared frontmatter module was needed. The library reads properties through Bases, and the reader writes `progress`/`last-read` through `FileManager.processFrontMatter` directly, which by construction leaves unrelated keys alone.
+- [X] T032 [P] [US2] Write failing tests in `tests/unit/debounce.test.ts` asserting that an unchanged position produces no write (FR-037a, SC-009) — **done**: satisfied by `tests/unit/position.test.ts` (`shouldFlushNow`)
 
 ### Implementation for User Story 2
 
-- [ ] T033 [US2] Implement `src/core/frontmatter.ts` on `FileManager.processFrontMatter` to satisfy T031
-- [ ] T034 [US2] Implement position tracking in `src/reader/position.ts` to satisfy T030 and T032
-- [ ] T035 [US2] Define the engine interface in `src/reader/engine.ts` per [contracts/reader-engine.md](./contracts/reader-engine.md)
-- [ ] T036 [US2] Vendor foliate-js into `vendor/foliate-js/` pinned to a specific commit, recording the commit and its MIT licence
-- [ ] T037 [US2] Vendor the pdfjs-dist runtime into `vendor/pdfjs/` — `pdf.min.mjs` and `pdf.worker.min.mjs` only, no source maps, no cmaps or standard fonts in this release (research.md R3)
-- [ ] T038 [P] [US2] Implement `src/reader/epub/adapter.ts` as the sole importer of foliate-js, behind a dynamic `import()`
-- [ ] T039 [P] [US2] Implement `src/reader/pdf/adapter.ts` as the sole importer of pdfjs-dist, behind a dynamic `import()`, with the worker resolved from the vendored chunk
-- [ ] T040 [US2] Implement `src/reader/reader-view.ts` as an `ItemView` that hosts an engine and reports the **book note** as its active file, so Obsidian's own properties, backlinks, and search panes operate on it (FR-014e)
+- [X] T033 [US2] Implement `src/core/frontmatter.ts` on `FileManager.processFrontMatter` to satisfy T031 — **superseded**: see T031 — the capability lives in `src/reader/reader-view.ts`, and a wrapper module would only add indirection.
+- [X] T034 [US2] Implement position tracking in `src/reader/position.ts` to satisfy T030 and T032 — **done**: implemented in `src/reader/position.ts`; the furthest-read half is still open — see T030
+- [X] T035 [US2] Define the engine interface in `src/reader/engine.ts` per [contracts/reader-engine.md](./contracts/reader-engine.md) — **done**: implemented in `src/reader/engine.ts`, extended since with `getSelection`/`onContextMenu`
+- [X] T036 [US2] Vendor foliate-js into `vendor/foliate-js/` pinned to a specific commit, recording the commit and its MIT licence — **superseded**: foliate-js was never adopted. epub.js is a real dependency installed from npm and bundled by esbuild. Vendoring a pinned copy was the original plan and it is not how this is built.
+- [X] T037 [US2] Vendor the pdfjs-dist runtime into `vendor/pdfjs/` — `pdf.min.mjs` and `pdf.worker.min.mjs` only, no source maps, no cmaps or standard fonts in this release (research.md R3) — **superseded**: pdfjs-dist is likewise an npm dependency bundled by esbuild; only its worker is inlined, as a string turned into a blob URL at runtime.
+- [X] T038 [P] [US2] Implement `src/reader/epub/adapter.ts` as the sole importer of foliate-js, behind a dynamic `import()` — **superseded**: implemented in `src/reader/epub/adapter.ts` over epub.js, **statically** imported. Dynamic `import()` resolved against the app origin and failed at runtime — see the commit history. The lazy-loading requirement it was meant to satisfy is now unmet; T045 carries that.
+- [X] T039 [P] [US2] Implement `src/reader/pdf/adapter.ts` as the sole importer of pdfjs-dist, behind a dynamic `import()`, with the worker resolved from the vendored chunk — **superseded**: implemented in `src/reader/pdf/adapter.ts` over pdfjs-dist, statically imported for the same reason. See T045.
+- [X] T040 [US2] Implement `src/reader/reader-view.ts` as an `ItemView` that hosts an engine and reports the **book note** as its active file, so Obsidian's own properties, backlinks, and search panes operate on it (FR-014e) — **done**: implemented in `src/reader/reader-view.ts` as a **FileView**, not a bare ItemView, and loading through `FileView.loadFile()` so `file-open` fires and Obsidian's native panes follow the book note
 - [ ] T041 [US2] Resolve which attachment to open when `attachments` lists several, opening the most recently read and asking otherwise (FR-013a)
 - [ ] T042 [US2] Implement text-size and zoom controls per format (FR-017)
 - [ ] T043 [US2] Implement in-book search with streamed results for both engines (FR-016)
 - [ ] T044 [US2] Implement the further-position prompt, applied only on acceptance (FR-015b)
-- [ ] T045 [US2] Assert engine chunks are absent from startup and load only on first open, with a test guarding the 100 ms budget (FR-014d)
+- [ ] T045 [US2] **Restore lazy loading of the rendering engines, which the plugin currently violates.** Principle V requires them to load on first use and never during startup; the static imports that fixed the dynamic-import failure (T038, T039) mean epub.js and pdf.js are both evaluated when the plugin loads. Find a form of deferred loading that survives Obsidian's module resolution, then add the test guarding the 100 ms startup budget (FR-014d)
 - [ ] T046 [US2] Verify quickstart scenario S2 on desktop and mobile, including the moved-file and two-device cases
 
 **Checkpoint**: US1 + US2 together are the true MVP — see your books, open one, come back later.
@@ -206,9 +206,9 @@ rendering engines. Paths follow the structure in [plan.md](./plan.md).
 **Independent Test**: Bookmark locations in both formats, confirm they persist, navigate, and appear only in the bookmarks tab.
 
 - [ ] T080 [P] [US6] Write failing tests in `tests/unit/bookmark.test.ts` asserting bookmark entries share highlight anchoring and that each tab lists only its own kind (FR-028a, FR-028c)
-- [ ] T081 [US6] Implement bookmark creation capturing the text at the location as anchor and label (FR-028b)
-- [ ] T082 [US6] Implement `src/sidebar/bookmarks-view.ts` as a filtered view over the same entries
-- [ ] T083 [US6] Reserve the `bookmark` type against collision with reader-configured types (FR-020a)
+- [X] T081 [US6] Implement bookmark creation capturing the text at the location as anchor and label (FR-028b) — **done**: implemented — the reader's context menu and the "Add bookmark" command write a `bookmark` entry through `src/annotations/store.ts`
+- [X] T082 [US6] Implement `src/sidebar/bookmarks-view.ts` as a filtered view over the same entries — **superseded**: bookmarks appear in the highlights pane, where the type filter isolates them. A second pane over the same entries would duplicate the surface rather than add one.
+- [X] T083 [US6] Reserve the `bookmark` type against collision with reader-configured types (FR-020a) — **done**: `RESERVED_ENTRY_TYPE` in `src/core/types.ts`, filtered out of the configurable set by `mergeAnnotationTypes`
 - [ ] T084 [US6] Verify quickstart scenario S6
 
 **Checkpoint**: All six stories independently functional.
@@ -224,7 +224,7 @@ rendering engines. Paths follow the structure in [plan.md](./plan.md).
 - [ ] T089 Measure the four constitutional budgets — 100 ms startup, 1 s first page, 60 fps, 500-book first screen in 2 s — and fix or revert any regression
 - [ ] T090 Verify offline operation: everything except catalog search and download functions with networking disabled (FR-036, SC-011)
 - [ ] T091 Test with a book carrying 200+ highlights to confirm the aggregate-record approach holds at realistic scale
-- [ ] T092 [P] Write `README.md` covering setup, the property model, and the reader's configurable names
+- [X] T092 [P] Write `README.md` covering setup, the property model, and the reader's configurable names — **done**: written — see `README.md`
 - [ ] T093 Confirm `manifest.json`, `versions.json`, and the release tag agree, and test against Obsidian 1.10.0 rather than only compiling against it
 
 ---
@@ -262,6 +262,24 @@ Tests precede implementation, without exception (Principle III). Vendoring (T036
 **US5**: T068 and T069 together.
 
 **Phase 9**: T085, T086, T087, T088, and T092 are all independent.
+
+**Phase 10**: T094, T095, and T096 are independent of each other.
+
+## Phase 10: Gaps found in use
+
+Work the original breakdown did not anticipate, recorded after the MVP was in
+the vault and being read from. Each is a real defect or a missing surface, not
+a refinement.
+
+- [ ] T094 Add a settings tab. `Settings` already carries the configurable frontmatter property names and the annotation type set (`src/settings/settings-model.ts`), and nothing can edit any of it — highlight types are stuck at their defaults and property names can only be changed by hand-editing `data.json` (FR-006, FR-020a)
+- [ ] T095 Inject the vault's theme into epub.js's rendered sections. Each section renders inside an iframe that inherits none of Obsidian's CSS, so a dark theme leaves dark text on a dark page and the book is unreadable
+- [ ] T096 Fix EPUB scroll behaviour. The continuous manager estimates section heights before they render, so scrolling drifts and jumps as real heights arrive
+- [ ] T097 Paint saved highlights back into the document. The sidebar lists them and the reader has no idea they exist, so a passage highlighted yesterday looks untouched today. Same task as T056, kept there for its US3 context — resolve them together
+- [ ] T098 Rewrite the reader's frontmatter writes to record `furthest-read` alongside `last-read`, the data half of T030 and T044 (FR-015a)
+
+**Checkpoint**: the plugin is configurable and an EPUB is comfortable to read.
+
+---
 
 ## Implementation strategy
 

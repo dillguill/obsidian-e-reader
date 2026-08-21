@@ -12,11 +12,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
-    "obsidian": "latest",
-    "typescript": "^5",
-    "esbuild": "^0.24.0",
-    "vitest": "^2.0.0",
     "@types/node": "^22.0.0",
-    "builtin-modules": "^4.0.0"
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.24.0",
+    "obsidian": "latest",
+    "pdfjs-dist": "^6.2.108",
+    "typescript": "^5",
+    "vitest": "^2.0.0"
   }
 }

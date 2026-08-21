@@ -1,6 +1,7 @@
 import type { BasesAllOptions } from "obsidian";
 import { Notice, Plugin } from "obsidian";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
+import { READER_VIEW_TYPE, ReaderView } from "./reader/reader-view";
 import { type Settings, DEFAULT_SETTINGS, mergeSettings } from "./settings/settings-model";
 
 function libraryViewOptions(): BasesAllOptions[] {
@@ -73,6 +74,8 @@ export default class EReaderPlugin extends Plugin {
     if (!registered) {
       new Notice("E-Reader: could not register the library view — Bases is not enabled in this vault.");
     }
+
+    this.registerView(READER_VIEW_TYPE, (leaf) => new ReaderView(leaf));
   }
 
   override onunload(): void {

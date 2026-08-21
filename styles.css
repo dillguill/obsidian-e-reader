@@ -108,3 +108,75 @@
   color: #fff;
   text-align: right;
 }
+
+/* Reader view */
+.ereader-reader {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--background-primary);
+}
+
+.ereader-reader__empty {
+  margin: auto;
+  padding: var(--size-4-4);
+  color: var(--text-muted);
+  font-size: var(--font-ui-medium);
+  text-align: center;
+}
+
+.ereader-reader__viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+/* foliate-js's <foliate-view> custom element, sized to fill the viewport. */
+.ereader-reader__viewport foliate-view {
+  flex: 1 1 auto;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.ereader-reader__pdf-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  padding: var(--size-4-4);
+  position: relative;
+}
+
+.ereader-reader__pdf-canvas {
+  display: block;
+  box-shadow: var(--shadow-s);
+  background: #fff;
+}
+
+/* Selectable text layer stacked over the rendered canvas — standard pdf.js
+   text-layer positioning, under our own class name (see CRITICAL CONSTRAINTS:
+   never reuse Obsidian's or a vendored library's own class names). */
+.ereader-reader__pdf-text-layer {
+  position: absolute;
+  top: var(--size-4-4);
+  left: 50%;
+  transform: translateX(-50%);
+  overflow: hidden;
+  line-height: 1;
+  opacity: 1;
+}
+
+.ereader-reader__pdf-text-layer span {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.ereader-reader__pdf-text-layer ::selection {
+  background: var(--text-selection);
+}

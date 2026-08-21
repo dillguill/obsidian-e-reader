@@ -28,9 +28,5 @@ Thumbs.db
 .aider*
 AGENTS.md
 
-# Spec Kit scaffolding, except the constitution, which is this project's own
-# governance document rather than tooling.
-.specify/*
-!.specify/memory/
-.specify/memory/*
-!.specify/memory/constitution.md
+# Spec Kit scaffolding.
+.specify/

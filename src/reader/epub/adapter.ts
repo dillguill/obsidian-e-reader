@@ -127,7 +127,15 @@ export class EpubEngine implements ReaderEngine {
     this.book = book;
     await book.ready;
 
-    const rendition = book.renderTo(container, { width: "100%", height: "100%" });
+    // Default flow renders one section at a time, which lands on the cover and
+    // stops. Continuous + scrolled gives a single scrollable book.
+    const rendition = book.renderTo(container, {
+      width: "100%",
+      height: "100%",
+      manager: "continuous",
+      flow: "scrolled",
+      allowScriptedContent: false,
+    });
     this.rendition = rendition;
     rendition.on("relocated", (location) => {
       this.lastCfi = location.start.cfi;

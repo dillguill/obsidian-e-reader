@@ -180,3 +180,22 @@
 .ereader-reader__pdf-text-layer ::selection {
   background: var(--text-selection);
 }
+
+.ereader-reader__pdf-scroll {
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--size-4-4);
+  padding: var(--size-4-4);
+}
+
+.ereader-reader__pdf-page {
+  background: #fff;
+  box-shadow: var(--shadow-s);
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+.ereader-reader__pdf-canvas { display: block; max-width: 100%; height: auto; }

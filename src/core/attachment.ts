@@ -56,9 +56,31 @@ export function resolveBookAttachment(app: App, bookNote: TFile, propertyName = 
 
   // Fallback: plain strings (a bare filename, not a wikilink) never appear in
   // frontmatterLinks, so parse the raw value too.
-  for (const linkpath of extractAttachmentLinkpaths(cache?.frontmatter, propertyName)) {
+  const rawPaths = extractAttachmentLinkpaths(cache?.frontmatter, propertyName);
+  for (const linkpath of rawPaths) {
     const dest = app.metadataCache.getFirstLinkpathDest(linkpath, bookNote.path);
     if (dest && READABLE_EXTENSIONS.has(dest.extension)) return dest;
   }
+
+  // Last resort: link resolution only finds files Obsidian has indexed, and it
+  // does not index every extension. Match against the vault's own file list by
+  // name instead, which does not depend on the link index at all.
+  const wanted = new Set<string>();
+  for (const link of cache?.frontmatterLinks ?? []) {
+    if (link.key === propertyName || link.key.startsWith(`${propertyName}.`)) wanted.add(basename(link.link));
+  }
+  for (const linkpath of rawPaths) wanted.add(basename(linkpath));
+  if (wanted.size > 0) {
+    for (const file of app.vault.getFiles()) {
+      if (READABLE_EXTENSIONS.has(file.extension) && wanted.has(file.name)) return file;
+    }
+  }
   return null;
+}
+
+/** Filename portion of a linkpath, with any subpath or alias already stripped. */
+function basename(linkpath: string): string {
+  const withoutSubpath = linkpath.split("#")[0] ?? linkpath;
+  const parts = withoutSubpath.split("/");
+  return (parts[parts.length - 1] ?? withoutSubpath).trim();
 }

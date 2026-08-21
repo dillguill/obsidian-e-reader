@@ -112,6 +112,8 @@ interface EpubAnnotations {
 
 interface EpubRendition {
   display(target?: string): Promise<void>;
+  next(): Promise<void>;
+  prev(): Promise<void>;
   on(event: "relocated", callback: (location: EpubCurrentLocation) => void): void;
   /** `hooks.content` runs for each section as it is rendered, giving access to its iframe document. */
   hooks: { content: EpubHook };
@@ -167,6 +169,43 @@ async function outlineFromToc(book: EpubBook, items: EpubNavItem[]): Promise<Out
 
 const LOCATIONS_GENERATE_CHARS = 1600;
 
+/**
+ * How far into a page a tap counts as "go back" / "go forward". The middle is
+ * left alone so a tap can still dismiss a selection or follow a link.
+ */
+const TAP_ZONE = 0.3;
+
+/** A tap that moved this far is a drag — a selection, not a page turn. */
+const TAP_SLOP_PX = 8;
+
+/**
+ * How far past the end of a chapter the reader has to keep pushing before it
+ * turns. A chapter shorter than the pane — a dedication, an epigraph — is at
+ * its top AND its bottom from the moment it loads, so "you are at the end"
+ * cannot be the trigger on its own: a single flick would step into such a
+ * chapter and straight back out of it.
+ */
+const OVERSCROLL_THRESHOLD_PX = 160;
+
+/** A gesture is over once no scroll event has arrived for this long. */
+const GESTURE_IDLE_MS = 180;
+
+/**
+ * epub.js's name for each of our flow modes.
+ *
+ * `scrolled-doc` renders ONE section at a time, completely. That is the whole
+ * point: the continuous manager has to estimate every section's height before
+ * rendering it, then corrects the container as the real heights arrive, which
+ * moves the scroll position under the reader and can push the section being
+ * read out of the render window — text flickering in and out, and scrolling
+ * that fights back (issue #38). A manager that renders one whole section has
+ * nothing to estimate, so the problem cannot occur rather than merely
+ * occurring less.
+ */
+function epubFlow(mode: EpubFlow): string {
+  return mode === "paginated" ? "paginated" : "scrolled-doc";
+}
+
 /** Marks the `<style>` element this plugin owns inside each rendered section. */
 const THEME_STYLE_ID = "ereader-theme";
 
@@ -190,6 +229,18 @@ export class EpubEngine implements ReaderEngine {
   private highlights: readonly PaintedHighlight[] = [];
   /** Every CFI range currently drawn, so a repaint can take them all down first. */
   private paintedRanges = new Set<string>();
+  /** Set while a page/chapter turn is in flight, so repeat gestures do not stack. */
+  private turning = false;
+  /** Scroll travel accumulated past the end of the chapter, in pixels. */
+  private overscroll = 0;
+  /**
+   * Set after a turn and cleared only once scrolling actually STOPS. Trackpad
+   * and touch inertia keep firing for a second or more after the reader has
+   * let go, and without this that one flick would chain through several
+   * chapters — which is exactly what a short chapter made obvious.
+   */
+  private turnBlocked = false;
+  private gestureIdleTimer: number | null = null;
 
   constructor(
     private readonly app: App,
@@ -214,8 +265,8 @@ export class EpubEngine implements ReaderEngine {
     const rendition = book.renderTo(container, {
       width: "100%",
       height: "100%",
-      manager: "continuous",
-      flow: this.flowMode,
+      manager: "default",
+      flow: epubFlow(this.flowMode),
       allowScriptedContent: false,
     });
     this.rendition = rendition;
@@ -240,6 +291,7 @@ export class EpubEngine implements ReaderEngine {
           y: event.clientY + (frameRect?.top ?? 0),
         });
       });
+      this.addNavigationGestures(contents);
       // A section that arrives later still gets the vault's theme and
       // whatever highlights belong to it.
       this.styleContents(contents);
@@ -247,6 +299,9 @@ export class EpubEngine implements ReaderEngine {
     });
 
     rendition.themes.fontSize(`${Math.round(this.textScale * 100)}%`);
+    // The other half of the pair described on addScrollIntentListeners: this
+    // covers everything in the pane that is NOT the section's iframe.
+    this.addScrollIntentListeners(container);
     await rendition.display();
 
     // Whole-book percentage needs the character-offset index epub.js builds
@@ -340,11 +395,166 @@ export class EpubEngine implements ReaderEngine {
         this.options.onPreferencesChanged({ textScale: this.textScale, flow: this.flowMode });
         // epub.js's own flow() re-displays at the current CFI, so the
         // reader keeps their place across the switch.
-        this.rendition?.flow(mode);
+        this.rendition?.flow(epubFlow(mode));
         this.changeHandler?.();
       },
     });
-    return [flowOption("scrolled", "Scrolled", "move-vertical"), flowOption("paginated", "Paginated", "book-open")];
+    // "by chapter" is not decoration: one section renders at a time, so the
+    // reader should not expect one continuous scroll through the whole book.
+    return [
+      flowOption("scrolled", "Scrolled (by chapter)", "move-vertical"),
+      flowOption("paginated", "Paginated", "book-open"),
+    ];
+  }
+
+  // ----------------------------------------------------------- navigation
+
+  /**
+   * Tap the left or right edge of a paginated page to turn it, and — because
+   * `scrolled-doc` renders one section at a time — scroll past either end of
+   * a chapter to reach the next or previous one.
+   *
+   * Both live inside the section's own document: neither a wheel nor a click
+   * inside an iframe reaches the host, so like the context menu these attach
+   * per section as it renders.
+   */
+  private addNavigationGestures(contents: EpubContents): void {
+    const doc = contents.document;
+
+    // A tap is only a tap if the pointer did not travel; otherwise it is the
+    // tail of a drag-selection, whose `click` fires after highlight mode has
+    // already consumed and cleared the selection — without this a highlight
+    // would also turn the page.
+    let downAt: { x: number; y: number } | null = null;
+    doc.addEventListener("mousedown", (event: MouseEvent) => {
+      downAt = { x: event.clientX, y: event.clientY };
+    });
+
+    doc.addEventListener("click", (event: MouseEvent) => {
+      const from = downAt;
+      downAt = null;
+      if (this.flowMode !== "paginated" || event.button !== 0) return;
+      if (from && Math.hypot(event.clientX - from.x, event.clientY - from.y) > TAP_SLOP_PX) return;
+      // A link, or a live selection, means the tap was meant for the page.
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("a[href]")) return;
+      const selection = contents.window.getSelection();
+      if (selection && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed) return;
+
+      const width = doc.documentElement.clientWidth;
+      if (width <= 0) return;
+      const fraction = event.clientX / width;
+      if (fraction < TAP_ZONE) void this.turn("prev");
+      else if (fraction > 1 - TAP_ZONE) void this.turn("next");
+    });
+
+    this.addScrollIntentListeners(doc);
+  }
+
+  /**
+   * Watches for an attempt to scroll, on one document or element.
+   *
+   * This has to be attached in TWO places, and missing the second one is what
+   * made a short chapter unscrollable. In `scrolled-doc` the section's iframe
+   * is only as tall as its content, so a dedication page leaves most of the
+   * pane covered by the host-side container instead. A wheel event goes to
+   * whatever sits under the pointer and does not cross the iframe boundary in
+   * either direction, so a listener inside the section's document alone sees
+   * nothing at all once the pointer is past the last line of a short chapter.
+   */
+  private addScrollIntentListeners(target: Document | HTMLElement): void {
+    target.addEventListener("wheel", ((event: WheelEvent) => this.noteScrollIntent(event.deltaY)) as EventListener, {
+      passive: true,
+    });
+
+    // Touch produces no wheel events, so the same intent is measured from the
+    // finger's own travel.
+    let touchFrom: number | null = null;
+    target.addEventListener(
+      "touchstart",
+      ((event: TouchEvent) => {
+        touchFrom = event.touches[0]?.clientY ?? null;
+      }) as EventListener,
+      { passive: true },
+    );
+    target.addEventListener(
+      "touchmove",
+      ((event: TouchEvent) => {
+        const y = event.touches[0]?.clientY;
+        if (y === undefined || touchFrom === null) return;
+        // Dragging the finger UP moves the page down, hence the inversion.
+        this.noteScrollIntent(touchFrom - y);
+        touchFrom = y;
+      }) as EventListener,
+      { passive: true },
+    );
+    target.addEventListener("touchend", (() => {
+      touchFrom = null;
+    }) as EventListener);
+  }
+
+  /**
+   * Records an attempt to scroll by `delta` (positive is toward the end of the
+   * book) and turns the chapter once enough of it has landed past the end.
+   */
+  private noteScrollIntent(delta: number): void {
+    if (this.flowMode !== "scrolled" || delta === 0) return;
+    this.startGestureIdleTimer();
+    if (this.turnBlocked || this.turning) return;
+
+    const stage = this.stageEl();
+    if (!stage) return;
+    const atBottom = stage.scrollTop + stage.clientHeight >= stage.scrollHeight - 2;
+    const atTop = stage.scrollTop <= 0;
+    const pushingPastEnd = (delta > 0 && atBottom) || (delta < 0 && atTop);
+    if (!pushingPastEnd) {
+      this.overscroll = 0;
+      return;
+    }
+
+    // Reversing direction starts the count again rather than cancelling out.
+    if (this.overscroll !== 0 && Math.sign(this.overscroll) !== Math.sign(delta)) this.overscroll = 0;
+    this.overscroll += delta;
+    if (Math.abs(this.overscroll) < OVERSCROLL_THRESHOLD_PX) return;
+
+    const direction = this.overscroll > 0 ? "next" : "prev";
+    this.overscroll = 0;
+    this.turnBlocked = true;
+    void this.turn(direction);
+  }
+
+  /** Restarts the "scrolling has stopped" countdown; only that clears the block. */
+  private startGestureIdleTimer(): void {
+    const win = this.container?.win;
+    if (!win) return;
+    if (this.gestureIdleTimer !== null) win.clearTimeout(this.gestureIdleTimer);
+    this.gestureIdleTimer = win.setTimeout(() => {
+      this.gestureIdleTimer = null;
+      this.overscroll = 0;
+      this.turnBlocked = false;
+    }, GESTURE_IDLE_MS);
+  }
+
+  /** epub.js's stage, which is what scrolls in `scrolled-doc`. */
+  private stageEl(): HTMLElement | null {
+    return this.container?.querySelector<HTMLElement>(".epub-container") ?? null;
+  }
+
+  /**
+   * One chapter or page step. Guarded because both gestures can fire several
+   * times while the next section is still loading.
+   */
+  private async turn(direction: "next" | "prev"): Promise<void> {
+    const rendition = this.rendition;
+    if (!rendition || this.turning) return;
+    this.turning = true;
+    try {
+      await (direction === "next" ? rendition.next() : rendition.prev());
+    } catch (error) {
+      console.error("[e-reader] failed to turn the page", error);
+    } finally {
+      this.turning = false;
+    }
   }
 
   // ---------------------------------------------------------------- theme
@@ -383,6 +593,17 @@ export class EpubEngine implements ReaderEngine {
       `a, a * { color: ${accent} !important; }`,
       `hr, table, td, th, blockquote { border-color: ${faint} !important; }`,
       `::selection { background: ${selection}; }`,
+      // EPUBs routinely ship images sized for a page far wider than the
+      // pane, which both overflows horizontally and — because the continuous
+      // manager estimates a section's height before it renders — makes the
+      // estimate wildly wrong once the image loads. Constraining them is a
+      // correctness fix for the overflow and takes the worst of the churn out
+      // of the height estimate.
+      `img, svg, video { max-width: 100% !important; height: auto !important; }`,
+      // Wide content is kept inside the page rather than widening it, which
+      // is what lets the container suppress horizontal scrolling outright.
+      `pre, code { white-space: pre-wrap !important; word-break: break-word; }`,
+      `table { max-width: 100% !important; }`,
     ].join("\n");
   }
 
@@ -482,6 +703,7 @@ export class EpubEngine implements ReaderEngine {
     this.contextMenuHandler = handler;
   }
 
+
   async outline(): Promise<OutlineNode[]> {
     const book = this.book;
     if (!book) return [];
@@ -511,6 +733,13 @@ export class EpubEngine implements ReaderEngine {
   destroy(): void {
     this.contextMenuHandler = null;
     this.changeHandler = null;
+    this.turning = false;
+    this.turnBlocked = false;
+    this.overscroll = 0;
+    if (this.gestureIdleTimer !== null) {
+      this.container?.win.clearTimeout(this.gestureIdleTimer);
+      this.gestureIdleTimer = null;
+    }
     this.paintedRanges.clear();
     this.highlights = [];
     this.rendition?.destroy();

@@ -183,6 +183,12 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     // and re-applying it behind the reader's back would be worse than the
     // honest limitation stated in the setting's description.
     //
+    // Saving the layout afterwards is the part that makes this stick. The
+    // core Outline plugin does not re-create its leaf on load — every
+    // `initLeaf` call sits behind `onUserEnable` — so the tab comes back from
+    // the SAVED WORKSPACE, and detaching a leaf without persisting the result
+    // means the next app open restores it again. That is why this appeared to
+    // do nothing.
     this.app.workspace.onLayoutReady(() => {
       // A saved workspace can restore a pane the reader has since switched
       // off, so the toggles are applied here too, not only when they change.
@@ -190,6 +196,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       if (this.settings.panes.hideNativeOutline) {
         this.app.workspace.detachLeavesOfType(NATIVE_OUTLINE_VIEW_TYPE);
       }
+      void this.app.workspace.requestSaveLayout();
     });
   }
 
@@ -204,6 +211,8 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
   applyPaneSettings(): void {
     if (!this.settings.panes.outline) this.app.workspace.detachLeavesOfType(OUTLINE_VIEW_TYPE);
     if (!this.settings.panes.highlights) this.app.workspace.detachLeavesOfType(HIGHLIGHTS_VIEW_TYPE);
+    if (this.settings.panes.hideNativeOutline) this.app.workspace.detachLeavesOfType(NATIVE_OUTLINE_VIEW_TYPE);
+    void this.app.workspace.requestSaveLayout();
   }
 
   /** Opens one of this plugin's panes in the right sidebar, reusing an existing one. */

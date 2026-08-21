@@ -137,14 +137,15 @@ export class EReaderSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Close Obsidian's outline pane on startup")
       .setDesc(
-        "Useful on mobile, where two outline tabs crowd the sidebar. Obsidian's core plugins cannot be " +
-          "disabled by a plugin, so this closes its outline pane once when the vault opens — reopening it " +
-          "during a session will stick.",
+        "Useful where two outline tabs crowd the sidebar. Obsidian's core plugins cannot be disabled by a " +
+          "plugin, so this closes its outline pane once when the vault opens and saves the layout — " +
+          "reopening it during a session will stick.",
       )
       .addToggle((toggle) =>
         toggle.setValue(this.host.settings.panes.hideNativeOutline).onChange((value) => {
           this.host.settings.panes.hideNativeOutline = value;
           this.save();
+          this.host.applyPaneSettings();
         }),
       );
   }

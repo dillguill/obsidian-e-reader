@@ -67,6 +67,13 @@ export default class EReaderPlugin extends Plugin {
     this.settings = mergeSettings(await this.loadData());
     initVendorPaths(this.app, this.manifest.dir ?? "");
 
+    this.registerView(READER_VIEW_TYPE, (leaf) => new ReaderView(leaf));
+
+    // Obsidian does not index unknown extensions, so .epub files are invisible
+    // to the vault and to link resolution until a view claims them. Claiming
+    // it also makes an EPUB open in the reader from the file explorer.
+    this.registerExtensions(["epub"], READER_VIEW_TYPE);
+
     const registered = this.registerBasesView(LIBRARY_VIEW_TYPE, {
       name: "Library",
       icon: "library",
@@ -77,7 +84,6 @@ export default class EReaderPlugin extends Plugin {
       new Notice("E-Reader: could not register the library view — Bases is not enabled in this vault.");
     }
 
-    this.registerView(READER_VIEW_TYPE, (leaf) => new ReaderView(leaf));
   }
 
   override onunload(): void {

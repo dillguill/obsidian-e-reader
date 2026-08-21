@@ -19,3 +19,18 @@ Thumbs.db
 
 # Local scratch
 *.log
+
+# Local workflow scaffolding, not part of the plugin and regenerable.
+.opencode/
+.superpowers/
+.cursor/
+.windsurf/
+.aider*
+AGENTS.md
+
+# Spec Kit scaffolding, except the constitution, which is this project's own
+# governance document rather than tooling.
+.specify/*
+!.specify/memory/
+.specify/memory/*
+!.specify/memory/constitution.md

@@ -1,10 +1,12 @@
 // The `library` Bases view. Renders from `this.data.groupedData` so
 // whatever groupBy/sort/filter the user configured in Bases is honoured —
 // this class never filters, sorts, searches, or groups on its own, and
-// never writes to the vault; opening a book is a pure `openLinkText` call.
+// never writes to the vault; opening a book just points a leaf at the
+// reader view (src/reader/reader-view.ts) with the book note's path.
 
 import type { BasesEntry, QueryController } from "obsidian";
 import { BasesView, Component } from "obsidian";
+import { READER_VIEW_TYPE, type ReaderViewState } from "../reader/reader-view";
 import { renderCard } from "./card";
 import { type OpenBookModifiers, decideOpenTarget } from "./open-book";
 import { readLibraryViewConfig } from "./view-config";
@@ -85,27 +87,16 @@ export class LibraryView extends BasesView {
   }
 
   /**
-   * Opens the book itself — the first readable attachment listed on the note —
-   * rather than the note. Falls back to the note when there is nothing to read.
+   * Opens the reader for this book note. Attachment resolution (which file
+   * under `attachments` is readable) is the reader view's own job now — see
+   * src/reader/reader-view.ts and core/attachment.ts, which this used to
+   * duplicate as a private `resolveBookFile` method.
    */
   private openBook(entry: BasesEntry, modifiers: OpenBookModifiers): void {
     const target = decideOpenTarget(modifiers);
     const newLeaf = target === "same-tab" ? false : target === "split" ? "split" : true;
-    const book = this.resolveBookFile(entry) ?? entry.file.path;
-    void this.app.workspace.openLinkText(book, entry.file.path, newLeaf);
-  }
-
-  private resolveBookFile(entry: BasesEntry): string | null {
-    const cache = this.app.metadataCache.getFileCache(entry.file);
-    const attachments = cache?.frontmatter?.["attachments"];
-    const list: unknown[] = Array.isArray(attachments) ? attachments : attachments ? [attachments] : [];
-    for (const item of list) {
-      if (typeof item !== "string") continue;
-      const linkpath = item.replace(/^\[\[|\]\]$/g, "").split("|")[0]?.trim();
-      if (!linkpath) continue;
-      const dest = this.app.metadataCache.getFirstLinkpathDest(linkpath, entry.file.path);
-      if (dest && (dest.extension === "epub" || dest.extension === "pdf")) return dest.path;
-    }
-    return null;
+    const leaf = this.app.workspace.getLeaf(newLeaf);
+    const state: ReaderViewState = { bookNotePath: entry.file.path };
+    void leaf.setViewState({ type: READER_VIEW_TYPE, state, active: true });
   }
 }

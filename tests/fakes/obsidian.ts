@@ -337,6 +337,33 @@ export class MetadataCache extends Events {
       blocks: buildBlocks(body),
     };
   }
+
+  /**
+   * Approximates the real resolver closely enough for tests: an exact vault
+   * path, then a path relative to `sourcePath`'s folder, then a vault-wide
+   * search by filename (or basename, for a linkpath with no extension).
+   * The real implementation additionally picks the *shortest* match when
+   * several files share a name; this fake just returns the first (insertion
+   * order), which is enough for tests that don't rely on that tie-break.
+   */
+  getFirstLinkpathDest(linkpath: string, sourcePath: string): TFile | null {
+    const normalized = linkpath.trim();
+    if (normalized === "") return null;
+
+    const exact = this.vault._files.get(normalized);
+    if (exact) return exact;
+
+    const sourceSlash = sourcePath.lastIndexOf("/");
+    const sourceFolder = sourceSlash >= 0 ? sourcePath.slice(0, sourceSlash) : "";
+    const relative = sourceFolder ? `${sourceFolder}/${normalized}` : normalized;
+    const relativeMatch = this.vault._files.get(relative);
+    if (relativeMatch) return relativeMatch;
+
+    for (const file of this.vault._files.values()) {
+      if (file.name === normalized || file.basename === normalized) return file;
+    }
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

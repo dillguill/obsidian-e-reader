@@ -131,22 +131,22 @@ rendering engines. Paths follow the structure in [plan.md](./plan.md).
 
 ### Tests for User Story 3
 
-- [ ] T047 [P] [US3] Write failing tests in `tests/unit/entry.test.ts` for serialising and parsing the entry format in [contracts/highlight-entry.md](./contracts/highlight-entry.md), including malformed entries that must be preserved and reported
-- [ ] T048 [P] [US3] Write failing tests in `tests/unit/anchor.test.ts` for text-quote resolution — hint hit, hint miss then search, ambiguous match, and no match yielding unanchored (FR-024)
-- [ ] T049 [P] [US3] Write failing tests in `tests/unit/region.test.ts` asserting that content outside the `%%e-reader:begin/end%%` markers is never modified (FR-037b)
+- [X] T047 [P] [US3] Write failing tests in `tests/unit/annotations.test.ts` for serialising and parsing the entry format in [contracts/highlight-entry.md](./contracts/highlight-entry.md), including malformed entries that must be preserved and reported
+- [X] T048 [P] [US3] Write failing tests in `tests/unit/annotations.test.ts` for text-quote resolution — hint hit, hint miss then search, ambiguous match, and no match yielding unanchored (FR-024)
+- [X] T049 [P] [US3] Write failing tests in `tests/unit/annotations.test.ts` asserting that content outside the `%%e-reader:begin/end%%` markers is never modified (FR-037b)
 
 ### Implementation for User Story 3
 
-- [ ] T050 [US3] Implement `src/core/anchor.ts` with a 32-character prefix/suffix window to satisfy T048
-- [ ] T051 [US3] Implement `src/annotations/entry.ts` to satisfy T047 and T049
-- [ ] T052 [US3] Implement entry discovery in `src/annotations/locate.ts` using `CachedMetadata.blocks` and `sections` — hand-rolled block-id parsing is prohibited
+- [X] T050 [US3] Implement `src/annotations/anchor.ts` with a 32-character prefix/suffix window to satisfy T048
+- [X] T051 [US3] Implement `src/annotations/entry.ts` to satisfy T047 and T049
+- [X] T052 [US3] Implement entry discovery in `src/annotations/locate.ts` using `CachedMetadata.blocks` and `sections` — hand-rolled block-id parsing is prohibited
 - [ ] T053 [US3] Verify in a real vault that `^id` after a blank line attaches to the blockquote and that `%%…%%` is hidden in reading and live-preview; apply the documented fallback if not
-- [ ] T054 [US3] Implement `src/annotations/store.ts` for two-way sync, reacting to metadata-cache changes (FR-022)
-- [ ] T055 [US3] Implement highlight creation from a selection in both adapters, writing the entry and painting it (FR-016b)
+- [X] T054 [US3] Implement `src/annotations/store.ts` for two-way sync, reacting to metadata-cache changes (FR-022)
+- [X] T055 [US3] Implement highlight creation from a selection in both adapters, writing the entry and painting it (FR-016b)
 - [ ] T056 [US3] Implement persistent highlight painting via foliate-js `overlayer.js` for EPUB and a text-layer overlay for PDF
-- [ ] T057 [US3] Implement `src/sidebar/highlights-view.ts` listing entries in reading order with unanchored ones grouped after, separated and sorted by creation time
-- [ ] T058 [US3] Implement type filtering in the highlights sidebar (FR-020a)
-- [ ] T059 [US3] Implement in-place commentary editing (FR-022a)
+- [X] T057 [US3] Implement `src/sidebar/highlights-view.ts` listing entries in reading order with unanchored ones grouped after, separated and sorted by creation time
+- [X] T058 [US3] Implement type filtering in the highlights sidebar (FR-020a)
+- [X] T059 [US3] Implement in-place commentary editing (FR-022a)
 - [ ] T060 [US3] Implement `src/annotations/promote.ts` creating a note that transcludes the entry rather than copying its quote (FR-022b)
 - [ ] T061 [US3] Implement deletion from both sides, routed through the vault trash, warning when a promoted note depends on the entry (FR-023)
 - [ ] T062 [US3] Verify quickstart scenario S3 for both formats
@@ -163,7 +163,7 @@ rendering engines. Paths follow the structure in [plan.md](./plan.md).
 
 - [ ] T063 [P] [US4] Write failing tests in `tests/unit/outline.test.ts` for nesting, the note fallback, and the empty case (FR-025, FR-025a, FR-027)
 - [ ] T064 [US4] Implement table-of-contents extraction in both adapters
-- [ ] T065 [US4] Implement `src/sidebar/outline-view.ts` with the book-note fallback when the file declares no contents
+- [X] T065 [US4] ~~Implement `src/sidebar/outline-view.ts`~~ — **superseded**: Obsidian's own Outline pane already follows the reader. Its base class tracks the workspace `file-open` event, which `FileView.loadFile()` fires; the reader now loads through `loadFile` so the native pane (and the native Properties pane) resolve against the book note with no view of our own. A book-file table of contents remains available from each engine's `outline()` for in-reader navigation.
 - [ ] T066 [US4] Implement current-position indication as the reader scrolls (FR-026)
 - [ ] T067 [US4] Verify quickstart scenario S4
 

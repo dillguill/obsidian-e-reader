@@ -96,7 +96,10 @@ export class LibraryView extends BasesView {
     const target = decideOpenTarget(modifiers);
     const newLeaf = target === "same-tab" ? false : target === "split" ? "split" : true;
     const leaf = this.app.workspace.getLeaf(newLeaf);
-    const state: ReaderViewState = { bookNotePath: entry.file.path };
+    // `file` (not a key of our own) is what makes FileView call loadFile,
+    // which is what fires `file-open` and so points Obsidian's native
+    // Outline and Properties panes at this book note.
+    const state: ReaderViewState = { file: entry.file.path };
     void leaf.setViewState({ type: READER_VIEW_TYPE, state, active: true });
   }
 }

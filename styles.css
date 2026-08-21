@@ -156,28 +156,59 @@
   background: #fff;
 }
 
-/* Selectable text layer stacked over the rendered canvas — standard pdf.js
-   text-layer positioning, under our own class name (see CRITICAL CONSTRAINTS:
-   never reuse Obsidian's or a vendored library's own class names). */
-.ereader-reader__pdf-text-layer {
+/* Selectable text layer stacked over the rendered canvas.
+   pdf.js positions its spans entirely through CSS custom properties it sets
+   inline (--font-height, --scale-x, --rotate) plus the scale variables the
+   container is expected to supply, and it sizes the container itself with
+   `round(down, var(--total-scale-factor) * Npx, var(--scale-round-x))`. Its
+   stylesheet is not loaded here, so those rules are restated under our own
+   class name rather than by borrowing pdf.js's `.textLayer` (see CRITICAL
+   CONSTRAINTS: never reuse a vendored library's own class names). The
+   adapter sets --scale-factor and --user-unit on this element. */
+.ereader-reader__pdf-text {
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
   position: absolute;
-  top: var(--size-4-4);
-  left: 50%;
-  transform: translateX(-50%);
-  overflow: hidden;
+  inset: 0;
+  text-align: initial;
+  overflow: clip;
   line-height: 1;
-  opacity: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 1;
 }
 
-.ereader-reader__pdf-text-layer span {
+.ereader-reader__pdf-text :is(span, br) {
   color: transparent;
   position: absolute;
   white-space: pre;
   cursor: text;
   transform-origin: 0% 0%;
+  user-select: text;
 }
 
-.ereader-reader__pdf-text-layer ::selection {
+.ereader-reader__pdf-text > :not(.markedContent),
+.ereader-reader__pdf-text .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.ereader-reader__pdf-text .markedContent {
+  display: contents;
+}
+
+.ereader-reader__pdf-text ::selection {
   background: var(--text-selection);
 }
 
@@ -192,6 +223,7 @@
 }
 
 .ereader-reader__pdf-page {
+  position: relative;
   background: #fff;
   box-shadow: var(--shadow-s);
   flex: 0 0 auto;
@@ -199,3 +231,110 @@
 }
 
 .ereader-reader__pdf-canvas { display: block; max-width: 100%; height: auto; }
+
+/* Highlights & notes sidebar */
+.ereader-highlights {
+  padding: var(--size-4-2);
+  overflow-y: auto;
+}
+
+.ereader-highlights__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-2);
+  margin-bottom: var(--size-4-2);
+}
+
+.ereader-highlights__chip {
+  padding: 2px var(--size-4-2);
+  border-radius: var(--radius-s);
+  border: none;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+
+.ereader-highlights__chip.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.ereader-highlights__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+}
+
+.ereader-highlights__entry {
+  padding: var(--size-4-2);
+  border-radius: var(--radius-m);
+  border-left: 3px solid var(--interactive-accent);
+  background: var(--background-secondary);
+  cursor: pointer;
+}
+
+.ereader-highlights__entry:hover {
+  background: var(--background-modifier-hover);
+}
+
+.ereader-highlights__entry.is-unanchored {
+  border-left-color: var(--text-faint);
+}
+
+.ereader-highlights__entry.is-malformed {
+  border-left-color: var(--text-error);
+  cursor: default;
+}
+
+.ereader-highlights__header {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.ereader-highlights__icon {
+  display: flex;
+  color: var(--text-faint);
+}
+
+.ereader-highlights__type {
+  text-transform: lowercase;
+}
+
+.ereader-highlights__badge {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.ereader-highlights__quote {
+  margin-top: var(--size-2-2);
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  line-height: var(--line-height-tight);
+}
+
+.ereader-highlights__comment {
+  margin-top: var(--size-2-2);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  outline: none;
+  border-radius: var(--radius-s);
+}
+
+.ereader-highlights__comment.is-empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-faint);
+}
+
+.ereader-highlights__comment:focus {
+  background: var(--background-primary);
+  padding: var(--size-2-2);
+}
+
+.ereader-highlights__comment:focus.is-empty::before {
+  content: none;
+}

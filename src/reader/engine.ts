@@ -1,7 +1,7 @@
 // Contract both reader adapters implement (src/reader/epub/adapter.ts,
-// src/reader/pdf/adapter.ts). No engine-specific type (foliate-js's View,
-// pdfjs's PDFDocumentProxy, ...) may appear outside its adapter module —
-// callers (reader-view.ts) only ever see this interface.
+// src/reader/pdf/adapter.ts). No engine-specific type (epub.js's Book/
+// Rendition, pdfjs's PDFDocumentProxy, ...) may appear outside its adapter
+// module — callers (reader-view.ts) only ever see this interface.
 
 import type { TFile } from "obsidian";
 import type { Locator } from "../core/types";

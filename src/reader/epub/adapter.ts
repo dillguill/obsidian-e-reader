@@ -1,190 +1,195 @@
-// EPUB adapter: foliate-js, loaded lazily so it never enters the startup
-// bundle (Principle V / esbuild.config.mjs's `external` list). foliate-js's
-// own API note applies here: "the API ... may break and change at any time"
-// — so no foliate-js type may leak past this module; callers only see
-// ReaderEngine/OutlineNode/SearchHit (../engine.ts).
+// EPUB adapter: epub.js, statically imported and bundled straight into
+// main.js (see esbuild.config.mjs — no vendor dir, no dynamic import(),
+// no vault.adapter.getResourcePath() resource-path resolution, all of which
+// previously failed at runtime with "Failed to fetch dynamically imported
+// module" and rendered EPUBs blank).
 //
-// Electron quirk (verified against other Obsidian plugins hitting the same
-// issue): foliate-js renders each section into a sandboxed iframe with
-// sandbox="allow-same-origin allow-scripts". Under Obsidian's Electron
-// renderer that combination produces a blank iframe — content only renders
-// once `allow-scripts` is stripped. foliate-js sets that attribute from
-// inside a *closed* shadow root (view.js's `View` and paginator.js's
-// `Paginator` both do `attachShadow({ mode: 'closed' })`), so there is no
-// public API to reach the iframe afterwards. Instead we intercept the
-// `setAttribute('sandbox', ...)` call itself for the lifetime of this
-// engine instance and rewrite the value on the way through — see
-// `patchIframeSandbox` below.
+// epub.js's own .d.ts (node_modules/epubjs/types) is incomplete/wrong in
+// places verified against node_modules/epubjs/src (e.g. Section.find's
+// declared return type of Element[] doesn't match its actual {cfi, excerpt}[]
+// return — see section.js's find()). This module declares its own minimal,
+// verified contract for the pieces it uses and casts epub.js's runtime
+// objects onto it, rather than trusting the shipped types outright. No
+// epub.js type may leak past this module — callers only see
+// ReaderEngine/OutlineNode/SearchHit (../engine.ts).
 
-import { vendorUrl } from "../vendor-path";
+import ePub from "epubjs";
 import type { App, TFile } from "obsidian";
 import type { Locator } from "../../core/types";
 import type { OutlineNode, ReaderEngine, SearchHit } from "../engine";
 import { fractionToPercent } from "../progress";
 
-// Written as "./vendor/..." (relative to the bundled main.js, not to this
-// source file) and held in a variable rather than inlined as a string
-// literal: esbuild only bundles a dynamic import() when its argument is a
-// literal it can statically analyse, and TypeScript only attempts module
-// resolution on such a literal too. A variable specifier is invisible to
-// both, so this loads lazily at runtime and never touches the tsc/esbuild
-// module graphs. (Verified against this repo's esbuild.config.mjs/tsconfig.)
-const VIEW_MODULE_PATH = "foliate-js/view.js";
-
-interface FoliateLocation {
-  cfi?: string;
-  fraction?: number;
+interface EpubNavItem {
+  label: string;
+  href: string;
+  subitems?: EpubNavItem[];
 }
 
-interface FoliateResolvedTarget {
-  index: number;
-  anchor?: unknown;
+interface EpubNavigation {
+  toc: EpubNavItem[];
 }
 
-interface FoliateSearchSubitem {
+interface EpubSectionMatch {
   cfi: string;
   excerpt: string;
 }
 
-interface FoliateSearchResult {
-  progress?: number;
-  index?: number;
-  subitems?: FoliateSearchSubitem[];
+/** epub.js's Section (book.spine.get(...) / book.spine.spineItems entries). */
+interface EpubSection {
+  load(request: (url: string) => Promise<unknown>): Promise<Element>;
+  unload(): void;
+  find(query: string): EpubSectionMatch[];
+  cfiFromElement(el: Element): string;
 }
 
-interface FoliateTocItem {
-  label: string;
-  href: string;
-  subitems?: FoliateTocItem[];
+interface EpubSpine {
+  get(target: string): EpubSection | null;
+  spineItems: EpubSection[];
 }
 
-interface FoliateBook {
-  toc?: FoliateTocItem[];
+interface EpubLocations {
+  generate(chars: number): Promise<string[]>;
+  percentageFromCfi(cfi: string): number;
 }
 
-/** The subset of foliate-js's `<foliate-view>` custom element this adapter uses. */
-interface FoliateViewElement extends HTMLElement {
-  book?: FoliateBook;
-  lastLocation?: FoliateLocation;
-  open(book: File): Promise<void>;
-  init(opts: { lastLocation?: unknown; showTextStart?: boolean }): Promise<void>;
-  close(): void;
-  goTo(target: string): Promise<unknown>;
-  resolveNavigation(target: string): FoliateResolvedTarget | undefined;
-  getCFI(index: number, range?: unknown): string;
-  search(opts: { query: string }): AsyncGenerator<FoliateSearchResult | "done">;
+interface EpubBook {
+  ready: Promise<unknown>;
+  navigation: EpubNavigation;
+  spine: EpubSpine;
+  locations: EpubLocations;
+  /** Archive-aware URL loader — the `request` fn Section.load needs to read from the .epub's zip rather than attempt an HTTP fetch. */
+  load(url: string): Promise<unknown>;
+  renderTo(element: HTMLElement, options?: Record<string, unknown>): EpubRendition;
+  destroy(): void;
+}
+
+interface EpubDisplayedLocation {
+  cfi: string;
+}
+
+interface EpubCurrentLocation {
+  start: EpubDisplayedLocation;
+}
+
+interface EpubRendition {
+  display(target?: string): Promise<void>;
+  on(event: "relocated", callback: (location: EpubCurrentLocation) => void): void;
+  destroy(): void;
 }
 
 /**
- * Rewrites `sandbox="... allow-scripts ..."` to drop `allow-scripts` for
- * every iframe created while this patch is installed. Scoped to one engine
- * instance's lifetime (installed in `open`, removed in `destroy`) rather
- * than left global — see module doc comment for why a narrower fix (reaching
- * into foliate-js's closed shadow roots) isn't available.
+ * Resolves a TOC entry's href to a real CFI by briefly loading that
+ * section's document and asking epub.js for a CFI at its root element, then
+ * unloading it again. epub.js's navigation.toc only carries hrefs, but this
+ * plugin's Locator (core/types.ts) is CFI-only — see locator.ts's EPUB_RE —
+ * so outline entries need converting once, up front, rather than deferring
+ * to a href-based Locator variant.
  */
-function patchIframeSandbox(): () => void {
-  const proto = HTMLIFrameElement.prototype;
-  const original = proto.setAttribute;
-  // A stable named reference (not `original`) so the restorer below can tell
-  // whether *this* patch is still the active one, and only unwinds its own
-  // layer — safe even if two EPUBs are open concurrently (e.g. two split
-  // panes) and their patch/restore calls interleave.
-  const patched: typeof proto.setAttribute = function patchedSetAttribute(
-    this: HTMLIFrameElement,
-    name: string,
-    value: string,
-  ): void {
-    if (name === "sandbox" && typeof value === "string" && value.includes("allow-scripts")) {
-      value = value
-        .split(/\s+/)
-        .filter((token) => token !== "" && token !== "allow-scripts")
-        .join(" ");
-    }
-    original.call(this, name, value);
-  };
-  proto.setAttribute = patched;
-  return () => {
-    if (proto.setAttribute === patched) proto.setAttribute = original;
-  };
+async function cfiForHref(book: EpubBook, href: string): Promise<string | null> {
+  const section = book.spine.get(href);
+  if (!section) return null;
+  try {
+    const root = await section.load((url) => book.load(url));
+    return section.cfiFromElement(root);
+  } catch (error) {
+    console.error("[e-reader] failed to resolve TOC entry to a CFI", href, error);
+    return null;
+  } finally {
+    section.unload();
+  }
 }
 
-async function outlineFromToc(view: FoliateViewElement, items: FoliateTocItem[]): Promise<OutlineNode[]> {
+async function outlineFromToc(book: EpubBook, items: EpubNavItem[]): Promise<OutlineNode[]> {
   const nodes: OutlineNode[] = [];
   for (const item of items) {
-    const resolved = view.resolveNavigation(item.href);
-    if (!resolved) continue;
-    const cfi = view.getCFI(resolved.index);
-    const locator: Locator = { kind: "epub", cfi };
-    const children = item.subitems && item.subitems.length > 0 ? await outlineFromToc(view, item.subitems) : [];
-    nodes.push({ label: item.label, locator, children });
+    const cfi = await cfiForHref(book, item.href);
+    if (cfi === null) continue;
+    const children = item.subitems && item.subitems.length > 0 ? await outlineFromToc(book, item.subitems) : [];
+    nodes.push({ label: item.label, locator: { kind: "epub", cfi }, children });
   }
   return nodes;
 }
 
+const LOCATIONS_GENERATE_CHARS = 1600;
+
 export class EpubEngine implements ReaderEngine {
-  private view: FoliateViewElement | null = null;
-  private unpatchSandbox: (() => void) | null = null;
+  private book: EpubBook | null = null;
+  private rendition: EpubRendition | null = null;
+  private lastCfi: string | null = null;
 
   constructor(private readonly app: App) {}
 
   async open(file: TFile, container: HTMLElement): Promise<void> {
     this.destroy();
 
-    await import(/* @vite-ignore */ vendorUrl(VIEW_MODULE_PATH)); // registers the `foliate-view` custom element
-
     const data = await this.app.vault.readBinary(file);
-    const webFile = new File([data], file.name);
+    const book = ePub(data) as unknown as EpubBook;
+    this.book = book;
+    await book.ready;
 
-    this.unpatchSandbox = patchIframeSandbox();
+    const rendition = book.renderTo(container, { width: "100%", height: "100%" });
+    this.rendition = rendition;
+    rendition.on("relocated", (location) => {
+      this.lastCfi = location.start.cfi;
+    });
 
-    const view = document.createElement("foliate-view") as unknown as FoliateViewElement;
-    container.appendChild(view);
-    await view.open(webFile);
-    await view.init({});
-    this.view = view;
+    await rendition.display();
+
+    // Whole-book percentage needs the character-offset index epub.js builds
+    // by walking every section; that's too slow to block open() on, so it
+    // runs in the background and progress() degrades to 0 until it settles.
+    void book.locations.generate(LOCATIONS_GENERATE_CHARS).catch((error: unknown) => {
+      console.error("[e-reader] failed to generate epub locations", error);
+    });
   }
 
   async goTo(locator: Locator): Promise<void> {
-    if (!this.view || locator.kind !== "epub") return;
-    await this.view.goTo(locator.cfi);
+    if (!this.rendition || locator.kind !== "epub") return;
+    await this.rendition.display(locator.cfi);
   }
 
   currentLocator(): Locator | null {
-    const cfi = this.view?.lastLocation?.cfi;
-    return typeof cfi === "string" ? { kind: "epub", cfi } : null;
+    return this.lastCfi === null ? null : { kind: "epub", cfi: this.lastCfi };
   }
 
   progress(): number {
-    const fraction = this.view?.lastLocation?.fraction;
-    return typeof fraction === "number" ? fractionToPercent(fraction) : 0;
+    if (!this.book || this.lastCfi === null) return 0;
+    const fraction = this.book.locations.percentageFromCfi(this.lastCfi);
+    return Number.isFinite(fraction) ? fractionToPercent(fraction) : 0;
   }
 
   async outline(): Promise<OutlineNode[]> {
-    const view = this.view;
-    const toc = view?.book?.toc;
-    if (!view || !toc) return [];
-    return outlineFromToc(view, toc);
+    const book = this.book;
+    if (!book) return [];
+    return outlineFromToc(book, book.navigation.toc);
   }
 
   async search(query: string): Promise<SearchHit[]> {
-    const view = this.view;
-    if (!view || query.trim() === "") return [];
+    const book = this.book;
+    const trimmed = query.trim();
+    if (!book || trimmed === "") return [];
     const hits: SearchHit[] = [];
-    for await (const result of view.search({ query })) {
-      if (result === "done") break;
-      for (const { cfi, excerpt } of result.subitems ?? []) {
-        hits.push({ excerpt, locator: { kind: "epub", cfi } });
+    for (const section of book.spine.spineItems) {
+      try {
+        await section.load((url) => book.load(url));
+        for (const match of section.find(trimmed)) {
+          hits.push({ excerpt: match.excerpt, locator: { kind: "epub", cfi: match.cfi } });
+        }
+      } catch (error) {
+        console.error("[e-reader] failed to search an epub section", error);
+      } finally {
+        section.unload();
       }
     }
     return hits;
   }
 
   destroy(): void {
-    this.view?.close();
-    this.view?.remove();
-    this.view = null;
-    this.unpatchSandbox?.();
-    this.unpatchSandbox = null;
+    this.rendition?.destroy();
+    this.rendition = null;
+    this.book?.destroy();
+    this.book = null;
+    this.lastCfi = null;
   }
 }
 

@@ -16,8 +16,12 @@
     "builtin-modules": "^4.0.0",
     "esbuild": "^0.24.0",
     "obsidian": "latest",
-    "pdfjs-dist": "^6.2.108",
     "typescript": "^5",
     "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "epubjs": "^0.3.93",
+    "jszip": "^3.10.1",
+    "pdfjs-dist": "^6.2.108"
   }
 }

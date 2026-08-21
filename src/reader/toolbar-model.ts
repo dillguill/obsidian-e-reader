@@ -34,7 +34,11 @@ export function clampPageInput(raw: string, total: number): number | null {
 export interface ToolbarInputs {
   pages: PageState | null;
   scale: number;
-  highlightsShown: boolean;
+  /** Whether a drag will be turned straight into a highlight. */
+  highlightMode: boolean;
+  /** Name of the type highlight mode writes. Empty when none are configured. */
+  activeType: string;
+  activeColor: string;
   bookmarked: boolean;
 }
 
@@ -46,7 +50,9 @@ export interface ToolbarState {
   pageLabel: string;
   /** Bounds a typed entry. 0 when the engine cannot yet say how long the book is. */
   pageTotal: number;
-  highlightsShown: boolean;
+  highlightMode: boolean;
+  activeType: string;
+  activeColor: string;
   bookmarked: boolean;
 }
 
@@ -59,7 +65,11 @@ export function toolbarState(inputs: ToolbarInputs): ToolbarState {
     pageValue: pageValue(inputs.pages),
     pageLabel: pageLabel(inputs.pages),
     pageTotal: inputs.pages?.total ?? 0,
-    highlightsShown: inputs.highlightsShown,
+    // Arming with no type configured would write highlights of type "", so
+    // the mode simply cannot be on in that state.
+    highlightMode: inputs.highlightMode && inputs.activeType !== "",
+    activeType: inputs.activeType,
+    activeColor: inputs.activeColor,
     bookmarked: inputs.bookmarked,
   };
 }

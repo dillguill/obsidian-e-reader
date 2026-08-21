@@ -62,6 +62,13 @@ export interface PaintedHighlight {
   suffix?: string;
   /** The recorded position. A fast path only — the quoted text is the authority. */
   hint?: Locator;
+  /**
+   * The colour to draw it in, already resolved from the reader's configured
+   * types. Engines do not read settings or the theme themselves: an EPUB's
+   * overlay lives inside an iframe and a PDF's boxes are positioned in JS, so
+   * neither can be reached by styles.css and both need a concrete value.
+   */
+  color: string;
 }
 
 export interface ReaderEngine {
@@ -86,6 +93,21 @@ export interface ReaderEngine {
    * an Obsidian menu without knowing about iframes or text layers.
    */
   onContextMenu(handler: (position: { x: number; y: number }) => void): void;
+  /**
+   * Registers a handler for the end of a selection gesture inside the
+   * rendered document — a mouse or touch release, NOT a settled selection.
+   * The reader's highlight mode turns a release into a highlight, so the
+   * signal has to be the release itself: epub.js's own `selected` event fires
+   * off a 250ms `selectionchange` debounce, which means pausing mid-drag
+   * would highlight half of what the reader was still selecting.
+   */
+  onSelectionEnd(handler: () => void): void;
+  /**
+   * Drops the current selection inside the rendered document. The selection
+   * belongs to whichever document the engine rendered into — an EPUB's
+   * iframe, the host document for a PDF — so only the engine can reach it.
+   */
+  clearSelection(): void;
 
   // ------------------------------------------------------------- toolbar
 

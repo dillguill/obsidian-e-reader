@@ -10,7 +10,7 @@
 import type { App, Plugin } from "obsidian";
 import { Notice, PluginSettingTab, Setting } from "obsidian";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
-import { DEFAULT_SETTINGS, type PropertyNames, type ReaderChoice, type Settings } from "./settings-model";
+import { DEFAULT_SETTINGS, HIGHLIGHT_PALETTE, type PropertyNames, type ReaderChoice, type Settings } from "./settings-model";
 
 /** What this tab needs from the plugin, beyond being a Plugin. */
 export interface SettingsHost {
@@ -212,14 +212,25 @@ export class EReaderSettingTab extends PluginSettingTab {
     types.forEach((type, index) => {
       new Setting(containerEl)
         .addText((text) =>
-          text.setValue(type).onChange((value) => {
+          text.setValue(type.name).onChange((value) => {
             const trimmed = value.trim();
             if (trimmed === RESERVED_ENTRY_TYPE) {
               new Notice(`E-Reader: "${RESERVED_ENTRY_TYPE}" is reserved for bookmarks.`);
               return;
             }
             if (trimmed === "") return;
-            types[index] = trimmed;
+            // A rename has to carry the active choice with it, or the reader's
+            // highlight mode would silently fall back to the first type.
+            if (this.host.settings.reader.activeAnnotationType === type.name) {
+              this.host.settings.reader.activeAnnotationType = trimmed;
+            }
+            type.name = trimmed;
+            this.save();
+          }),
+        )
+        .addColorPicker((picker) =>
+          picker.setValue(type.color).onChange((value) => {
+            type.color = value;
             this.save();
           }),
         )
@@ -229,6 +240,9 @@ export class EReaderSettingTab extends PluginSettingTab {
             .setTooltip("Remove")
             .onClick(() => {
               types.splice(index, 1);
+              if (this.host.settings.reader.activeAnnotationType === type.name) {
+                this.host.settings.reader.activeAnnotationType = types[0]?.name ?? "";
+              }
               this.save();
               this.display();
             }),
@@ -240,10 +254,24 @@ export class EReaderSettingTab extends PluginSettingTab {
         .setButtonText("Add highlight type")
         .setCta()
         .onClick(() => {
-          types.push("note");
+          const name = uniqueTypeName(types.map((type) => type.name));
+          types.push({ name, color: HIGHLIGHT_PALETTE[types.length % HIGHLIGHT_PALETTE.length] as string });
+          if (this.host.settings.reader.activeAnnotationType === "") {
+            this.host.settings.reader.activeAnnotationType = name;
+          }
           this.save();
           this.display();
         }),
     );
+  }
+}
+
+/** `note`, then `note 2`, `note 3`… so a second Add does not collide with the first. */
+function uniqueTypeName(existing: string[]): string {
+  const base = "note";
+  if (!existing.includes(base)) return base;
+  for (let suffix = 2; ; suffix++) {
+    const candidate = `${base} ${suffix}`;
+    if (!existing.includes(candidate)) return candidate;
   }
 }

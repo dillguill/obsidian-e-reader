@@ -20,6 +20,7 @@
 
 import type { Component } from "obsidian";
 import { Menu, setIcon, setTooltip } from "obsidian";
+import type { AnnotationType } from "../settings/settings-model";
 import type { DisplayOption } from "./engine";
 import type { ToolbarState } from "./toolbar-model";
 import { clampPageInput } from "./toolbar-model";
@@ -30,7 +31,12 @@ export interface ToolbarCallbacks {
   goToPage(page: number): void;
   /** Read fresh each time the menu opens, so the ticks reflect the current state. */
   displayOptions(): DisplayOption[];
-  toggleHighlights(): void;
+  /** Arms or disarms highlight mode. */
+  toggleHighlightMode(): void;
+  /** The configured types, read fresh so a change in settings shows up here. */
+  annotationTypes(): readonly AnnotationType[];
+  /** Chooses the type highlight mode writes, and arms it. */
+  chooseHighlightType(name: string): void;
   toggleBookmark(): void;
 }
 
@@ -52,6 +58,8 @@ export class ReaderToolbar {
   private readonly bookmarkEl: HTMLElement;
   /** The last value the box was given, restored when a typed entry is not a number. */
   private lastPageValue = "";
+  /** Name of the type the picker ticks. Kept so the menu can be built on demand. */
+  private activeType = "";
 
   constructor(parentEl: HTMLElement, component: Component, callbacks: ToolbarCallbacks) {
     this.rootEl = parentEl.createDiv({ cls: "ereader-toolbar" });
@@ -83,10 +91,40 @@ export class ReaderToolbar {
     });
 
     const rightEl = this.rootEl.createDiv({ cls: "ereader-toolbar__group" });
-    this.highlightEl = this.addButton(rightEl, component, "highlighter", "Show saved highlights", () =>
-      callbacks.toggleHighlights(),
+    this.highlightEl = this.addButton(rightEl, component, "highlighter", "Highlight mode", () =>
+      callbacks.toggleHighlightMode(),
     );
+    this.addButton(rightEl, component, "chevron-down", "Highlight type", (event) => {
+      this.showTypePicker(event, callbacks);
+    });
     this.bookmarkEl = this.addButton(rightEl, component, "bookmark", "Bookmark this page", () => callbacks.toggleBookmark());
+  }
+
+  /**
+   * The type highlight mode writes, each shown in the colour it paints in.
+   * MenuItem exposes no DOM element, so the swatch goes through `setTitle`'s
+   * DocumentFragment form rather than by tinting an icon.
+   */
+  private showTypePicker(event: MouseEvent, callbacks: ToolbarCallbacks): void {
+    const types = callbacks.annotationTypes();
+    const menu = new Menu();
+    if (types.length === 0) {
+      menu.addItem((item) => item.setTitle("No highlight types configured").setDisabled(true));
+    }
+    for (const type of types) {
+      const title = new DocumentFragment();
+      const swatch = title.createSpan({ cls: "ereader-toolbar__swatch" });
+      swatch.style.background = type.color;
+      title.createSpan({ text: type.name });
+      menu.addItem((item) =>
+        item
+          .setTitle(title)
+          .setChecked(type.name === this.activeType)
+          .onClick(() => callbacks.chooseHighlightType(type.name)),
+      );
+    }
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    menu.showAtPosition({ x: rect.x, y: rect.bottom });
   }
 
   private addButton(
@@ -137,8 +175,19 @@ export class ReaderToolbar {
     this.lastPageValue = state.pageValue;
     this.pageCountEl.setText(state.pageLabel);
 
-    this.highlightEl.toggleClass("is-active", state.highlightsShown);
-    setTooltip(this.highlightEl, state.highlightsShown ? "Hide saved highlights" : "Show saved highlights");
+    this.activeType = state.activeType;
+    this.highlightEl.toggleClass("is-active", state.highlightMode);
+    // The armed colour reads off the button itself, so it is obvious which
+    // type a drag is about to become.
+    this.highlightEl.style.setProperty("--ereader-active-hl", state.activeColor);
+    setTooltip(
+      this.highlightEl,
+      state.highlightMode
+        ? `Highlighting as "${state.activeType}" — click to stop`
+        : state.activeType === ""
+          ? "Highlight mode (no types configured)"
+          : `Highlight mode — writes "${state.activeType}"`,
+    );
 
     this.bookmarkEl.toggleClass("is-active", state.bookmarked);
     setTooltip(this.bookmarkEl, state.bookmarked ? "Remove this bookmark" : "Bookmark this page");

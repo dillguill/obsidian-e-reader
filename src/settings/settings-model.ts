@@ -74,14 +74,44 @@ export interface ReaderPreferences {
   epubFlow: EpubFlow;
   /** Whether saved highlights are painted into the document. */
   showHighlights: boolean;
+  /**
+   * The type the reader's highlight mode writes. A name from
+   * {@link Settings.annotationTypes}, or empty when there are none left.
+   */
+  activeAnnotationType: string;
+}
+
+/**
+ * Colours handed to types that do not carry one — the defaults, and anything
+ * migrated from the bare list of names that earlier versions saved. Chosen to
+ * stay legible under `mix-blend-mode: multiply` over a white page.
+ */
+export const HIGHLIGHT_PALETTE: readonly string[] = [
+  "#ffd76e",
+  "#7ec4f5",
+  "#ff9b9b",
+  "#9be5a4",
+  "#d3a8f0",
+  "#ffc08a",
+];
+
+function paletteColor(index: number): string {
+  return HIGHLIGHT_PALETTE[index % HIGHLIGHT_PALETTE.length] as string;
 }
 
 export type EpubFlow = "scrolled" | "paginated";
 
+/** One reader-configurable highlight kind and the colour it is painted in. */
+export interface AnnotationType {
+  name: string;
+  /** Hex, because that is what Obsidian's own ColorComponent reads and writes. */
+  color: string;
+}
+
 export interface Settings {
   properties: PropertyNames;
-  /** Reader-configurable highlight/bookmark types. Never contains `bookmark` — reserved (FR-020a, FR-028a). */
-  annotationTypes: string[];
+  /** Reader-configurable highlight types. Never contains `bookmark` — reserved (FR-020a, FR-028a). */
+  annotationTypes: AnnotationType[];
   readers: ReaderChoices;
   panes: PaneSettings;
   catalog: CatalogSettings;
@@ -99,7 +129,11 @@ export const DEFAULT_SETTINGS: Settings = {
     lastRead: "last-read",
     furthestRead: "furthest-read",
   },
-  annotationTypes: ["idea", "question", "important"],
+  annotationTypes: [
+    { name: "idea", color: "#ffd76e" },
+    { name: "question", color: "#7ec4f5" },
+    { name: "important", color: "#ff9b9b" },
+  ],
   readers: { epub: "plugin", pdf: "plugin" },
   panes: { outline: true, highlights: true, hideNativeOutline: false },
   catalog: { url: "" },
@@ -110,6 +144,7 @@ export const DEFAULT_SETTINGS: Settings = {
     epubTextScale: 1,
     epubFlow: "scrolled",
     showHighlights: true,
+    activeAnnotationType: "idea",
   },
 };
 
@@ -145,9 +180,35 @@ function mergeProperties(saved: unknown): PropertyNames {
   return result;
 }
 
-function mergeAnnotationTypes(saved: unknown): string[] {
-  if (!Array.isArray(saved)) return [...DEFAULT_SETTINGS.annotationTypes];
-  return saved.filter((entry): entry is string => typeof entry === "string" && entry !== RESERVED_ENTRY_TYPE);
+/**
+ * Accepts both shapes this has been saved in: the current `{name, color}`
+ * objects, and the bare array of names written before types carried a colour.
+ * A migrated name — or one whose colour is missing or unusable — is given one
+ * from the palette by position, so an upgrade never lands on a book full of
+ * identically-coloured highlights.
+ */
+function mergeAnnotationTypes(saved: unknown): AnnotationType[] {
+  if (!Array.isArray(saved)) return DEFAULT_SETTINGS.annotationTypes.map((type) => ({ ...type }));
+  const types: AnnotationType[] = [];
+  for (const entry of saved) {
+    const name = typeof entry === "string" ? entry : isRecord(entry) && typeof entry["name"] === "string" ? entry["name"] : "";
+    if (name.trim() === "" || name === RESERVED_ENTRY_TYPE) continue;
+    const savedColor = isRecord(entry) ? entry["color"] : undefined;
+    const color = typeof savedColor === "string" && savedColor.trim() !== "" ? savedColor : paletteColor(types.length);
+    types.push({ name, color });
+  }
+  return types;
+}
+
+/**
+ * The saved choice when it still names a real type. A type the reader has
+ * since deleted or renamed falls back to the first one, so the toolbar cannot
+ * end up highlighting in a type that no longer exists.
+ */
+function mergeActiveType(saved: unknown, types: AnnotationType[]): string {
+  const first = types[0]?.name ?? "";
+  if (typeof saved !== "string") return first;
+  return types.some((type) => type.name === saved) ? saved : first;
 }
 
 function mergeReaderChoice(value: unknown, fallback: ReaderChoice): ReaderChoice {
@@ -181,7 +242,7 @@ function mergeScale(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? clampScale(value) : fallback;
 }
 
-function mergeReaderPreferences(saved: Record<string, unknown>): ReaderPreferences {
+function mergeReaderPreferences(saved: Record<string, unknown>, types: AnnotationType[]): ReaderPreferences {
   const from = group(saved, "reader");
   const defaults = DEFAULT_SETTINGS.reader;
   return {
@@ -191,6 +252,7 @@ function mergeReaderPreferences(saved: Record<string, unknown>): ReaderPreferenc
     epubTextScale: mergeScale(from["epubTextScale"], defaults.epubTextScale),
     epubFlow: from["epubFlow"] === "paginated" || from["epubFlow"] === "scrolled" ? from["epubFlow"] : defaults.epubFlow,
     showHighlights: mergeBoolean(from["showHighlights"], defaults.showHighlights),
+    activeAnnotationType: mergeActiveType(from["activeAnnotationType"], types),
   };
 }
 
@@ -211,13 +273,14 @@ export function mergeSettings(saved: unknown): Settings {
     reader: _reader,
     ...rest
   } = savedObject;
+  const annotationTypes = mergeAnnotationTypes(savedObject.annotationTypes);
   return {
     ...rest,
     properties: mergeProperties(savedObject.properties),
-    annotationTypes: mergeAnnotationTypes(savedObject.annotationTypes),
+    annotationTypes,
     readers: mergeReaders(savedObject),
     panes: mergePanes(savedObject),
     catalog: mergeCatalog(savedObject),
-    reader: mergeReaderPreferences(savedObject),
+    reader: mergeReaderPreferences(savedObject, annotationTypes),
   };
 }

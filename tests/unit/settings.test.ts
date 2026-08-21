@@ -22,7 +22,13 @@ describe("DEFAULT_SETTINGS", () => {
 
   it("ships a default annotation types list that excludes the reserved bookmark type", () => {
     expect(DEFAULT_SETTINGS.annotationTypes.length).toBeGreaterThan(0);
-    expect(DEFAULT_SETTINGS.annotationTypes).not.toContain(RESERVED_ENTRY_TYPE);
+    expect(DEFAULT_SETTINGS.annotationTypes.map((type) => type.name)).not.toContain(RESERVED_ENTRY_TYPE);
+  });
+
+  it("gives every default type its own colour", () => {
+    const colors = DEFAULT_SETTINGS.annotationTypes.map((type) => type.color);
+    expect(colors.every((color) => /^#[0-9a-f]{6}$/i.test(color))).toBe(true);
+    expect(new Set(colors).size).toBe(colors.length);
   });
 });
 
@@ -76,15 +82,43 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
     expect(merged.annotationTypes).toEqual(DEFAULT_SETTINGS.annotationTypes);
   });
 
-  it("drops non-string entries from a saved annotation types array", () => {
-    const merged = mergeSettings({ annotationTypes: ["idea", 42, null, "question"] });
-    expect(merged.annotationTypes).toEqual(["idea", "question"]);
+  it("drops entries that carry no usable name", () => {
+    const merged = mergeSettings({ annotationTypes: [{ name: "idea", color: "#111111" }, 42, null, { color: "#222222" }] });
+    expect(merged.annotationTypes.map((type) => type.name)).toEqual(["idea"]);
   });
 
   it("never allows the reserved bookmark type into the annotation types list, even if saved data carries it", () => {
-    const merged = mergeSettings({ annotationTypes: ["idea", RESERVED_ENTRY_TYPE, "question"] });
-    expect(merged.annotationTypes).not.toContain(RESERVED_ENTRY_TYPE);
-    expect(merged.annotationTypes).toEqual(["idea", "question"]);
+    const merged = mergeSettings({
+      annotationTypes: [{ name: "idea", color: "#111111" }, { name: RESERVED_ENTRY_TYPE, color: "#222222" }],
+    });
+    expect(merged.annotationTypes.map((type) => type.name)).not.toContain(RESERVED_ENTRY_TYPE);
+  });
+
+  // Data written before types carried a colour is a plain array of strings.
+  it("migrates a saved list of bare type names, giving each a colour", () => {
+    const merged = mergeSettings({ annotationTypes: ["idea", "question"] });
+    expect(merged.annotationTypes.map((type) => type.name)).toEqual(["idea", "question"]);
+    expect(merged.annotationTypes[0]?.color).toBe(DEFAULT_SETTINGS.annotationTypes[0]?.color);
+    expect(merged.annotationTypes[1]?.color).toBe(DEFAULT_SETTINGS.annotationTypes[1]?.color);
+  });
+
+  it("migrates a mixed list, and keeps the reserved type out of it", () => {
+    const merged = mergeSettings({ annotationTypes: ["idea", { name: "quote", color: "#abcdef" }, RESERVED_ENTRY_TYPE] });
+    expect(merged.annotationTypes.map((type) => type.name)).toEqual(["idea", "quote"]);
+    expect(merged.annotationTypes[1]?.color).toBe("#abcdef");
+  });
+
+  it("gives a type with a missing or unusable colour one from the palette", () => {
+    const merged = mergeSettings({ annotationTypes: [{ name: "idea" }, { name: "quote", color: 42 }] });
+    expect(merged.annotationTypes[0]?.color).toBe(DEFAULT_SETTINGS.annotationTypes[0]?.color);
+    expect(merged.annotationTypes[1]?.color).toBe(DEFAULT_SETTINGS.annotationTypes[1]?.color);
+  });
+
+  it("keeps assigning colours past the end of the palette rather than running out", () => {
+    const names = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    const merged = mergeSettings({ annotationTypes: names });
+    expect(merged.annotationTypes).toHaveLength(names.length);
+    expect(merged.annotationTypes.every((type) => /^#[0-9a-f]{6}$/i.test(type.color))).toBe(true);
   });
 
   it("preserves an unknown extra top-level key instead of dropping it", () => {
@@ -106,7 +140,10 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         lastRead: "last-position",
         furthestRead: "furthest-position",
       },
-      annotationTypes: ["idea", "question"],
+      annotationTypes: [
+        { name: "idea", color: "#111111" },
+        { name: "question", color: "#222222" },
+      ],
       readers: { epub: "plugin", pdf: "default" },
       panes: { outline: false, highlights: true, hideNativeOutline: true },
       catalog: { url: "https://example.org/opds" },
@@ -117,6 +154,7 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         epubTextScale: 1.1,
         epubFlow: "paginated",
         showHighlights: false,
+        activeAnnotationType: "question",
       },
     };
     expect(mergeSettings(custom)).toEqual(custom);
@@ -171,6 +209,7 @@ describe("remembered reader preferences", () => {
       epubTextScale: 1,
       epubFlow: "scrolled",
       showHighlights: true,
+      activeAnnotationType: DEFAULT_SETTINGS.annotationTypes[0]?.name,
     });
   });
 
@@ -193,5 +232,32 @@ describe("remembered reader preferences", () => {
     const merged = mergeSettings({ reader: { pdfSpread: "triple", epubFlow: "sideways" } });
     expect(merged.reader.pdfSpread).toBe("single");
     expect(merged.reader.epubFlow).toBe("scrolled");
+  });
+});
+
+describe("the active highlight type", () => {
+  it("defaults to the first configured type", () => {
+    expect(DEFAULT_SETTINGS.reader.activeAnnotationType).toBe(DEFAULT_SETTINGS.annotationTypes[0]?.name);
+  });
+
+  it("keeps a saved choice that still exists", () => {
+    const merged = mergeSettings({ reader: { activeAnnotationType: "important" } });
+    expect(merged.reader.activeAnnotationType).toBe("important");
+  });
+
+  // The reader can delete or rename the type that was active; the toolbar has
+  // to land on something real rather than highlight in a type that is gone.
+  it("falls back to the first type when the saved choice no longer exists", () => {
+    const merged = mergeSettings({
+      annotationTypes: [{ name: "quote", color: "#abcdef" }],
+      reader: { activeAnnotationType: "important" },
+    });
+    expect(merged.reader.activeAnnotationType).toBe("quote");
+  });
+
+  it("is empty when every type has been removed", () => {
+    const merged = mergeSettings({ annotationTypes: [], reader: { activeAnnotationType: "idea" } });
+    expect(merged.annotationTypes).toEqual([]);
+    expect(merged.reader.activeAnnotationType).toBe("");
   });
 });

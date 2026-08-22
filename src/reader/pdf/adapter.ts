@@ -20,7 +20,7 @@
 // No pdfjs type may leak past this module — callers only see
 // ReaderEngine/OutlineNode/SearchHit/... (../engine.ts).
 
-import type { App } from "obsidian";
+import { type App, Platform } from "obsidian";
 import type { Locator } from "../../core/types";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
 import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine, SearchHit } from "../engine";
@@ -151,6 +151,13 @@ export class PdfEngine implements ReaderEngine {
   private pageEls: HTMLElement[] = [];
   private observer: IntersectionObserver | null = null;
   private currentPage = 1;
+  /**
+   * Every page the observer currently reports as intersecting. The page the
+   * reader is ON is the topmost of them, and only tracking the set makes that
+   * knowable: the observer reports entries in no particular order, and with a
+   * 200px margin several pages intersect at once.
+   */
+  private visiblePages = new Set<number>();
   private workerBlobUrl: string | null = null;
   private pdfjs: PdfjsModule | null = null;
   private contextMenuHandler: ((position: { x: number; y: number }) => void) | null = null;
@@ -224,6 +231,7 @@ export class PdfEngine implements ReaderEngine {
     if (!doc || !scrollEl) return;
 
     this.observer?.disconnect();
+    this.visiblePages.clear();
     scrollEl.empty();
     this.pageEls = [];
 
@@ -248,11 +256,21 @@ export class PdfEngine implements ReaderEngine {
           const pageNumber = Number((entry.target as HTMLElement).dataset["page"]);
           if (!pageNumber) continue;
           if (entry.isIntersecting) {
+            this.visiblePages.add(pageNumber);
             void this.renderPageInto(pageNumber);
-            this.currentPage = pageNumber;
-            this.changeHandler?.();
+          } else {
+            this.visiblePages.delete(pageNumber);
           }
         }
+        // Taking the last entry the observer happened to report put the
+        // reader on an arbitrary one of the pages in view — which zooming
+        // then used as the anchor to restore, landing somewhere else
+        // entirely. The topmost page in view is the one being read.
+        if (this.visiblePages.size === 0) return;
+        const top = Math.min(...this.visiblePages);
+        if (top === this.currentPage) return;
+        this.currentPage = top;
+        this.changeHandler?.();
       },
       { root: scrollEl, rootMargin: "200px 0px" },
     );
@@ -361,6 +379,10 @@ export class PdfEngine implements ReaderEngine {
     this.currentPage = page;
     await this.renderPageInto(page);
     this.pageEls[page - 1]?.scrollIntoView({ block: "start" });
+    // The observer reports the pages around the new position a moment later
+    // and would otherwise re-derive `currentPage` from a stale set.
+    this.visiblePages.clear();
+    this.visiblePages.add(page);
   }
 
   currentLocator(): Locator | null {
@@ -494,9 +516,13 @@ export class PdfEngine implements ReaderEngine {
       const parsed = Number.parseFloat(value);
       return Number.isFinite(parsed) ? parsed : 0;
     };
+    // A pixel of slack, because pdf.js rounds a viewport's width UP: a page
+    // rendered at exactly the fitted scale can come back a fraction wider
+    // than the space measured for it, and a fraction is enough to raise a
+    // scrollbar.
     return {
-      width: scrollEl.clientWidth - px(style.paddingLeft) - px(style.paddingRight),
-      height: scrollEl.clientHeight - px(style.paddingTop) - px(style.paddingBottom),
+      width: scrollEl.clientWidth - px(style.paddingLeft) - px(style.paddingRight) - 1,
+      height: scrollEl.clientHeight - px(style.paddingTop) - px(style.paddingBottom) - 1,
     };
   }
 
@@ -610,6 +636,12 @@ export class PdfEngine implements ReaderEngine {
       (event: MouseEvent) => {
         const current = this.contextMenuHandler;
         if (!current) return;
+        // A long press on a touchscreen fires `contextmenu`, and preventing it
+        // cancels the platform's own selection UI along with it — so the
+        // press that was meant to select text opened this menu instead. On
+        // touch the menu is only taken over once there is a selection to act
+        // on, which is the second press.
+        if (Platform.isMobile && this.getSelection() === null) return;
         event.preventDefault();
         current({ x: event.clientX, y: event.clientY });
       },
@@ -731,6 +763,7 @@ export class PdfEngine implements ReaderEngine {
     this.changeHandler = null;
     this.observer?.disconnect();
     this.observer = null;
+    this.visiblePages.clear();
     this.pageEls = [];
     this.scrollEl = null;
     this.doc = null;

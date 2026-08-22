@@ -18,7 +18,7 @@
 // epub.js type may leak past this module — callers only see
 // ReaderEngine/OutlineNode/SearchHit/... (../engine.ts).
 
-import type { App } from "obsidian";
+import { type App, Platform } from "obsidian";
 import type { Locator } from "../../core/types";
 import type { EpubFlow } from "../../settings/settings-model";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
@@ -353,6 +353,9 @@ export class EpubEngine implements ReaderEngine {
       contents.document.addEventListener("contextmenu", (event: MouseEvent) => {
         const handler = this.contextMenuHandler;
         if (!handler) return;
+        // See the PDF adapter: preventing a long press's `contextmenu` on a
+        // touchscreen cancels the selection UI it was meant to start.
+        if (Platform.isMobile && this.getSelection() === null) return;
         event.preventDefault();
         const frame = contents.window.frameElement;
         const frameRect = frame?.getBoundingClientRect();

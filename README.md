@@ -9,16 +9,25 @@ highlights that live in your notes as ordinary markdown.
 Bases query — your filters, your sort, your grouping. It reads the same
 configuration keys as the built-in Cards view (`image`, `imageFit`,
 `imageAspectRatio`, `cardSize`), so an existing `.base` keeps working, and
-adds optional overlays for a read-state and a progress property. Bind them and
-they appear; leave them unbound and nothing is drawn. Neither is ever inferred.
+adds a progress overlay — a bar or a percentage — plus a read-state badge
+derived from it: unread until a book is opened, reading while it is underway,
+finished at the end. Both bind themselves to whatever property the reader
+writes, so a plain `.base` shows them without any setup.
 
-**Reader.** EPUB and PDF, both scrolling continuously, both remembering where
-you were. The reader reports the book note as its file, so Obsidian's own
-Properties pane and everything else that follows the active file work on it
-unchanged.
+**Reader.** EPUB and PDF, both remembering where you were, with a toolbar
+shaped like Obsidian's own PDF viewer: zoom or text size, a display menu, and
+a page box you can type into. PDFs offer fit-to-width, fit-to-height, two-page
+spreads and a dark-theme mode; EPUBs offer scrolled or paginated reading, tap
+the edge of a page to turn it, and render in your vault's own theme rather
+than whatever the book shipped with. The reader reports the book note as its
+file, so Obsidian's own Properties pane and everything else that follows the
+active file work on it unchanged.
 
-**Highlights and notes.** Select text, right-click, pick a type. The highlight
-is written into the book note as a callout you can read, edit and link to:
+**Highlights and notes.** Select text and right-click, or arm highlight mode
+from the toolbar and simply drag. Saved highlights are painted back into the
+book in the colour of their type, and right-clicking one offers to recolour,
+copy or delete it. Each is written into the book note as a callout you can
+read, edit and link to:
 
 ```markdown
 > [!quote] idea
@@ -62,15 +71,19 @@ author: Lao Tzu
 cover: _attachments/tao-te-ching.jpg
 attachments:
   - "[[Tao Te Ching - Lao Tzu.epub]]"
-read-state: reading
 ---
 ```
+
+`type: book` is what marks it. The plugin writes only to notes carrying that
+marker, and both the property name and the value are configurable.
 
 Then create a base, add a view, and choose **Library** as its type. Clicking a
 cover opens the book.
 
-The reader writes back only `progress` and `last-read`, and only while you are
-reading.
+The reader writes back only `reading_progress` (0-100) and `reading_position`
+(where you left off), and only while you are reading. Both names are
+configurable in settings, along with the properties the plugin reads and the
+highlight types and their colours.
 
 ## Building
 

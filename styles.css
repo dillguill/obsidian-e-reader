@@ -268,6 +268,11 @@
   z-index: 1;
 }
 
+/* The `-webkit-` forms are what mobile actually reads: Obsidian's mobile app
+   turns selection off broadly across its own chrome, and without these the
+   text layer inherits that and a PDF cannot be selected — so there is nothing
+   to highlight. `touch-callout` keeps the platform's own selection handles,
+   which is how selecting works on a touchscreen at all. */
 .ereader-reader__pdf-text :is(span, br) {
   color: transparent;
   position: absolute;
@@ -275,6 +280,14 @@
   cursor: text;
   transform-origin: 0% 0%;
   user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* Our own pinch handler drives the zoom, so the browser must not also treat a
+   two-finger gesture as a page zoom. Vertical panning stays with the browser. */
+.ereader-reader__pdf-scroll {
+  touch-action: pan-x pan-y;
 }
 
 .ereader-reader__pdf-text > :not(.markedContent),

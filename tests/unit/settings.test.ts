@@ -158,6 +158,7 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       catalog: { url: "https://example.org/opds" },
       reader: {
         pdfScale: 1.25,
+        pdfFit: "none",
         pdfSpread: "even",
         pdfAdaptToTheme: true,
         epubTextScale: 1.1,
@@ -213,6 +214,7 @@ describe("remembered reader preferences", () => {
   it("defaults to actual size, single pages, scrolled text, and highlights shown", () => {
     expect(DEFAULT_SETTINGS.reader).toEqual({
       pdfScale: 1,
+      pdfFit: "width",
       pdfSpread: "single",
       pdfAdaptToTheme: false,
       epubTextScale: 1,
@@ -322,5 +324,30 @@ describe("migrating settings saved before the properties were namespaced", () =>
 
   it("drops the removed read-state property name", () => {
     expect(mergeSettings(legacy).properties).not.toHaveProperty("readState");
+  });
+});
+
+// A page at scale 1 is far wider than a phone, so a stored NUMBER cannot be
+// the whole answer: the fit has to be re-applied when the pane changes size,
+// which means remembering that a fit was asked for at all.
+describe("pdf fit mode", () => {
+  it("fits to width out of the box", () => {
+    expect(DEFAULT_SETTINGS.reader.pdfFit).toBe("width");
+  });
+
+  it("keeps a saved fit mode", () => {
+    expect(mergeSettings({ reader: { pdfFit: "height" } }).reader.pdfFit).toBe("height");
+    expect(mergeSettings({ reader: { pdfFit: "none" } }).reader.pdfFit).toBe("none");
+  });
+
+  it("falls back for an unrecognised mode", () => {
+    expect(mergeSettings({ reader: { pdfFit: "sideways" } }).reader.pdfFit).toBe("width");
+    expect(mergeSettings({ reader: { pdfFit: 3 } }).reader.pdfFit).toBe("width");
+  });
+
+  // Settings written before this existed carry a scale and no fit; they get
+  // the fit default, which is what makes an old vault stop overflowing.
+  it("gives settings saved without a fit the default one", () => {
+    expect(mergeSettings({ reader: { pdfScale: 1 } }).reader.pdfFit).toBe("width");
   });
 });

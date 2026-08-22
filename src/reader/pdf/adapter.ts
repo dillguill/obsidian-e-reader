@@ -25,7 +25,9 @@ import type { Locator } from "../../core/types";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
 import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine, SearchHit } from "../engine";
 import { pdfPageToPercent } from "../progress";
+import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
 import { type SpreadMode, spreadRows } from "../spread";
+import type { PdfFit } from "../../settings/settings-model";
 import { clampScale, fitRowSize, fitScale } from "../zoom";
 
 interface PdfjsViewport {
@@ -87,6 +89,7 @@ interface PdfjsModule {
 /** Preferences this engine owns, handed in at construction and reported back on change. */
 export interface PdfPreferences {
   scale: number;
+  fit: PdfFit;
   spread: SpreadMode;
   adaptToTheme: boolean;
 }
@@ -156,7 +159,10 @@ export class PdfEngine implements ReaderEngine {
   /** A page's size at scale 1, for the fit-to-width/height calculations. */
   private baseSize: { width: number; height: number } = { width: 0, height: 0 };
   private renderScale: number;
+  private fit: PdfFit;
   private spread: SpreadMode;
+  /** Watches the pane so a fit survives a resize or a device rotation. */
+  private resizeObserver: ResizeObserver | null = null;
   private themed: boolean;
   private highlights: readonly PaintedHighlight[] = [];
   /**
@@ -171,6 +177,7 @@ export class PdfEngine implements ReaderEngine {
     private readonly options: PdfEngineOptions,
   ) {
     this.renderScale = clampScale(options.scale);
+    this.fit = options.fit;
     this.spread = options.spread;
     this.themed = options.adaptToTheme;
   }
@@ -197,7 +204,10 @@ export class PdfEngine implements ReaderEngine {
     const unscaled = first.getViewport({ scale: 1 });
     this.baseSize = { width: unscaled.width, height: unscaled.height };
 
+    this.applyFit();
     await this.layout();
+    this.watchForResize();
+    this.addPinchListeners();
   }
 
   // ------------------------------------------------------------- layout
@@ -254,6 +264,36 @@ export class PdfEngine implements ReaderEngine {
    * `anchorPage`. Everything rendered is discarded: a canvas is rasterised at
    * one scale and cannot be re-used at another.
    */
+  /**
+   * Recomputes the scale from the pane when a fit is in force. Returns whether
+   * it actually changed, so a resize that does not move it costs nothing.
+   */
+  private applyFit(): boolean {
+    if (this.fit === "none") return false;
+    const row = fitRowSize(this.baseSize, this.spread === "single" ? 1 : 2, this.rowGap());
+    const next = fitScale(this.availableSize(), row, this.fit);
+    if (Math.abs(next - this.renderScale) < 0.005) return false;
+    this.renderScale = next;
+    return true;
+  }
+
+  /**
+   * A fit is a promise about the pane, not a number, so it has to be honoured
+   * again whenever the pane changes — a split being dragged, a sidebar
+   * opening, a phone being turned. Without this a fitted page simply
+   * overflows the moment anything moves.
+   */
+  private watchForResize(): void {
+    const scrollEl = this.scrollEl;
+    if (!scrollEl || typeof ResizeObserver === "undefined") return;
+    this.resizeObserver = new ResizeObserver(() => {
+      if (!this.applyFit()) return;
+      this.savePreferences();
+      void this.relayout(this.currentPage);
+    });
+    this.resizeObserver.observe(scrollEl);
+  }
+
   private async relayout(anchorPage: number): Promise<void> {
     await this.layout();
     await this.goTo({ kind: "pdf", page: anchorPage });
@@ -354,8 +394,21 @@ export class PdfEngine implements ReaderEngine {
 
   async setScale(scale: number): Promise<void> {
     const next = clampScale(scale);
-    if (next === this.renderScale) return;
+    // Zooming by hand is what releases the fit — otherwise the next resize
+    // would silently undo the reader's choice.
+    const releasingFit = this.fit !== "none";
+    if (next === this.renderScale && !releasingFit) return;
+    this.fit = "none";
     this.renderScale = next;
+    this.savePreferences();
+    await this.relayout(this.currentPage);
+  }
+
+  /** Switches to a fit, or back to a plain scale, and re-renders. */
+  private async setFit(fit: PdfFit, scale?: number): Promise<void> {
+    this.fit = fit;
+    if (scale !== undefined) this.renderScale = clampScale(scale);
+    this.applyFit();
     this.savePreferences();
     await this.relayout(this.currentPage);
   }
@@ -365,13 +418,7 @@ export class PdfEngine implements ReaderEngine {
   }
 
   displayOptions(): DisplayOption[] {
-    const available = this.availableSize();
-    // A fit mode fits the whole ROW, which in a spread mode is two pages and
-    // the gap between them.
-    const row = fitRowSize(this.baseSize, this.spread === "single" ? 1 : 2, this.rowGap());
-    const fitWidth = fitScale(available, row, "width");
-    const fitHeight = fitScale(available, row, "height");
-    const at = (value: number): boolean => Math.abs(this.renderScale - value) < 0.01;
+    const at = (value: number): boolean => this.fit === "none" && Math.abs(this.renderScale - value) < 0.01;
 
     const spreadOption = (mode: SpreadMode, label: string, icon: string): DisplayOption => ({
       section: "spread",
@@ -382,6 +429,8 @@ export class PdfEngine implements ReaderEngine {
       apply: async () => {
         if (this.spread === mode) return;
         this.spread = mode;
+        // A spread changes how wide a row is, so a fit has to be recomputed.
+        this.applyFit();
         this.savePreferences();
         await this.relayout(this.currentPage);
       },
@@ -393,16 +442,16 @@ export class PdfEngine implements ReaderEngine {
         id: "fit-width",
         label: "Fit width",
         icon: "move-horizontal",
-        checked: at(fitWidth),
-        apply: () => this.setScale(fitWidth),
+        checked: this.fit === "width",
+        apply: () => this.setFit("width"),
       },
       {
         section: "zoom",
         id: "fit-height",
         label: "Fit height",
         icon: "move-vertical",
-        checked: at(fitHeight),
-        apply: () => this.setScale(fitHeight),
+        checked: this.fit === "height",
+        apply: () => this.setFit("height"),
       },
       {
         section: "zoom",
@@ -410,7 +459,7 @@ export class PdfEngine implements ReaderEngine {
         label: "Actual size",
         icon: "scan",
         checked: at(1),
-        apply: () => this.setScale(1),
+        apply: () => this.setFit("none", 1),
       },
       spreadOption("single", "Single page", "rectangle-vertical"),
       spreadOption("odd", "Two pages (odd)", "columns-2"),
@@ -462,6 +511,7 @@ export class PdfEngine implements ReaderEngine {
   private savePreferences(): void {
     this.options.onPreferencesChanged({
       scale: this.renderScale,
+      fit: this.fit,
       spread: this.spread,
       adaptToTheme: this.themed,
     });
@@ -571,6 +621,64 @@ export class PdfEngine implements ReaderEngine {
     this.scrollEl?.win.getSelection()?.removeAllRanges();
   }
 
+  /**
+   * Pinch to zoom, applied when the fingers lift.
+   *
+   * Not passive: the browser's own pinch-zoom has to be refused, or the whole
+   * app is scaled instead of the page. And not continuous: the canvas is
+   * rasterised at one scale, and live-scaling a transform would slide the
+   * text layer off the glyphs it covers, which is what selection depends on.
+   */
+  private addPinchListeners(): void {
+    const scrollEl = this.scrollEl;
+    if (!scrollEl) return;
+    const options = { passive: false, signal: this.listeners?.signal };
+    let startDistance = 0;
+    let startScale = 1;
+    let current = 1;
+
+    const points = (event: TouchEvent): [Point, Point] | null => {
+      const [a, b] = [event.touches[0], event.touches[1]];
+      if (!a || !b) return null;
+      return [
+        { x: a.clientX, y: a.clientY },
+        { x: b.clientX, y: b.clientY },
+      ];
+    };
+
+    scrollEl.addEventListener(
+      "touchstart",
+      (event: TouchEvent) => {
+        const pair = points(event);
+        if (!pair) return;
+        startDistance = pinchDistance(pair[0], pair[1]);
+        startScale = this.renderScale;
+        current = startScale;
+      },
+      options,
+    );
+
+    scrollEl.addEventListener(
+      "touchmove",
+      (event: TouchEvent) => {
+        const pair = points(event);
+        if (!pair || startDistance === 0) return;
+        event.preventDefault();
+        current = pinchScale(startScale, startDistance, pinchDistance(pair[0], pair[1]));
+      },
+      options,
+    );
+
+    const finish = (): void => {
+      if (startDistance === 0) return;
+      startDistance = 0;
+      if (!isPinchWorthApplying(startScale, current)) return;
+      void this.setScale(current);
+    };
+    scrollEl.addEventListener("touchend", finish, options);
+    scrollEl.addEventListener("touchcancel", finish, options);
+  }
+
   onSelectionEnd(handler: () => void): void {
     this.selectionEndHandler = handler;
     const scrollEl = this.scrollEl;
@@ -614,6 +722,8 @@ export class PdfEngine implements ReaderEngine {
   }
 
   destroy(): void {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     this.listeners?.abort();
     this.listeners = null;
     this.contextMenuHandler = null;

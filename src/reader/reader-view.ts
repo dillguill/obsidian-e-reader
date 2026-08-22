@@ -307,11 +307,13 @@ export class ReaderView extends FileView {
     const preferences = this.getSettings().reader;
     return createPdfEngine(this.app, {
       scale: preferences.pdfScale,
+      fit: preferences.pdfFit,
       spread: preferences.pdfSpread,
       adaptToTheme: preferences.pdfAdaptToTheme,
       onPreferencesChanged: (next) => {
         const reader = this.getSettings().reader;
         reader.pdfScale = next.scale;
+        reader.pdfFit = next.fit;
         reader.pdfSpread = next.spread;
         reader.pdfAdaptToTheme = next.adaptToTheme;
         this.saveSettings();

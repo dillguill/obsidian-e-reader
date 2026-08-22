@@ -23,6 +23,7 @@ import type { Locator } from "../../core/types";
 import type { EpubFlow } from "../../settings/settings-model";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
 import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine, SearchHit } from "../engine";
+import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
 import { fractionToPercent } from "../progress";
 import { clampScale } from "../zoom";
 
@@ -377,6 +378,7 @@ export class EpubEngine implements ReaderEngine {
     // The other half of the pair described on addScrollIntentListeners: this
     // covers everything in the pane that is NOT the section's iframe.
     this.addScrollIntentListeners(container);
+    this.addPinchListeners(container);
     await rendition.display();
 
     // Whole-book percentage needs the character-offset index epub.js builds
@@ -525,6 +527,54 @@ export class EpubEngine implements ReaderEngine {
     }, options);
 
     this.addScrollIntentListeners(doc);
+    this.addPinchListeners(doc);
+  }
+
+  /** Pinch to change text size, applied when the fingers lift. */
+  private addPinchListeners(target: Document | HTMLElement): void {
+    const options = { passive: false, signal: this.listeners?.signal };
+    let startDistance = 0;
+    let startScale = 1;
+    let current = 1;
+
+    const points = (event: TouchEvent): [Point, Point] | null => {
+      const [a, b] = [event.touches[0], event.touches[1]];
+      if (!a || !b) return null;
+      return [
+        { x: a.clientX, y: a.clientY },
+        { x: b.clientX, y: b.clientY },
+      ];
+    };
+
+    target.addEventListener(
+      "touchstart",
+      ((event: TouchEvent) => {
+        const pair = points(event);
+        if (!pair) return;
+        startDistance = pinchDistance(pair[0], pair[1]);
+        startScale = this.textScale;
+        current = startScale;
+      }) as EventListener,
+      options,
+    );
+    target.addEventListener(
+      "touchmove",
+      ((event: TouchEvent) => {
+        const pair = points(event);
+        if (!pair || startDistance === 0) return;
+        event.preventDefault();
+        current = pinchScale(startScale, startDistance, pinchDistance(pair[0], pair[1]));
+      }) as EventListener,
+      options,
+    );
+    const finish = (): void => {
+      if (startDistance === 0) return;
+      startDistance = 0;
+      if (!isPinchWorthApplying(startScale, current)) return;
+      void this.setScale(current);
+    };
+    target.addEventListener("touchend", finish as EventListener, options);
+    target.addEventListener("touchcancel", finish as EventListener, options);
   }
 
   /**
@@ -551,13 +601,15 @@ export class EpubEngine implements ReaderEngine {
     target.addEventListener(
       "touchstart",
       ((event: TouchEvent) => {
-        touchFrom = event.touches[0]?.clientY ?? null;
+        touchFrom = event.touches.length === 1 ? (event.touches[0]?.clientY ?? null) : null;
       }) as EventListener,
       { passive: true, signal },
     );
     target.addEventListener(
       "touchmove",
       ((event: TouchEvent) => {
+        // Two fingers means a pinch; counting it as scroll would turn the page.
+        if (event.touches.length !== 1) return;
         const y = event.touches[0]?.clientY;
         if (y === undefined || touchFrom === null) return;
         // Dragging the finger UP moves the page down, hence the inversion.
@@ -682,6 +734,11 @@ export class EpubEngine implements ReaderEngine {
       // is what lets the container suppress horizontal scrolling outright.
       `pre, code { white-space: pre-wrap !important; word-break: break-word; }`,
       `table { max-width: 100% !important; }`,
+      // Mobile turns selection off broadly; without the prefixed form the
+      // section inherits that and cannot be selected, so there is nothing to
+      // highlight.
+      `body, body * { -webkit-user-select: text !important; user-select: text !important; }`,
+      `body { -webkit-touch-callout: default !important; }`,
     ].join("\n");
   }
 

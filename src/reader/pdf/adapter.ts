@@ -159,6 +159,12 @@ export class PdfEngine implements ReaderEngine {
   private spread: SpreadMode;
   private themed: boolean;
   private highlights: readonly PaintedHighlight[] = [];
+  /**
+   * Owns every listener this engine attaches. Aborting it in `destroy()` is
+   * what makes the clean-unload guarantee (Principle II) structural rather
+   * than a bet on the caller removing the elements we attached to.
+   */
+  private listeners: AbortController | null = null;
 
   constructor(
     private readonly app: App,
@@ -171,6 +177,7 @@ export class PdfEngine implements ReaderEngine {
 
   async open(path: string, container: HTMLElement): Promise<void> {
     this.destroy();
+    this.listeners = new AbortController();
 
     const { lib: pdfjsModule, workerSource } = await loadPdfjs();
     this.pdfjs = pdfjsModule;
@@ -548,12 +555,16 @@ export class PdfEngine implements ReaderEngine {
     this.contextMenuHandler = handler;
     const scrollEl = this.scrollEl;
     if (!scrollEl) return;
-    scrollEl.addEventListener("contextmenu", (event: MouseEvent) => {
-      const current = this.contextMenuHandler;
-      if (!current) return;
-      event.preventDefault();
-      current({ x: event.clientX, y: event.clientY });
-    });
+    scrollEl.addEventListener(
+      "contextmenu",
+      (event: MouseEvent) => {
+        const current = this.contextMenuHandler;
+        if (!current) return;
+        event.preventDefault();
+        current({ x: event.clientX, y: event.clientY });
+      },
+      { signal: this.listeners?.signal },
+    );
   }
 
   clearSelection(): void {
@@ -567,8 +578,9 @@ export class PdfEngine implements ReaderEngine {
     // The text layer is a child of the scroll box, so a release anywhere in
     // the document bubbles to here.
     const fire = (): void => this.selectionEndHandler?.();
-    scrollEl.addEventListener("mouseup", fire);
-    scrollEl.addEventListener("touchend", fire);
+    const options = { signal: this.listeners?.signal };
+    scrollEl.addEventListener("mouseup", fire, options);
+    scrollEl.addEventListener("touchend", fire, options);
   }
 
   async outline(): Promise<OutlineNode[]> {
@@ -602,6 +614,8 @@ export class PdfEngine implements ReaderEngine {
   }
 
   destroy(): void {
+    this.listeners?.abort();
+    this.listeners = null;
     this.contextMenuHandler = null;
     this.selectionEndHandler = null;
     this.changeHandler = null;

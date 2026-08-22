@@ -169,14 +169,31 @@ function anchorElement(root: Element, href: string): Element | null {
  * EPUB_RE — so outline entries need converting once, up front, rather than
  * deferring to a href-based Locator variant.
  */
-async function cfiForHref(book: EpubBook, href: string): Promise<string | null> {
+async function cfiForHref(book: EpubBook, href: string, EpubCFI: EpubCfiClass): Promise<string | null> {
   const section = book.spine.get(href);
   if (!section) return null;
   try {
     const root = await section.load((url) => book.load(url));
     const target = anchorElement(root, href);
     if (!target) return null;
-    return section.cfiFromElement(target);
+    const cfi = section.cfiFromElement(target);
+
+    // Prove it resolves while the section's document is still in hand. A CFI
+    // that cannot become a Range takes the reader's view manager down with
+    // it: the failure surfaces inside `display()`, between rendering the new
+    // view and the `views.show()` that reveals it, so the promise `display()`
+    // returns never settles and the caller waits forever on a blank page
+    // with nothing thrown and nothing logged. Far better to drop the entry
+    // here, where the outline can simply omit it.
+    const doc = root.ownerDocument;
+    if (doc) {
+      const range = new EpubCFI(cfi).toRange(doc);
+      if (!range) {
+        console.warn("[e-reader] dropping a TOC entry whose CFI does not resolve", href, cfi);
+        return null;
+      }
+    }
+    return cfi;
   } catch (error) {
     console.error("[e-reader] failed to resolve TOC entry to a CFI", href, error);
     return null;
@@ -185,12 +202,12 @@ async function cfiForHref(book: EpubBook, href: string): Promise<string | null> 
   }
 }
 
-async function outlineFromToc(book: EpubBook, items: EpubNavItem[]): Promise<OutlineNode[]> {
+async function outlineFromToc(book: EpubBook, items: EpubNavItem[], EpubCFI: EpubCfiClass): Promise<OutlineNode[]> {
   const nodes: OutlineNode[] = [];
   for (const item of items) {
-    const cfi = await cfiForHref(book, item.href);
+    const cfi = await cfiForHref(book, item.href, EpubCFI);
     if (cfi === null) continue;
-    const children = item.subitems && item.subitems.length > 0 ? await outlineFromToc(book, item.subitems) : [];
+    const children = item.subitems && item.subitems.length > 0 ? await outlineFromToc(book, item.subitems, EpubCFI) : [];
     nodes.push({ label: item.label, locator: { kind: "epub", cfi }, children });
   }
   return nodes;
@@ -238,11 +255,24 @@ function epubFlow(mode: EpubFlow): string {
 /** Marks the `<style>` element this plugin owns inside each rendered section. */
 const THEME_STYLE_ID = "ereader-theme";
 
-/** Loads epub.js on first use; the promise is cached across books. */
-let epubjsPromise: Promise<(input: ArrayBuffer) => unknown> | null = null;
+/** Turns a CFI string into a Range, so a generated one can be proven usable. */
+interface EpubCfiClass {
+  new (cfi: string): { toRange(doc: Document): Range | null };
+}
 
-function loadEpubjs(): Promise<(input: ArrayBuffer) => unknown> {
-  epubjsPromise ??= import("epubjs").then((module) => module.default as unknown as (input: ArrayBuffer) => unknown);
+interface EpubjsModule {
+  ePub: (input: ArrayBuffer) => unknown;
+  EpubCFI: EpubCfiClass;
+}
+
+/** Loads epub.js on first use; the promise is cached across books. */
+let epubjsPromise: Promise<EpubjsModule> | null = null;
+
+function loadEpubjs(): Promise<EpubjsModule> {
+  epubjsPromise ??= import("epubjs").then((module) => ({
+    ePub: module.default as unknown as (input: ArrayBuffer) => unknown,
+    EpubCFI: (module as unknown as { EpubCFI: EpubCfiClass }).EpubCFI,
+  }));
   return epubjsPromise;
 }
 
@@ -271,6 +301,13 @@ export class EpubEngine implements ReaderEngine {
    */
   private turnBlocked = false;
   private gestureIdleTimer: number | null = null;
+  /**
+   * Owns every listener this engine attaches — to the host container and to
+   * each section's own document. Aborting it in `destroy()` makes the
+   * clean-unload guarantee (Principle II) structural rather than a bet on
+   * epub.js tearing down the iframes and the caller removing the container.
+   */
+  private listeners: AbortController | null = null;
 
   constructor(
     private readonly app: App,
@@ -282,8 +319,9 @@ export class EpubEngine implements ReaderEngine {
 
   async open(path: string, container: HTMLElement): Promise<void> {
     this.destroy();
+    this.listeners = new AbortController();
 
-    const ePub = await loadEpubjs();
+    const { ePub } = await loadEpubjs();
     const data = await this.app.vault.adapter.readBinary(path);
     const book = ePub(data) as unknown as EpubBook;
     this.book = book;
@@ -310,6 +348,7 @@ export class EpubEngine implements ReaderEngine {
     // content` is epub.js's own extension point for exactly this, and runs
     // again for every section the continuous manager brings in.
     rendition.hooks.content.register((contents) => {
+      const options = { signal: this.listeners?.signal };
       contents.document.addEventListener("contextmenu", (event: MouseEvent) => {
         const handler = this.contextMenuHandler;
         if (!handler) return;
@@ -320,16 +359,17 @@ export class EpubEngine implements ReaderEngine {
           x: event.clientX + (frameRect?.left ?? 0),
           y: event.clientY + (frameRect?.top ?? 0),
         });
-      });
+      }, options);
       // Selection gestures, like the context menu, do not cross the iframe
       // boundary and have to be attached per section.
       const fireSelectionEnd = (): void => this.selectionEndHandler?.();
-      contents.document.addEventListener("mouseup", fireSelectionEnd);
-      contents.document.addEventListener("touchend", fireSelectionEnd);
+      contents.document.addEventListener("mouseup", fireSelectionEnd, options);
+      contents.document.addEventListener("touchend", fireSelectionEnd, options);
       this.addNavigationGestures(contents);
       // A section that arrives later still gets the vault's theme and
       // whatever highlights belong to it.
       this.styleContents(contents);
+      void this.inlineStylesheets(contents);
       this.paintContents(contents);
     });
 
@@ -460,10 +500,11 @@ export class EpubEngine implements ReaderEngine {
     // tail of a drag-selection, whose `click` fires after highlight mode has
     // already consumed and cleared the selection — without this a highlight
     // would also turn the page.
+    const options = { signal: this.listeners?.signal };
     let downAt: { x: number; y: number } | null = null;
     doc.addEventListener("mousedown", (event: MouseEvent) => {
       downAt = { x: event.clientX, y: event.clientY };
-    });
+    }, options);
 
     doc.addEventListener("click", (event: MouseEvent) => {
       const from = downAt;
@@ -481,7 +522,7 @@ export class EpubEngine implements ReaderEngine {
       const fraction = event.clientX / width;
       if (fraction < TAP_ZONE) void this.turn("prev");
       else if (fraction > 1 - TAP_ZONE) void this.turn("next");
-    });
+    }, options);
 
     this.addScrollIntentListeners(doc);
   }
@@ -498,8 +539,10 @@ export class EpubEngine implements ReaderEngine {
    * nothing at all once the pointer is past the last line of a short chapter.
    */
   private addScrollIntentListeners(target: Document | HTMLElement): void {
+    const signal = this.listeners?.signal;
     target.addEventListener("wheel", ((event: WheelEvent) => this.noteScrollIntent(event.deltaY)) as EventListener, {
       passive: true,
+      signal,
     });
 
     // Touch produces no wheel events, so the same intent is measured from the
@@ -510,7 +553,7 @@ export class EpubEngine implements ReaderEngine {
       ((event: TouchEvent) => {
         touchFrom = event.touches[0]?.clientY ?? null;
       }) as EventListener,
-      { passive: true },
+      { passive: true, signal },
     );
     target.addEventListener(
       "touchmove",
@@ -521,11 +564,11 @@ export class EpubEngine implements ReaderEngine {
         this.noteScrollIntent(touchFrom - y);
         touchFrom = y;
       }) as EventListener,
-      { passive: true },
+      { passive: true, signal },
     );
     target.addEventListener("touchend", (() => {
       touchFrom = null;
-    }) as EventListener);
+    }) as EventListener, { signal });
   }
 
   /**
@@ -650,9 +693,51 @@ export class EpubEngine implements ReaderEngine {
     if (!styleEl) {
       styleEl = doc.createElement("style");
       styleEl.id = THEME_STYLE_ID;
-      head.appendChild(styleEl);
     }
     styleEl.textContent = this.themeCss();
+    // Appending an element already in the tree MOVES it, which is what keeps
+    // this last in `head` — and so winning on equal specificity — after the
+    // book's own stylesheets are inlined a moment later.
+    head.appendChild(styleEl);
+  }
+
+  /**
+   * Replaces the section's `<link rel="stylesheet">` elements with inline
+   * `<style>` holding the same CSS.
+   *
+   * Obsidian's page sets `style-src 'unsafe-inline' 'self'
+   * https://fonts.googleapis.com`, and epub.js — which rewrites an archived
+   * book's assets to `blob:` URLs — hands the section a stylesheet link the
+   * policy refuses to load. Every book was therefore rendering with none of
+   * its own CSS: no drop caps, no verse indentation, no small caps. Switching
+   * epub.js to `base64` replacements would not help, since `data:` is no more
+   * permitted here than `blob:` is. Inline style elements are permitted, and
+   * the blob is readable by `fetch` because the policy constrains only
+   * `style-src` — there is no `default-src`, so `connect-src` is open.
+   *
+   * `@import` inside a book stylesheet stays blocked; it would be fetched as
+   * a stylesheet in its own right. It is rare enough not to chase here.
+   */
+  private async inlineStylesheets(contents: EpubContents): Promise<void> {
+    const doc = contents.document;
+    const links = Array.from(doc.querySelectorAll("link[rel~=\"stylesheet\"][href]"));
+    if (links.length === 0) return;
+    await Promise.all(
+      links.map(async (link) => {
+        const href = (link as HTMLLinkElement).href;
+        try {
+          const response = await fetch(href);
+          const css = await response.text();
+          const styleEl = doc.createElement("style");
+          styleEl.textContent = css;
+          link.replaceWith(styleEl);
+        } catch (error) {
+          console.error("[e-reader] could not inline a book stylesheet", href, error);
+        }
+      }),
+    );
+    // The book's rules just landed in the document, so put ours back on top.
+    this.styleContents(contents);
   }
 
   refreshTheme(): void {
@@ -752,7 +837,8 @@ export class EpubEngine implements ReaderEngine {
   async outline(): Promise<OutlineNode[]> {
     const book = this.book;
     if (!book) return [];
-    return outlineFromToc(book, book.navigation.toc);
+    const { EpubCFI } = await loadEpubjs();
+    return outlineFromToc(book, book.navigation.toc, EpubCFI);
   }
 
   async search(query: string): Promise<SearchHit[]> {
@@ -776,6 +862,8 @@ export class EpubEngine implements ReaderEngine {
   }
 
   destroy(): void {
+    this.listeners?.abort();
+    this.listeners = null;
     this.contextMenuHandler = null;
     this.selectionEndHandler = null;
     this.changeHandler = null;

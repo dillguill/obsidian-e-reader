@@ -32,7 +32,6 @@ export interface PropertyNames {
   markerValue: string;
   cover: string;
   attachments: string;
-  readState: string;
   progress: string;
   lastRead: string;
   furthestRead: string;
@@ -134,7 +133,6 @@ export const DEFAULT_SETTINGS: Settings = {
     markerValue: "book",
     cover: "cover",
     attachments: "attachments",
-    readState: "reading_status",
     progress: "reading_progress",
     lastRead: "reading_position",
     furthestRead: "furthest_position",

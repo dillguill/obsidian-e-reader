@@ -45,13 +45,8 @@ function libraryViewOptions(settings: Settings): BasesAllOptions[] {
     },
     // This plugin's own additions.
     // Defaulted to whatever the reader writes, so the overlays appear on a
-    // plain `.base` instead of only after the reader binds them by hand.
-    {
-      key: "readStateProperty",
-      type: "property",
-      displayName: "Read state property",
-      default: `note.${settings.properties.readState}`,
-    },
+    // plain `.base` instead of only after the reader binds it by hand. This
+    // one binding drives both the progress bar and the badge derived from it.
     {
       key: "progressProperty",
       type: "property",

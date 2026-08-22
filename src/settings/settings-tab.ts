@@ -25,7 +25,6 @@ const PROPERTY_FIELDS: { key: keyof PropertyNames; name: string; desc: string }[
   { key: "markerValue", name: "Book marker value", desc: "The value that property must have." },
   { key: "cover", name: "Cover", desc: "Property holding the cover image." },
   { key: "attachments", name: "Attachments", desc: "Property listing the book files attached to a note." },
-  { key: "readState", name: "Read state", desc: "Property holding unread / reading / finished." },
   { key: "progress", name: "Progress", desc: "Property the reader writes reading progress into, as a percentage." },
   { key: "lastRead", name: "Last read", desc: "Property the reader writes the current position into." },
   { key: "furthestRead", name: "Furthest read", desc: "Property holding the furthest position reached." },

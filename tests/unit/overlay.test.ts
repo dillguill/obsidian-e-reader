@@ -2,47 +2,48 @@ import { describe, it, expect } from "vitest";
 import { decideReadStateOverlay, decideProgressOverlay } from "../../src/library/overlay";
 import type { BasesPropertyId } from "obsidian";
 
-const READ_STATE_PROP = "note.read-state" as BasesPropertyId;
 const PROGRESS_PROP = "note.progress" as BasesPropertyId;
 
+// The badge is now DERIVED from reading progress rather than read from a
+// property of its own. `reading_status` is gone: it duplicated what progress
+// already says, and nothing ever wrote it. The old rule that read state must
+// never be inferred from progress existed to stop a separate, user-owned
+// property being silently overwritten by a guess — with no such property left,
+// the badge is simply a second rendering of the same number.
 describe("decideReadStateOverlay", () => {
-  it("renders nothing when the property is unbound", () => {
-    expect(decideReadStateOverlay(null, "reading")).toEqual({ kind: "none" });
+  it("renders nothing when the progress property is unbound", () => {
+    expect(decideReadStateOverlay(null, 40)).toEqual({ kind: "none" });
   });
 
-  it.each([
-    ["null", null],
-    ["undefined", undefined],
-    ["empty string", ""],
-    ["whitespace-only string", "   "],
-  ])("renders nothing for %s", (_label, raw) => {
-    expect(decideReadStateOverlay(READ_STATE_PROP, raw)).toEqual({ kind: "none" });
+  it("renders nothing when the book has no progress recorded at all", () => {
+    for (const raw of [null, undefined, "", "   ", {}, [], true]) {
+      expect(decideReadStateOverlay(PROGRESS_PROP, raw)).toEqual({ kind: "none" });
+    }
   });
 
-  it("renders nothing for an unrecognised wrapper object (stand-in for ErrorValue)", () => {
-    // Obsidian's ErrorValue class is referenced in the BasesEntry.getValue doc
-    // comment but is not exported from the public obsidian.d.ts (verified
-    // against 1.13.1) so it cannot be imported/instanceof-checked here. Any
-    // non-scalar wrapper — including a real ErrorValue — must be treated as
-    // "no data", never guessed at.
-    const errorLike = { toString: () => "reading" };
-    expect(decideReadStateOverlay(READ_STATE_PROP, errorLike)).toEqual({ kind: "none" });
+  it("reads zero as unread", () => {
+    expect(decideReadStateOverlay(PROGRESS_PROP, 0)).toEqual({ kind: "read-state", state: "unread" });
+    expect(decideReadStateOverlay(PROGRESS_PROP, "0")).toEqual({ kind: "read-state", state: "unread" });
   });
 
-  it.each(["unread", "reading", "finished"] as const)("maps a recognised read state %s", (state) => {
-    expect(decideReadStateOverlay(READ_STATE_PROP, state)).toEqual({ kind: "read-state", state });
+  it("reads anything between the ends as reading", () => {
+    for (const value of [1, 50, 99, "37"]) {
+      expect(decideReadStateOverlay(PROGRESS_PROP, value)).toEqual({ kind: "read-state", state: "reading" });
+    }
   });
 
-  it("never guesses at an unrecognised read-state string", () => {
-    expect(decideReadStateOverlay(READ_STATE_PROP, "in-progress")).toEqual({ kind: "none" });
+  it("reads a hundred as finished", () => {
+    expect(decideReadStateOverlay(PROGRESS_PROP, 100)).toEqual({ kind: "read-state", state: "finished" });
   });
 
-  it("is case-sensitive: never guesses at a differently-cased match", () => {
-    expect(decideReadStateOverlay(READ_STATE_PROP, "Reading")).toEqual({ kind: "none" });
+  it("clamps out-of-range values rather than dropping the badge", () => {
+    expect(decideReadStateOverlay(PROGRESS_PROP, 140)).toEqual({ kind: "read-state", state: "finished" });
+    expect(decideReadStateOverlay(PROGRESS_PROP, -5)).toEqual({ kind: "read-state", state: "unread" });
   });
 
-  it("never infers read state from a progress-shaped numeric value", () => {
-    expect(decideReadStateOverlay(READ_STATE_PROP, 75)).toEqual({ kind: "none" });
+  it("renders nothing for a value that is not a number", () => {
+    expect(decideReadStateOverlay(PROGRESS_PROP, "reading")).toEqual({ kind: "none" });
+    expect(decideReadStateOverlay(PROGRESS_PROP, Number.NaN)).toEqual({ kind: "none" });
   });
 });
 

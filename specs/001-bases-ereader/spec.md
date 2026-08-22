@@ -352,9 +352,14 @@ the highlights tab, navigate correctly, and survive closing and reopening the bo
 - **FR-003a**: The card image MUST come from a reader-selectable property, offered the same way the
   built-in Cards view offers it and defaulting to `cover`. Image rendering — fit, missing values,
   and load behaviour — is the Cards view's, and the plugin MUST NOT substitute its own.
-- **FR-004**: The library view MUST scope a read-state property. Where that property is bound and a
-  book has a value for it, the view MUST render that value as an overlay on the book's cover. Where
-  it is unbound or the book has no value, the view MUST render no overlay and MUST NOT infer one.
+- **FR-004** *(revised)*: The library view MUST render a read-state badge on a book's cover derived
+  from its reading progress: no progress recorded ⇒ no badge, 0 ⇒ unread, above 0 and below 100 ⇒
+  reading, 100 ⇒ finished. The view MUST NOT scope a separate read-state property.
+  *Superseded the original requirement, which scoped a `read-state` property of its own and forbade
+  deriving it from progress. That property duplicated what progress already recorded, nothing ever
+  wrote it, and the reader kept their own status field for workflow. The prohibition existed to stop
+  a user-owned property being silently overwritten by a guess; with no such property, the badge is
+  openly a second rendering of the same number rather than a claim about a field of its own.*
 - **FR-005**: The library view MUST scope a reading-progress property, and MUST allow the reader to
   choose which property supplies it. Where the property is bound and a book has a value, the view MUST
   render it as an overlay on the cover in a reader-selectable form, at minimum a percentage and a bar.
@@ -441,8 +446,10 @@ the highlights tab, navigate correctly, and survive closing and reopening the bo
 - **FR-017**: The plugin's readers MUST offer at minimum a text-size control for reflowable books and
   a zoom control for fixed-page books, and MUST render using the reader's active Obsidian theme
   colors rather than imposing their own appearance.
-- **FR-018**: The reader view MUST mark a book as finished when the reader reaches its end, and MUST
-  allow read state to be set manually.
+- **FR-018** *(revised)*: A book reads as finished once its reading progress reaches 100, which the
+  reader view records as it reads. There is no separate read state to set manually.
+  *Superseded alongside FR-004: with read state derived from progress, "mark as finished" and "set
+  manually" no longer name anything that exists.*
 
 #### Annotations
 

@@ -75,7 +75,9 @@ export interface CatalogSettings {
 
 /** Toolbar state that persists across closing and reopening a book. */
 export interface ReaderPreferences {
+  /** The scale in use. Recomputed from the pane whenever `pdfFit` is not "none". */
   pdfScale: number;
+  pdfFit: PdfFit;
   pdfSpread: SpreadMode;
   pdfAdaptToTheme: boolean;
   /** Text size for reflowable books, as a multiplier of the book's own size. */
@@ -109,6 +111,14 @@ function paletteColor(index: number): string {
 }
 
 export type EpubFlow = "scrolled" | "paginated";
+
+/**
+ * Whether the PDF scale is pinned to the pane rather than to a number. A
+ * stored number alone cannot survive the pane changing size — a page at scale
+ * 1 is far wider than a phone — so the fit itself is remembered and
+ * re-applied whenever the pane is resized or the device rotated.
+ */
+export type PdfFit = "none" | "width" | "height";
 
 /** One reader-configurable highlight kind and the colour it is painted in. */
 export interface AnnotationType {
@@ -169,6 +179,7 @@ export const DEFAULT_SETTINGS: Settings = {
   catalog: { url: "" },
   reader: {
     pdfScale: 1,
+    pdfFit: "width",
     pdfSpread: "single",
     pdfAdaptToTheme: false,
     epubTextScale: 1,
@@ -177,6 +188,10 @@ export const DEFAULT_SETTINGS: Settings = {
     activeAnnotationType: "idea",
   },
 };
+
+function isPdfFit(value: unknown): value is PdfFit {
+  return value === "none" || value === "width" || value === "height";
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -279,6 +294,7 @@ function mergeReaderPreferences(saved: Record<string, unknown>, types: Annotatio
   const defaults = DEFAULT_SETTINGS.reader;
   return {
     pdfScale: mergeScale(from["pdfScale"], defaults.pdfScale),
+    pdfFit: isPdfFit(from["pdfFit"]) ? from["pdfFit"] : defaults.pdfFit,
     pdfSpread: isSpreadMode(from["pdfSpread"]) ? from["pdfSpread"] : defaults.pdfSpread,
     pdfAdaptToTheme: mergeBoolean(from["pdfAdaptToTheme"], defaults.pdfAdaptToTheme),
     epubTextScale: mergeScale(from["epubTextScale"], defaults.epubTextScale),

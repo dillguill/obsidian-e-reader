@@ -24,7 +24,6 @@ describe("DEFAULT_SETTINGS", () => {
 
   it("namespaces the properties it writes, in snake_case", () => {
     expect(DEFAULT_SETTINGS.properties).toMatchObject({
-      readState: "reading_status",
       progress: "reading_progress",
       lastRead: "reading_position",
       furthestRead: "furthest_position",
@@ -76,7 +75,6 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       markerValue: DEFAULT_SETTINGS.properties.markerValue,
       cover: DEFAULT_SETTINGS.properties.cover,
       attachments: DEFAULT_SETTINGS.properties.attachments,
-      readState: DEFAULT_SETTINGS.properties.readState,
       progress: DEFAULT_SETTINGS.properties.progress,
       lastRead: DEFAULT_SETTINGS.properties.lastRead,
       furthestRead: DEFAULT_SETTINGS.properties.furthestRead,
@@ -146,7 +144,6 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         markerValue: "novel",
         cover: "thumbnail",
         attachments: "files",
-        readState: "status",
         progress: "percent",
         lastRead: "last-position",
         furthestRead: "furthest-position",

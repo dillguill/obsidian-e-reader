@@ -64,7 +64,7 @@ export function renderCard(
     img.addEventListener("error", () => img.remove(), { once: true });
   }
 
-  const readState = decideReadStateOverlay(cfg.readStateProperty, raw(entry, cfg.readStateProperty));
+  const readState = decideReadStateOverlay(cfg.progressProperty, raw(entry, cfg.progressProperty));
   if (readState.kind === "read-state") {
     const badge = cover.createDiv({
       cls: ["ereader-badge", `is-${readState.state}`],

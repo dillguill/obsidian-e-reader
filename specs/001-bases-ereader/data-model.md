@@ -17,32 +17,33 @@ A markdown note. Its frontmatter is the record; its body holds highlight entries
 | `attachments` | list of links | no | A list — a book may carry both an EPUB and a PDF. Absent ⇒ entry shows but is not readable. |
 | `cover` | url \| link | no | The card image property (FR-003a). May be a remote URL; FR-032a localises these on import. |
 | `author` | list of links | no | Authors may be notes rather than plain strings. |
-| `read-state` | enum | no | `unread` \| `reading` \| `finished`. Absent ⇒ no overlay (FR-004). |
-| `progress` | number | no | 0–100. Absent ⇒ no progress overlay (FR-005). |
+| `progress` | number | no | 0–100. Absent ⇒ no progress overlay, and no read-state badge (FR-004, FR-005). |
 | `published` | date | no | |
 | `source` | url | no | |
 | `description` | string | no | |
 | `tags` / `topics` | list | no | |
 | `last-read` | Locator | no | Where the reader left off (FR-015a). |
-| `furthest-read` | Locator | no | Advances only (FR-015a). |
+| `furthest-read` | Locator | no | Advances only (FR-015a). Defined but not yet written. |
 
-Names are kebab-case and configurable per FR-006; these are the defaults.
+Names are configurable per FR-006. The properties the plugin only READS keep their conventional
+names (`type`/`book`, `cover`, `attachments`); the ones it WRITES are namespaced in snake_case —
+`reading_progress`, `reading_position`, `furthest_position` — because `progress` and `last-read` are
+common enough that this plugin could overwrite another's values.
 
 **Relationships**: owns 0..n Highlights (in its body) and 0..n Bookmarks (same storage). Referenced
 by 0..n Promoted notes. References 0..1 Book file.
 
 **Validation**
 - `progress` outside 0–100 is clamped and reported, never written back silently.
-- `read-state` absent ⇒ no read-state overlay. It MUST NOT be derived from `progress`.
+- `progress` absent ⇒ neither overlay renders. The read-state badge IS derived from `progress`
+  (FR-004, revised); there is no separate read-state property to protect from inference.
 - Writing a highlight MUST NOT modify frontmatter (FR-019).
 - Plugin-written keys MUST NOT overwrite pre-existing values of the same name (FR-006 edge case).
 
-**State transitions** — `read-state`:
+**Read-state badge** — derived, not stored:
 
 ```text
-unread ──first position advance──> reading ──reaches end──> finished
-  ^                                   │                        │
-  └──────── manual set ───────────────┴────── manual set ──────┘
+no progress ⇒ no badge      0 ⇒ unread      1–99 ⇒ reading      100 ⇒ finished
 ```
 
 Automatic transitions only move forward. Any backward move is a deliberate reader action.
@@ -127,7 +128,6 @@ Persisted by Bases in the `.base` file, read through `BasesViewConfig`.
 | `coverProperty` | property id | Which property supplies the cover (FR-003) |
 | `progressProperty` | property id | Which property supplies progress (FR-005) |
 | `progressDisplay` | `bar` \| `percent` | How progress renders (FR-005) |
-| `readStateProperty` | property id | Which property supplies read state (FR-004) |
 
 Property visibility, order, filtering, sorting, and search are **owned by Bases** and are not
 duplicated here (FR-002).

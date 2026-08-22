@@ -5,7 +5,8 @@
 //   imageFit          "contain" | "cover"
 //   imageAspectRatio  number > 0, height = width * ratio (default 1)
 //   cardSize          column width in px (default 200)
-// Plus this plugin's own two overlay bindings.
+// Plus this plugin's own progress binding, which drives both the bar and the
+// badge derived from it.
 import type { BasesPropertyId, BasesViewConfig } from "obsidian";
 
 export const DEFAULT_CARD_SIZE = 200;
@@ -16,7 +17,7 @@ export interface LibraryViewConfig {
   imageFitContain: boolean;
   imageAspectRatio: number;
   cardSize: number;
-  readStateProperty: BasesPropertyId | null;
+  /** Feeds BOTH overlays: the progress bar and the badge derived from it. */
   progressProperty: BasesPropertyId | null;
   progressDisplay: "bar" | "percent";
 }
@@ -25,9 +26,8 @@ function positiveNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-/** Just the names the overlays care about, so this stays free of the settings module. */
+/** Just the name the overlays care about, so this stays free of the settings module. */
 export interface OverlayProperties {
-  readState: string;
   progress: string;
 }
 
@@ -37,11 +37,10 @@ function noteProperty(name: string): BasesPropertyId | null {
 }
 
 /**
- * `properties` supplies the fallback bindings for the two overlays, so a
- * plain `.base` shows read state and progress without the reader having to
- * bind them by hand — the same courtesy `image` already got. An explicit
- * binding in the `.base` still wins, since these are defaults and not
- * overrides.
+ * `properties` supplies the fallback binding for the overlays, so a plain
+ * `.base` shows progress without the reader having to bind it by hand — the
+ * same courtesy `image` already got. An explicit binding in the `.base` still
+ * wins, since this is a default and not an override.
  */
 export function readLibraryViewConfig(config: BasesViewConfig, properties: OverlayProperties): LibraryViewConfig {
   return {
@@ -49,7 +48,6 @@ export function readLibraryViewConfig(config: BasesViewConfig, properties: Overl
     imageFitContain: config.get("imageFit") === "contain",
     imageAspectRatio: positiveNumber(config.get("imageAspectRatio"), DEFAULT_ASPECT_RATIO),
     cardSize: positiveNumber(config.get("cardSize"), DEFAULT_CARD_SIZE),
-    readStateProperty: config.getAsPropertyId("readStateProperty") ?? noteProperty(properties.readState),
     progressProperty: config.getAsPropertyId("progressProperty") ?? noteProperty(properties.progress),
     progressDisplay: config.get("progressDisplay") === "percent" ? "percent" : "bar",
   };

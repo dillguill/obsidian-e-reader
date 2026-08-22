@@ -7,7 +7,7 @@ import {
 } from "../../src/library/view-config";
 
 /** What the reader writes by default; the overlays fall back to these. */
-const DEFAULT_PROPERTIES = { readState: "reading_status", progress: "reading_progress" };
+const DEFAULT_PROPERTIES = { progress: "reading_progress" };
 
 function fakeConfig(values: Record<string, unknown>): BasesViewConfig {
   return {
@@ -53,18 +53,13 @@ describe("readLibraryViewConfig", () => {
     },
   );
 
-  it("binds the plugin's own overlay properties", () => {
-    const cfg = readLibraryViewConfig(
-      fakeConfig({ readStateProperty: "note.read-state", progressProperty: "note.progress" }),
-      DEFAULT_PROPERTIES,
-    );
-    expect(cfg.readStateProperty).toBe("note.read-state");
+  it("binds the plugin's own progress property", () => {
+    const cfg = readLibraryViewConfig(fakeConfig({ progressProperty: "note.progress" }), DEFAULT_PROPERTIES);
     expect(cfg.progressProperty).toBe("note.progress");
   });
 
-  it("falls back to the reader's own properties when the .base binds neither", () => {
+  it("falls back to the reader's own property when the .base binds nothing", () => {
     const cfg = readLibraryViewConfig(fakeConfig({}), DEFAULT_PROPERTIES);
-    expect(cfg.readStateProperty).toBe("note.reading_status");
     expect(cfg.progressProperty).toBe("note.reading_progress");
   });
 
@@ -76,34 +71,27 @@ describe("readLibraryViewConfig", () => {
 });
 
 describe("overlay bindings fall back to the reader's configured properties", () => {
-  const properties = { readState: "reading_status", progress: "reading_progress" };
+  const properties = { progress: "reading_progress" };
 
-  it("binds both overlays without any .base configuration", () => {
+  it("binds the overlays without any .base configuration", () => {
     const config = readLibraryViewConfig(fakeConfig({}), properties);
-    expect(config.readStateProperty).toBe("note.reading_status");
     expect(config.progressProperty).toBe("note.reading_progress");
   });
 
-  it("follows renamed properties, so the overlay tracks what the reader writes", () => {
-    const config = readLibraryViewConfig(fakeConfig({}), { readState: "status", progress: "pct" });
-    expect(config.readStateProperty).toBe("note.status");
+  it("follows a renamed property, so the overlays track what the reader writes", () => {
+    const config = readLibraryViewConfig(fakeConfig({}), { progress: "pct" });
     expect(config.progressProperty).toBe("note.pct");
   });
 
   // The fallback is a default, not an override: a .base that binds these
   // explicitly — to a formula, or to a differently-named property — wins.
   it("lets an explicit binding in the .base win", () => {
-    const config = readLibraryViewConfig(
-      fakeConfig({ readStateProperty: "note.custom", progressProperty: "formula.pct" }),
-      properties,
-    );
-    expect(config.readStateProperty).toBe("note.custom");
+    const config = readLibraryViewConfig(fakeConfig({ progressProperty: "formula.pct" }), properties);
     expect(config.progressProperty).toBe("formula.pct");
   });
 
-  it("leaves an overlay unbound when the reader has no name for it", () => {
-    const config = readLibraryViewConfig(fakeConfig({}), { readState: "", progress: "" });
-    expect(config.readStateProperty).toBeNull();
+  it("leaves the overlays unbound when the reader has cleared the name", () => {
+    const config = readLibraryViewConfig(fakeConfig({}), { progress: "" });
     expect(config.progressProperty).toBeNull();
   });
 });

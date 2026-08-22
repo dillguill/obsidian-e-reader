@@ -13,7 +13,7 @@
 // FileView.setState drive; do the actual book loading from `onLoadFile`.
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
-import { FileView, Menu, Notice, TFile } from "obsidian";
+import { FileView, Menu, Notice, Platform, TFile } from "obsidian";
 import { addEntry, listEntries, removeEntry, setEntryType } from "../annotations/store";
 import type { Entry } from "../annotations/entry";
 import type { ReaderEvents } from "../core/reader-events";
@@ -627,7 +627,15 @@ export class ReaderView extends FileView {
     return null;
   }
 
-  private showAnnotationMenu(position: { x: number; y: number }): void {
+  /**
+   * Returns whether the press was taken. On a touchscreen it is taken ONLY
+   * over an existing highlight: a long press there is unambiguously about
+   * that highlight, whereas anywhere else it is the reader starting a
+   * selection, and claiming it would destroy the selection being made. On a
+   * pointer device a right-click is never a selection gesture, so the menu
+   * always opens.
+   */
+  private showAnnotationMenu(position: { x: number; y: number }): boolean {
     const menu = new Menu();
     const note = this.bookNote();
     const types = this.getSettings().annotationTypes;
@@ -640,8 +648,9 @@ export class ReaderView extends FileView {
     if (existing && note) {
       this.addEntryItems(menu, note, existing, types);
       menu.showAtPosition(position);
-      return;
+      return true;
     }
+    if (Platform.isMobile) return false;
 
     const selection = this.selection();
     if (selection) {
@@ -673,6 +682,7 @@ export class ReaderView extends FileView {
       );
     }
     menu.showAtPosition(position);
+    return true;
   }
 
   /** Actions on one existing entry: recolour it, copy it, or take it away. */
@@ -733,6 +743,11 @@ export class ReaderView extends FileView {
       return;
     }
     const hint = selection?.locator ?? this.engine?.currentLocator() ?? undefined;
+    // Saving a highlight with painting switched off looks exactly like it
+    // failing: the entry lands in the note and nothing appears on the page.
+    if (type !== BOOKMARK_TYPE && !this.getSettings().reader.showHighlights) {
+      new Notice("E-Reader: highlight saved. Turn on “Show saved highlights” in the display menu to see it in the book.");
+    }
     try {
       await addEntry(this.app, note, {
         type,

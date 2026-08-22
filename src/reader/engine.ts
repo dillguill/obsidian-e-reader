@@ -115,8 +115,13 @@ export interface ReaderEngine {
    * Registers a handler for a right-click inside the rendered document.
    * Coordinates are in the top window's client space, so callers can place
    * an Obsidian menu without knowing about iframes or text layers.
+   *
+   * The handler returns whether it took the event. Only then is the default
+   * suppressed — which matters on a touchscreen, where a long press both
+   * fires `contextmenu` AND starts the platform's own text selection, so
+   * claiming one that was meant to select text destroys the selection.
    */
-  onContextMenu(handler: (position: { x: number; y: number }) => void): void;
+  onContextMenu(handler: (position: { x: number; y: number }) => boolean): void;
   /**
    * Registers a handler for the end of a selection gesture inside the
    * rendered document — a mouse or touch release, NOT a settled selection.

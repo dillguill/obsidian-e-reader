@@ -21,7 +21,7 @@
 // is opened (Principle V). No pdfjs type may leak past this module — callers
 // only see ReaderEngine and friends (../engine.ts).
 
-import { type App, Platform } from "obsidian";
+import type { App } from "obsidian";
 import type { PdfFit } from "../../settings/settings-model";
 import type { Locator } from "../../core/types";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
@@ -174,7 +174,7 @@ export class PdfEngine implements ReaderEngine {
   private findQuery: FindQuery | null = null;
   private findStates: PdfjsViewerModule["FindState"] | null = null;
   private workerBlobUrl: string | null = null;
-  private contextMenuHandler: ((position: { x: number; y: number }) => void) | null = null;
+  private contextMenuHandler: ((position: { x: number; y: number }) => boolean) | null = null;
   private selectionEndHandler: (() => void) | null = null;
   private changeHandler: (() => void) | null = null;
   private highlights: readonly PaintedHighlight[] = [];
@@ -506,7 +506,7 @@ export class PdfEngine implements ReaderEngine {
     this.scrollEl?.win.getSelection()?.removeAllRanges();
   }
 
-  onContextMenu(handler: (position: { x: number; y: number }) => void): void {
+  onContextMenu(handler: (position: { x: number; y: number }) => boolean): void {
     this.contextMenuHandler = handler;
   }
 
@@ -524,15 +524,9 @@ export class PdfEngine implements ReaderEngine {
       (event: MouseEvent) => {
         const handler = this.contextMenuHandler;
         if (!handler) return;
-        // Never on a touchscreen. A long press fires `contextmenu`, and the
-        // platform has already selected a word by the time it does — so
-        // "claim it only when there is a selection" claimed every one of
-        // them, opening this menu on top of the selection the reader was
-        // still adjusting. Touch reaches the same actions by selecting and
-        // then tapping the toolbar, which needs no gesture of its own.
-        if (Platform.isMobile) return;
-        event.preventDefault();
-        handler({ x: event.clientX, y: event.clientY });
+        // Only suppress the default if the reader actually took the press;
+        // on a touchscreen the default is the text selection itself.
+        if (handler({ x: event.clientX, y: event.clientY })) event.preventDefault();
       },
       options,
     );

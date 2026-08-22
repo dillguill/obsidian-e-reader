@@ -6,6 +6,7 @@
 
 import type { BasesEntry, QueryController } from "obsidian";
 import { BasesView, Component } from "obsidian";
+import type { Settings } from "../settings/settings-model";
 import { READER_VIEW_TYPE, type ReaderViewState } from "../reader/reader-view";
 import { renderCard } from "./card";
 import { type OpenBookModifiers, decideOpenTarget } from "./open-book";
@@ -21,7 +22,11 @@ export class LibraryView extends BasesView {
   /** Child component scoping one render pass's DOM event registrations, torn down and replaced on the next render. */
   private renderScope: Component | null = null;
 
-  constructor(controller: QueryController, containerEl: HTMLElement) {
+  constructor(
+    controller: QueryController,
+    containerEl: HTMLElement,
+    private readonly getSettings: () => Settings,
+  ) {
     super(controller);
     this.containerEl = containerEl;
     this.rootEl = containerEl.createDiv({ cls: "ereader-library" });
@@ -45,7 +50,7 @@ export class LibraryView extends BasesView {
     this.renderScope = scope;
 
     this.rootEl.empty();
-    const libConfig = readLibraryViewConfig(this.config);
+    const libConfig = readLibraryViewConfig(this.config, this.getSettings().properties);
     // Obsidian's own Cards view sizes items from JS; ours needs a width in CSS.
     // `cardSize` is the same config key the built-in view reads.
     this.rootEl.setCssProps({

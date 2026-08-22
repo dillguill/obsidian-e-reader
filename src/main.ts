@@ -11,11 +11,11 @@ import { type Settings, DEFAULT_SETTINGS, mergeSettings } from "./settings/setti
 /** Obsidian's own outline pane. Closed once at startup when the reader asks for it. */
 const NATIVE_OUTLINE_VIEW_TYPE = "outline";
 
-function libraryViewOptions(): BasesAllOptions[] {
+function libraryViewOptions(settings: Settings): BasesAllOptions[] {
   return [
     // Same keys the built-in Cards view uses, so an existing `.base` works
     // unchanged and these controls write back to the same fields.
-    { key: "image", type: "property", displayName: "Image property", default: "note.cover" },
+    { key: "image", type: "property", displayName: "Image property", default: `note.${settings.properties.cover}` },
     {
       key: "imageFit",
       type: "dropdown",
@@ -44,8 +44,20 @@ function libraryViewOptions(): BasesAllOptions[] {
       instant: true,
     },
     // This plugin's own additions.
-    { key: "readStateProperty", type: "property", displayName: "Read state property" },
-    { key: "progressProperty", type: "property", displayName: "Progress property" },
+    // Defaulted to whatever the reader writes, so the overlays appear on a
+    // plain `.base` instead of only after the reader binds them by hand.
+    {
+      key: "readStateProperty",
+      type: "property",
+      displayName: "Read state property",
+      default: `note.${settings.properties.readState}`,
+    },
+    {
+      key: "progressProperty",
+      type: "property",
+      displayName: "Progress property",
+      default: `note.${settings.properties.progress}`,
+    },
     {
       key: "progressDisplay",
       type: "dropdown",
@@ -120,8 +132,8 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       const registered = this.registerBasesView(LIBRARY_VIEW_TYPE, {
         name: "Library",
         icon: "library",
-        factory: (controller, containerEl) => new LibraryView(controller, containerEl),
-        options: libraryViewOptions,
+        factory: (controller, containerEl) => new LibraryView(controller, containerEl, () => this.settings),
+        options: () => libraryViewOptions(this.settings),
       });
       if (!registered) {
         new Notice("E-Reader: could not register the library view — Bases is not enabled in this vault.");

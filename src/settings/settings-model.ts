@@ -15,6 +15,16 @@ import { RESERVED_ENTRY_TYPE } from "../core/types";
 import { type SpreadMode, isSpreadMode } from "../reader/spread";
 import { clampScale } from "../reader/zoom";
 
+/**
+ * The frontmatter keys this plugin reads and writes.
+ *
+ * The ones it only READS — the marker, cover and attachments — keep their
+ * conventional names, because they are ordinary vault metadata the reader
+ * already curates and renaming them would mean rewriting existing notes.
+ * The ones it WRITES are namespaced under `reading_`: `progress` and
+ * `last-read` are common enough names that this plugin could quietly
+ * overwrite something another plugin, or the reader, was already using.
+ */
 export interface PropertyNames {
   /** Marker property name. Default `type`. */
   marker: string;
@@ -124,10 +134,10 @@ export const DEFAULT_SETTINGS: Settings = {
     markerValue: "book",
     cover: "cover",
     attachments: "attachments",
-    readState: "read-state",
-    progress: "progress",
-    lastRead: "last-read",
-    furthestRead: "furthest-read",
+    readState: "reading_status",
+    progress: "reading_progress",
+    lastRead: "reading_position",
+    furthestRead: "furthest_position",
   },
   annotationTypes: [
     { name: "idea", color: "#ffd76e" },

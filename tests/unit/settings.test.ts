@@ -9,14 +9,25 @@ describe("DEFAULT_SETTINGS", () => {
     expect(DEFAULT_SETTINGS.properties.markerValue).toBe("book");
   });
 
-  it("uses kebab-case defaults for the rest of the property names", () => {
+  // The properties the reader READS are ordinary vault metadata the user
+  // curates, so they keep their plain names. The ones it WRITES are
+  // namespaced, because `progress` and `last-read` are common enough that
+  // this plugin could quietly clobber something else's.
+  it("leaves the properties it only reads under their conventional names", () => {
     expect(DEFAULT_SETTINGS.properties).toMatchObject({
+      marker: "type",
+      markerValue: "book",
       cover: "cover",
       attachments: "attachments",
-      readState: "read-state",
-      progress: "progress",
-      lastRead: "last-read",
-      furthestRead: "furthest-read",
+    });
+  });
+
+  it("namespaces the properties it writes, in snake_case", () => {
+    expect(DEFAULT_SETTINGS.properties).toMatchObject({
+      readState: "reading_status",
+      progress: "reading_progress",
+      lastRead: "reading_position",
+      furthestRead: "furthest_position",
     });
   });
 

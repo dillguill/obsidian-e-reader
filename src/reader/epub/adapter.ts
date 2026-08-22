@@ -16,13 +16,13 @@
 // verified contract for the pieces it uses and casts epub.js's runtime
 // objects onto it, rather than trusting the shipped types outright. No
 // epub.js type may leak past this module — callers only see
-// ReaderEngine/OutlineNode/SearchHit/... (../engine.ts).
+// ReaderEngine/OutlineNode/... (../engine.ts).
 
 import { type App, Platform } from "obsidian";
 import type { Locator } from "../../core/types";
 import type { EpubFlow } from "../../settings/settings-model";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
-import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine, SearchHit } from "../engine";
+import type { DisplayOption, EngineSelection, FindQuery, FindState, OutlineNode, PageState, PaintedHighlight, ReaderEngine } from "../engine";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
 import { fractionToPercent } from "../progress";
 import { clampScale } from "../zoom";
@@ -309,6 +309,12 @@ export class EpubEngine implements ReaderEngine {
    * epub.js tearing down the iframes and the caller removing the container.
    */
   private listeners: AbortController | null = null;
+  /** Every match of the query in force, in reading order. */
+  private findHits: string[] = [];
+  private findAt = -1;
+  private findStateHandler: ((state: FindState) => void) | null = null;
+  /** Guards against a slow search reporting over a newer one. */
+  private findToken = 0;
 
   constructor(
     private readonly app: App,
@@ -901,24 +907,84 @@ export class EpubEngine implements ReaderEngine {
     return outlineFromToc(book, book.navigation.toc, EpubCFI);
   }
 
-  async search(query: string): Promise<SearchHit[]> {
+  // ---------------------------------------------------------------- find
+
+  /**
+   * epub.js has no find controller, so this is built on its per-section
+   * `find`. Every section has to be loaded and unloaded to be searched, which
+   * is slow enough that the search reports itself as pending and fills in as
+   * it goes rather than blocking on the whole book.
+   */
+  find(query: FindQuery): void {
     const book = this.book;
-    const trimmed = query.trim();
-    if (!book || trimmed === "") return [];
-    const hits: SearchHit[] = [];
-    for (const section of book.spine.spineItems) {
-      try {
-        await section.load((url) => book.load(url));
-        for (const match of section.find(trimmed)) {
-          hits.push({ excerpt: match.excerpt, locator: { kind: "epub", cfi: match.cfi } });
-        }
-      } catch (error) {
-        console.error("[e-reader] failed to search an epub section", error);
-      } finally {
-        section.unload();
-      }
+    const trimmed = query.query.trim();
+    this.findHits = [];
+    this.findAt = -1;
+    const token = ++this.findToken;
+    if (!book || trimmed === "") {
+      this.reportFind(false);
+      return;
     }
-    return hits;
+    this.findStateHandler?.({ current: 0, total: 0, pending: true, notFound: false });
+    void (async () => {
+      for (const section of book.spine.spineItems) {
+        try {
+          await section.load((url) => book.load(url));
+          // epub.js's own find is case-sensitive only in the sense that it
+          // does a plain substring match, so a case-insensitive search is
+          // filtered here rather than asked of it.
+          for (const match of section.find(trimmed)) {
+            if (query.caseSensitive && !match.excerpt.includes(trimmed)) continue;
+            this.findHits.push(match.cfi);
+          }
+        } catch (error) {
+          console.error("[e-reader] failed to search an epub section", error);
+        } finally {
+          section.unload();
+        }
+        if (token !== this.findToken) return; // a newer search replaced this one
+        // Land on the first match as soon as there is one to land on.
+        if (this.findAt === -1 && this.findHits.length > 0) {
+          this.findAt = 0;
+          void this.goToHit();
+        }
+        this.reportFind(true);
+      }
+      if (token === this.findToken) this.reportFind(false);
+    })();
+  }
+
+  findNext(backwards: boolean): void {
+    if (this.findHits.length === 0) return;
+    const step = backwards ? -1 : 1;
+    this.findAt = (this.findAt + step + this.findHits.length) % this.findHits.length;
+    void this.goToHit();
+    this.reportFind(false);
+  }
+
+  findClose(): void {
+    this.findToken++;
+    this.findHits = [];
+    this.findAt = -1;
+  }
+
+  onFindState(handler: (state: FindState) => void): void {
+    this.findStateHandler = handler;
+  }
+
+  private async goToHit(): Promise<void> {
+    const cfi = this.findHits[this.findAt];
+    if (cfi === undefined) return;
+    await this.goTo({ kind: "epub", cfi });
+  }
+
+  private reportFind(pending: boolean): void {
+    this.findStateHandler?.({
+      current: this.findAt >= 0 ? this.findAt + 1 : 0,
+      total: this.findHits.length,
+      pending,
+      notFound: !pending && this.findHits.length === 0,
+    });
   }
 
   destroy(): void {
@@ -927,6 +993,10 @@ export class EpubEngine implements ReaderEngine {
     this.contextMenuHandler = null;
     this.selectionEndHandler = null;
     this.changeHandler = null;
+    this.findStateHandler = null;
+    this.findHits = [];
+    this.findAt = -1;
+    this.findToken++;
     this.turning = false;
     this.turnBlocked = false;
     this.overscroll = 0;

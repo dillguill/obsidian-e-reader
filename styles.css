@@ -323,6 +323,13 @@
   width: 100%;
   height: 100%;
   overflow: auto;
+  /* Reserve the vertical scrollbar's width up front. Fit-to-width measures
+     this box before any page has rendered, so without a reserved gutter the
+     scrollbar appears afterwards, takes ~15px, and leaves the page too wide —
+     which raises a horizontal scrollbar and the dead strip beside it. Worse,
+     refitting would then remove the vertical scrollbar and the two would
+     oscillate. A stable gutter makes the measurement true from the start. */
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   align-items: center;

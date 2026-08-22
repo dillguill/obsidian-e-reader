@@ -88,3 +88,33 @@ describe("fitRowSize", () => {
     expect(fitRowSize(page, 2, Number.NaN).width).toBe(600);
   });
 });
+
+describe("fitScale", () => {
+  const page = { width: 500, height: 1000 };
+
+  it("fits the width, ignoring how tall the page is", () => {
+    expect(fitScale({ width: 1000, height: 100 }, page, "width")).toBe(2);
+  });
+
+  it("fits the height, ignoring how wide the page is", () => {
+    expect(fitScale({ width: 100, height: 500 }, page, "height")).toBe(0.5);
+  });
+
+  // pdf.js's own page-fit: Math.min(pageWidthScale, pageHeightScale).
+  it("fits the whole page inside both axes, taking whichever binds", () => {
+    // Width would allow 2x, height only 0.5x — the page has to fit both.
+    expect(fitScale({ width: 1000, height: 500 }, page, "page")).toBe(0.5);
+    // and the other way round
+    expect(fitScale({ width: 250, height: 2000 }, page, "page")).toBe(0.5);
+  });
+
+  it("never exceeds the zoom range", () => {
+    expect(fitScale({ width: 100000, height: 100000 }, page, "page")).toBe(MAX_SCALE);
+    expect(fitScale({ width: 1, height: 1 }, page, "page")).toBe(MIN_SCALE);
+  });
+
+  it("falls back to 1 before the container has been laid out", () => {
+    expect(fitScale({ width: 0, height: 0 }, page, "width")).toBe(1);
+    expect(fitScale({ width: 0, height: 0 }, page, "page")).toBe(1);
+  });
+});

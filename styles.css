@@ -334,7 +334,11 @@
   flex-direction: column;
   align-items: center;
   gap: var(--size-4-4);
-  padding: var(--size-4-4);
+  /* Vertical only. Horizontal padding is a gutter: it eats the width a fit
+     is measured against, so "fit width" fitted the page to the pane MINUS
+     the padding and left a dead strip down each side. The page is meant to
+     meet the edges of the pane. */
+  padding: var(--size-4-4) 0;
 }
 
 .ereader-reader__pdf-page {

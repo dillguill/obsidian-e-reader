@@ -496,8 +496,13 @@ export class PdfEngine implements ReaderEngine {
         id: "actual-size",
         label: "Actual size",
         icon: "scan",
-        checked: at(1),
-        apply: () => this.setFit("none", 1),
+        // The whole page in view, which is pdf.js's `page-fit` rather than
+        // its `page-actual`. A true 100% is still reachable by stepping the
+        // zoom, but it is not what is wanted from this option: a page at 100%
+        // is taller than any pane it is read in, so choosing it left the
+        // reader part-way down a page with no way to see the rest of it.
+        checked: this.fit === "page",
+        apply: () => this.setFit("page"),
       },
       spreadOption("single", "Single page", "rectangle-vertical"),
       spreadOption("odd", "Two pages (odd)", "columns-2"),

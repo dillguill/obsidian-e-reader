@@ -694,14 +694,29 @@ export class EpubEngine implements ReaderEngine {
     void this.turn(direction);
   }
 
-  /** Restarts the "scrolling has stopped" countdown; only that clears the block. */
+  /**
+   * Restarts the "scrolling has stopped" countdown; only that clears the
+   * block on turning again.
+   *
+   * It deliberately does NOT clear the accumulated overscroll. A wheel is
+   * spun in one continuous burst, so 160px of it lands well inside this
+   * window; a finger is not. Touch reading is flick, lift, flick, and the
+   * lift is longer than this countdown — so every stroke used to throw away
+   * what the last one had built up, the total never reached the threshold,
+   * and the book simply would not advance past the end of a section no
+   * matter how hard it was scrolled. Momentum makes it worse: it scrolls
+   * without emitting a single touchmove, so the travel that carries the
+   * reader into the end of a section is never counted at all.
+   *
+   * Scrolling back into the section clears it instead, which is what
+   * `noteScrollIntent` does the moment the container is no longer at its end.
+   */
   private startGestureIdleTimer(): void {
     const win = this.container?.win;
     if (!win) return;
     if (this.gestureIdleTimer !== null) win.clearTimeout(this.gestureIdleTimer);
     this.gestureIdleTimer = win.setTimeout(() => {
       this.gestureIdleTimer = null;
-      this.overscroll = 0;
       this.turnBlocked = false;
     }, GESTURE_IDLE_MS);
   }

@@ -50,11 +50,19 @@ export interface Size {
 
 /**
  * The scale at which a page of `page` size (measured at scale 1) fills
- * `available` along the given axis. Returns 1 — not 0 or Infinity — when
- * either size is unusable, which happens whenever this is called before the
- * container has been laid out.
+ * `available`: along one axis for "width"/"height", or entirely within both
+ * for "page" — which is pdf.js's own `page-fit`, the smaller of the two
+ * (pdf_viewer.mjs: `scale = Math.min(pageWidthScale, pageHeightScale)`).
+ *
+ * Returns 1 — not 0 or Infinity — when either size is unusable, which
+ * happens whenever this is called before the container has been laid out.
  */
-export function fitScale(available: Size, page: Size, mode: "width" | "height"): number {
+export function fitScale(available: Size, page: Size, mode: "width" | "height" | "page"): number {
+  if (mode === "page") {
+    const byWidth = fitScale(available, page, "width");
+    const byHeight = fitScale(available, page, "height");
+    return Math.min(byWidth, byHeight);
+  }
   const availableExtent = mode === "width" ? available.width : available.height;
   const pageExtent = mode === "width" ? page.width : page.height;
   if (!(availableExtent > 0) || !(pageExtent > 0)) return 1;

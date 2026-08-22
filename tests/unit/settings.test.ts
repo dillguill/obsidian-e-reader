@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_SETTINGS, mergeSettings } from "../../src/settings/settings-model";
+import { DEFAULT_SETTINGS, SETTINGS_VERSION, mergeSettings } from "../../src/settings/settings-model";
 import { RESERVED_ENTRY_TYPE } from "../../src/core/types";
 import { MAX_SCALE, MIN_SCALE } from "../../src/reader/zoom";
 
@@ -139,6 +139,7 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
 
   it("passes a fully valid custom settings object through unchanged", () => {
     const custom = {
+      version: SETTINGS_VERSION,
       properties: {
         marker: "kind",
         markerValue: "novel",
@@ -267,5 +268,59 @@ describe("the active highlight type", () => {
     const merged = mergeSettings({ annotationTypes: [], reader: { activeAnnotationType: "idea" } });
     expect(merged.annotationTypes).toEqual([]);
     expect(merged.reader.activeAnnotationType).toBe("");
+  });
+});
+
+// Settings saved before the written properties were namespaced pinned the old
+// defaults into data.json — not because anyone chose them, but because saving
+// any setting persisted the whole object. Loading that data must not leave the
+// reader writing `progress`/`last-read` forever.
+describe("migrating settings saved before the properties were namespaced", () => {
+  const legacy = {
+    properties: {
+      marker: "type",
+      markerValue: "book",
+      cover: "cover",
+      attachments: "attachments",
+      readState: "read-state",
+      progress: "progress",
+      lastRead: "last-read",
+      furthestRead: "furthest-read",
+    },
+  };
+
+  it("upgrades names that were merely the old defaults", () => {
+    const merged = mergeSettings(legacy);
+    expect(merged.properties.progress).toBe("reading_progress");
+    expect(merged.properties.lastRead).toBe("reading_position");
+    expect(merged.properties.furthestRead).toBe("furthest_position");
+  });
+
+  it("leaves the read-only property names alone", () => {
+    const merged = mergeSettings(legacy);
+    expect(merged.properties.marker).toBe("type");
+    expect(merged.properties.cover).toBe("cover");
+    expect(merged.properties.attachments).toBe("attachments");
+  });
+
+  it("keeps a genuine override, which was never the old default", () => {
+    const merged = mergeSettings({ properties: { ...legacy.properties, progress: "pct" } });
+    expect(merged.properties.progress).toBe("pct");
+    expect(merged.properties.lastRead).toBe("reading_position");
+  });
+
+  it("stamps a version so the upgrade runs once", () => {
+    expect(mergeSettings(legacy).version).toBe(SETTINGS_VERSION);
+    expect(DEFAULT_SETTINGS.version).toBe(SETTINGS_VERSION);
+  });
+
+  // Once migrated, `progress` can only be there because the reader typed it.
+  it("does not re-upgrade a name deliberately set back after migrating", () => {
+    const merged = mergeSettings({ version: SETTINGS_VERSION, properties: { progress: "progress" } });
+    expect(merged.properties.progress).toBe("progress");
+  });
+
+  it("drops the removed read-state property name", () => {
+    expect(mergeSettings(legacy).properties).not.toHaveProperty("readState");
   });
 });

@@ -140,9 +140,6 @@ export class ReaderView extends FileView {
         this.setHighlightMode(true);
       },
       toggleBookmark: () => void this.toggleBookmark(),
-      find: (query) => this.engine?.find({ query, caseSensitive: false, highlightAll: true }),
-      findNext: (backwards) => this.engine?.findNext(backwards),
-      findClose: () => this.engine?.findClose(),
     });
     this.toolbar.setVisible(false);
 
@@ -297,9 +294,9 @@ export class ReaderView extends FileView {
     }
     this.engine = engine;
     engine.onContextMenu((position) => this.showAnnotationMenu(position));
+    engine.onTap((position) => this.showEntryMenuAt(position));
     engine.onSelectionEnd(() => void this.onSelectionEnd());
     engine.onChange(() => this.updateToolbar());
-    engine.onFindState((state) => this.toolbar?.updateFind(state));
     this.toolbar?.setVisible(true);
 
     const restored = this.readStoredLocator(file);
@@ -625,6 +622,27 @@ export class ReaderView extends FileView {
       if (entry) return entry;
     }
     return null;
+  }
+
+  /**
+   * A tap that lands on a painted highlight opens that highlight's own
+   * actions. This is the touch route to them — a long press cannot be, since
+   * iOS stopped firing `contextmenu` on one in iOS 13 — and it matches what
+   * foliate-js and epub.js both do, which is to treat a click on an
+   * annotation as selecting it.
+   *
+   * A tap that lands on nothing is ordinary reading and is ignored, and a
+   * tap that ends a text selection is the reader finishing a drag, not
+   * asking about whatever sits under the release.
+   */
+  private showEntryMenuAt(position: { x: number; y: number }): void {
+    if (this.engine?.getSelection()) return;
+    const entry = this.entryAt(position);
+    const note = this.bookNote();
+    if (!entry || !note) return;
+    const menu = new Menu();
+    this.addEntryItems(menu, note, entry, this.getSettings().annotationTypes);
+    menu.showAtPosition(position);
   }
 
   /**

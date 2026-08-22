@@ -18,32 +18,19 @@
 // string) and turned into a same-origin blob: URL at runtime instead.
 //
 // No pdfjs type may leak past this module — callers only see
-// ReaderEngine/OutlineNode/FindState/... (../engine.ts).
+// ReaderEngine/OutlineNode/PageState/... (../engine.ts).
 
 import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
-import { normalizeQuote } from "../../annotations/anchor";
-import { activeRange, rangeForQuote, rangeFromOffsets, searchableText, snapshotFromRange } from "../dom-selection";
+import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
 import type {
   DisplayOption,
   EngineSelection,
-  FindQuery,
-  FindState,
   OutlineNode,
   PageState,
   PaintedHighlight,
   ReaderEngine,
 } from "../engine";
-import {
-  type MatchAt,
-  countMatches,
-  firstMatch,
-  matchIndex,
-  matchOffsets,
-  stepMatch,
-  totalMatches,
-} from "../find-text";
-import { buildTextIndex } from "../text-index";
 import { pdfPageToPercent } from "../progress";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
 import { type SpreadMode, spreadRows } from "../spread";
@@ -188,6 +175,7 @@ export class PdfEngine implements ReaderEngine {
   private workerBlobUrl: string | null = null;
   private pdfjs: PdfjsModule | null = null;
   private contextMenuHandler: ((position: { x: number; y: number }) => boolean) | null = null;
+  private tapHandler: ((position: { x: number; y: number }) => void) | null = null;
   private selectionEndHandler: (() => void) | null = null;
   private changeHandler: (() => void) | null = null;
   /** A page's size at scale 1, for the fit-to-width/height calculations. */
@@ -376,11 +364,9 @@ export class PdfEngine implements ReaderEngine {
     if (!ctx) return;
     await page.render({ canvasContext: ctx, viewport: renderViewport }).promise;
 
-    // Saved highlights and find marks are drawn beneath the text layer so
-    // that selecting text still works over them. They get a layer each so
-    // that repainting one does not wipe the other.
+    // Saved highlights are drawn beneath the text layer so that selecting
+    // text still works over them.
     pageEl.createDiv({ cls: "ereader-reader__pdf-highlights" });
-    pageEl.createDiv({ cls: "ereader-reader__pdf-find" });
 
     // The text layer is what makes a PDF selectable — without it the page is
     // just pixels, and there is nothing to highlight. pdf.js positions its
@@ -399,9 +385,8 @@ export class PdfEngine implements ReaderEngine {
       console.error("[e-reader] failed to render a PDF text layer", pageNumber, error);
     }
 
-    // A page that arrives after the highlights or a search did still gets them.
+    // A page that arrives after the highlights did still gets them.
     this.paintPage(pageNumber);
-    this.paintFindPage(pageNumber);
   }
 
   async goTo(locator: Locator): Promise<void> {
@@ -678,6 +663,19 @@ export class PdfEngine implements ReaderEngine {
     );
   }
 
+  onTap(handler: (position: { x: number; y: number }) => void): void {
+    this.tapHandler = handler;
+    const scrollEl = this.scrollEl;
+    if (!scrollEl) return;
+    scrollEl.addEventListener(
+      "click",
+      (event: MouseEvent) => {
+        this.tapHandler?.({ x: event.clientX, y: event.clientY });
+      },
+      { signal: this.listeners?.signal },
+    );
+  }
+
   clearSelection(): void {
     this.scrollEl?.win.getSelection()?.removeAllRanges();
   }
@@ -759,213 +757,13 @@ export class PdfEngine implements ReaderEngine {
     return outlineFromPdf(this.doc, items);
   }
 
-  // --------------------------------------------------------------- find
-  //
-  // pdf.js ships a PDFFindController, but it is built around PDFViewer: it
-  // reports its matches as offsets into its own page-content string and
-  // leaves the drawing to TextHighlighter, which pdf_viewer.mjs does not
-  // export. Using it would mean hand-writing the harder half — mapping those
-  // offsets onto this adapter's text layers — so the search is done here
-  // instead, over the primitives the highlight painting already uses
-  // (buildTextIndex / rangeFromOffsets) and the stepping arithmetic in
-  // ../find-text.ts, all of them unit-tested.
-
-  /**
-   * How many matches each page holds, indexed by page number - 1, filled in
-   * as the scan reaches each page. Only the counts are kept: the offsets are
-   * found again against the rendered text layer when a page is painted, so a
-   * difference between the text pdf.js streams and the spans it builds from
-   * it cannot put a mark in the wrong place.
-   */
-  private findCounts: number[] = [];
-  private findQuery: FindQuery | null = null;
-  /** The match the find bar is on, or null for none. */
-  private findAt: MatchAt | null = null;
-  /** Guards against a slow scan reporting over a newer one. */
-  private findToken = 0;
-  private findPending = false;
-  private findStateHandler: ((state: FindState) => void) | null = null;
-  /** Normalised page text, keyed by page number. Cleared with the document. */
-  private readonly pageTexts = new Map<number, string>();
-
-  find(query: FindQuery): void {
-    const token = ++this.findToken;
-    const doc = this.doc;
-    this.findQuery = query;
-    this.findAt = null;
-    // Sized up front so that a page the scan has not reached reads as zero
-    // matches rather than as a shorter book.
-    this.findCounts = doc ? new Array<number>(doc.numPages).fill(0) : [];
-    this.findPending = false;
-
-    if (!doc || normalizeQuote(query.query) === "") {
-      this.findQuery = null;
-      this.repaintFind();
-      this.reportFindState();
-      return;
-    }
-    this.findPending = true;
-    this.reportFindState();
-    this.repaintFind();
-    void this.scanForMatches(token);
-  }
-
-  findNext(backwards: boolean): void {
-    const at = this.findAt;
-    const next = at
-      ? stepMatch(this.findCounts, at, backwards)
-      : firstMatch(this.findCounts, this.currentPage);
-    if (next) void this.goToMatch(next);
-  }
-
-  findClose(): void {
-    this.findToken++;
-    this.findQuery = null;
-    this.findCounts = [];
-    this.findAt = null;
-    this.findPending = false;
-    this.repaintFind();
-    this.reportFindState();
-  }
-
-  onFindState(handler: (state: FindState) => void): void {
-    this.findStateHandler = handler;
-  }
-
-  private reportFindState(): void {
-    const total = totalMatches(this.findCounts);
-    const at = this.findAt;
-    this.findStateHandler?.({
-      current: at ? matchIndex(this.findCounts, at) + 1 : 0,
-      total,
-      pending: this.findPending,
-      notFound: !this.findPending && this.findQuery !== null && total === 0,
-    });
-  }
-
-  /**
-   * Counts the matches on every page, starting at the one being read so that
-   * the first result is the nearest one rather than the first in the book,
-   * and jumping to it as soon as it is known. A long PDF takes a while — each
-   * page's text comes from the worker — so the state is reported as the scan
-   * goes and the find bar shows its progress.
-   */
-  private async scanForMatches(token: number): Promise<void> {
-    const doc = this.doc;
-    const query = this.findQuery;
-    if (!doc || !query) return;
-
-    const pages = doc.numPages;
-    const from = Math.min(Math.max(1, this.currentPage), pages);
-
-    for (let step = 0; step < pages; step++) {
-      const pageNumber = ((from - 1 + step) % pages) + 1;
-      let text: string;
-      try {
-        text = await this.pageText(pageNumber);
-      } catch (error) {
-        console.error("[e-reader] failed to read a PDF page's text", pageNumber, error);
-        text = "";
-      }
-      if (token !== this.findToken) return; // a newer search replaced this one
-
-      this.findCounts[pageNumber - 1] = countMatches(text, query);
-      // The first page found to hold a match is the nearest one, because the
-      // scan walks outward from the page being read.
-      if (!this.findAt && (this.findCounts[pageNumber - 1] ?? 0) > 0) {
-        void this.goToMatch({ page: pageNumber, nth: 0 });
-      } else {
-        this.reportFindState();
-        this.paintFindPage(pageNumber);
-      }
-    }
-
-    if (token !== this.findToken) return;
-    this.findPending = false;
-    this.reportFindState();
-  }
-
-  /** A page's normalised text, read from the worker once and kept. */
-  private async pageText(pageNumber: number): Promise<string> {
-    const cached = this.pageTexts.get(pageNumber);
-    if (cached !== undefined) return cached;
-    const doc = this.doc;
-    if (!doc) return "";
-    const page = await doc.getPage(pageNumber);
-    const content = await page.getTextContent();
-    // Built exactly as the rendered text layer's index is: one chunk per text
-    // item, whitespace collapsed across the joins (src/reader/text-index.ts).
-    const text = buildTextIndex(content.items.map((item) => ({ text: item.str }))).text;
-    this.pageTexts.set(pageNumber, text);
-    return text;
-  }
-
-  private async goToMatch(at: MatchAt): Promise<void> {
-    const previous = this.findAt;
-    this.findAt = at;
-    this.reportFindState();
-    if (at.page !== this.currentPage) await this.goTo({ kind: "pdf", page: at.page });
-    // Only the two pages whose marks changed need redrawing.
-    if (previous && previous.page !== at.page) this.paintFindPage(previous.page);
-    this.paintFindPage(at.page);
-    this.pageEls[at.page - 1]
-      ?.querySelector(".ereader-hl-find--current")
-      ?.scrollIntoView({ block: "center" });
-  }
-
-  private repaintFind(): void {
-    for (let pageNumber = 1; pageNumber <= this.pageEls.length; pageNumber++) {
-      this.paintFindPage(pageNumber);
-    }
-  }
-
-  /**
-   * Draws this page's matches over its text layer, the current one apart from
-   * the rest. The offsets are found again here, against the spans that were
-   * actually rendered, rather than carried over from the scan.
-   */
-  private paintFindPage(pageNumber: number): void {
-    const pageEl = this.pageEls[pageNumber - 1];
-    const layerEl = pageEl?.querySelector<HTMLElement>(".ereader-reader__pdf-find");
-    const textEl = pageEl?.querySelector<HTMLElement>(".ereader-reader__pdf-text");
-    if (!pageEl || !layerEl || !textEl) return;
-
-    layerEl.empty();
-    const query = this.findQuery;
-    if (!query) return;
-
-    const source = searchableText(textEl);
-    const offsets = matchOffsets(source.index.text, query);
-    if (offsets.length === 0) return;
-
-    const at = this.findAt;
-    const currentNth = at && at.page === pageNumber ? at.nth : -1;
-    const pageRect = pageEl.getBoundingClientRect();
-    const needle = normalizeQuote(query.query);
-
-    offsets.forEach((offset, nth) => {
-      // Without "highlight all" only the match being visited is drawn.
-      if (!query.highlightAll && nth !== currentNth) return;
-      const range = rangeFromOffsets(source, offset, offset + needle.length);
-      if (!range) return;
-      for (const rect of Array.from(range.getClientRects())) {
-        if (rect.width <= 0 || rect.height <= 0) continue;
-        const box = layerEl.createDiv({ cls: "ereader-hl-find" });
-        box.toggleClass("ereader-hl-find--current", nth === currentNth);
-        box.style.left = `${rect.left - pageRect.left}px`;
-        box.style.top = `${rect.top - pageRect.top}px`;
-        box.style.width = `${rect.width}px`;
-        box.style.height = `${rect.height}px`;
-      }
-    });
-  }
-
   destroy(): void {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.listeners?.abort();
     this.listeners = null;
     this.contextMenuHandler = null;
+    this.tapHandler = null;
     this.selectionEndHandler = null;
     this.changeHandler = null;
     this.observer?.disconnect();
@@ -985,13 +783,6 @@ export class PdfEngine implements ReaderEngine {
     this.pdfjs = null;
     this.container = null;
     this.highlights = [];
-    this.findToken++;
-    this.findQuery = null;
-    this.findCounts = [];
-    this.findAt = null;
-    this.findPending = false;
-    this.findStateHandler = null;
-    this.pageTexts.clear();
     if (this.workerBlobUrl !== null) {
       URL.revokeObjectURL(this.workerBlobUrl);
       this.workerBlobUrl = null;

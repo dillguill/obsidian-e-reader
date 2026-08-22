@@ -15,18 +15,22 @@ describe("decideReadStateOverlay", () => {
     expect(decideReadStateOverlay(null, 40)).toEqual({ kind: "none" });
   });
 
-  it("renders nothing when the book has no progress recorded at all", () => {
-    for (const raw of [null, undefined, "", "   ", {}, [], true]) {
-      expect(decideReadStateOverlay(PROGRESS_PROP, raw)).toEqual({ kind: "none" });
+  // Absence is the signal, not zero. The reader writes progress the moment a
+  // book is opened, so a book with none has never been opened. Zero means the
+  // opposite — opened, and not yet a full percent in, which page 1 of a long
+  // book rounds to.
+  it("reads a book with no progress recorded as unread", () => {
+    for (const raw of [null, undefined, "", "   "]) {
+      expect(decideReadStateOverlay(PROGRESS_PROP, raw)).toEqual({ kind: "read-state", state: "unread" });
     }
   });
 
-  it("reads zero as unread", () => {
-    expect(decideReadStateOverlay(PROGRESS_PROP, 0)).toEqual({ kind: "read-state", state: "unread" });
-    expect(decideReadStateOverlay(PROGRESS_PROP, "0")).toEqual({ kind: "read-state", state: "unread" });
+  it("reads zero as reading, since only an opened book has a zero", () => {
+    expect(decideReadStateOverlay(PROGRESS_PROP, 0)).toEqual({ kind: "read-state", state: "reading" });
+    expect(decideReadStateOverlay(PROGRESS_PROP, "0")).toEqual({ kind: "read-state", state: "reading" });
   });
 
-  it("reads anything between the ends as reading", () => {
+  it("reads anything short of the end as reading", () => {
     for (const value of [1, 50, 99, "37"]) {
       expect(decideReadStateOverlay(PROGRESS_PROP, value)).toEqual({ kind: "read-state", state: "reading" });
     }
@@ -34,16 +38,19 @@ describe("decideReadStateOverlay", () => {
 
   it("reads a hundred as finished", () => {
     expect(decideReadStateOverlay(PROGRESS_PROP, 100)).toEqual({ kind: "read-state", state: "finished" });
-  });
-
-  it("clamps out-of-range values rather than dropping the badge", () => {
     expect(decideReadStateOverlay(PROGRESS_PROP, 140)).toEqual({ kind: "read-state", state: "finished" });
-    expect(decideReadStateOverlay(PROGRESS_PROP, -5)).toEqual({ kind: "read-state", state: "unread" });
   });
 
-  it("renders nothing for a value that is not a number", () => {
-    expect(decideReadStateOverlay(PROGRESS_PROP, "reading")).toEqual({ kind: "none" });
-    expect(decideReadStateOverlay(PROGRESS_PROP, Number.NaN)).toEqual({ kind: "none" });
+  it("reads a negative value as reading rather than back to unread", () => {
+    expect(decideReadStateOverlay(PROGRESS_PROP, -5)).toEqual({ kind: "read-state", state: "reading" });
+  });
+
+  // A value that is present but unreadable is not evidence of anything, so it
+  // is left alone rather than guessed at in either direction.
+  it("renders nothing for a value it cannot read as a number", () => {
+    for (const raw of ["reading", Number.NaN, {}, [], true]) {
+      expect(decideReadStateOverlay(PROGRESS_PROP, raw)).toEqual({ kind: "none" });
+    }
   });
 });
 

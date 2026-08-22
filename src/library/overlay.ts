@@ -52,19 +52,29 @@ function readPercent(propertyId: BasesPropertyId | null, raw: unknown): number |
   return Math.min(100, Math.max(0, numeric));
 }
 
+/** True for a value that is simply not there, as opposed to one that is unreadable. */
+function isAbsent(raw: unknown): boolean {
+  return raw === null || raw === undefined || (typeof raw === "string" && raw.trim() === "");
+}
+
 /**
- * The badge, derived from reading progress: nothing at 0, finished at 100,
- * reading in between. A book with no progress recorded has never been opened
- * — the reader writes progress the moment one is — and shows no badge at all,
- * so an untouched library is not covered in icons.
+ * The badge, derived from reading progress.
  *
- * Note that opening a long book and reading one page rounds to 0, and so
- * reads as unread until the second percent is reached.
+ * ABSENCE is what marks a book unread, not zero. The reader writes progress
+ * the moment a book is opened, so a book carrying none has never been opened
+ * — whereas zero means the opposite, that it was opened and is not yet a full
+ * percent in, which is what page 1 of a long book rounds to. Reading zero as
+ * unread would have shown a book being read as untouched.
+ *
+ * A value that is present but unreadable is not evidence of anything, so it
+ * renders no badge rather than being guessed at in either direction.
  */
 export function decideReadStateOverlay(propertyId: BasesPropertyId | null, raw: unknown): ReadStateOverlay {
+  if (!isBoundProperty(propertyId)) return NONE_OVERLAY;
+  if (isAbsent(raw)) return { kind: "read-state", state: "unread" };
   const percent = readPercent(propertyId, raw);
   if (percent === null) return NONE_OVERLAY;
-  const state: ReadState = percent >= 100 ? "finished" : percent <= 0 ? "unread" : "reading";
+  const state: ReadState = percent >= 100 ? "finished" : "reading";
   return { kind: "read-state", state };
 }
 

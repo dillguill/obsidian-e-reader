@@ -9,8 +9,7 @@
     "dev": "node esbuild.config.mjs",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
-    "sync:pdf-css": "node scripts/sync-pdf-css.mjs"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

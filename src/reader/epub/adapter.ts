@@ -21,10 +21,8 @@
 import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
 import type { EpubFlow } from "../../settings/settings-model";
-import { searchMatcher } from "../../vendor/foliate-js/search";
-import { textWalker } from "../../vendor/foliate-js/text-walker";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
-import type { DisplayOption, EngineSelection, FindQuery, FindState, OutlineNode, PageState, PaintedHighlight, ReaderEngine } from "../engine";
+import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine } from "../engine";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
 import { fractionToPercent } from "../progress";
 import { clampScale } from "../zoom";
@@ -308,6 +306,7 @@ export class EpubEngine implements ReaderEngine {
   private container: HTMLElement | null = null;
   private lastCfi: string | null = null;
   private contextMenuHandler: ((position: { x: number; y: number }) => boolean) | null = null;
+  private tapHandler: ((position: { x: number; y: number }) => void) | null = null;
   private selectionEndHandler: (() => void) | null = null;
   private changeHandler: (() => void) | null = null;
   private textScale: number;
@@ -338,11 +337,6 @@ export class EpubEngine implements ReaderEngine {
   private resizeObserver: ResizeObserver | null = null;
   private resizeTimer: number | null = null;
   /** Every match of the query in force, in reading order. */
-  private findHits: string[] = [];
-  private findAt = -1;
-  private findStateHandler: ((state: FindState) => void) | null = null;
-  /** Guards against a slow search reporting over a newer one. */
-  private findToken = 0;
 
   constructor(
     private readonly app: App,
@@ -396,6 +390,16 @@ export class EpubEngine implements ReaderEngine {
           y: event.clientY + (frameRect?.top ?? 0),
         });
         if (claimed) event.preventDefault();
+      }, options);
+      // A tap is how an existing highlight is reached on a touchscreen.
+      contents.document.addEventListener("click", (event: MouseEvent) => {
+        const handler = this.tapHandler;
+        if (!handler) return;
+        const frameRect = contents.window.frameElement?.getBoundingClientRect();
+        handler({
+          x: event.clientX + (frameRect?.left ?? 0),
+          y: event.clientY + (frameRect?.top ?? 0),
+        });
       }, options);
       // Selection gestures, like the context menu, do not cross the iframe
       // boundary and have to be attached per section.
@@ -707,7 +711,7 @@ export class EpubEngine implements ReaderEngine {
    *
    * epub.js watches `window` for resizes and nothing else (its Stage attaches
    * a plain window listener), which misses every way this pane actually
-   * changes size: a mobile keyboard opening, the find bar appearing, a split
+   * changes size: a mobile keyboard opening, a split
    * being dragged. None of those resize the window, so the stage kept the
    * size it was built with and the reader was left looking at empty space
    * outside the content.
@@ -950,6 +954,10 @@ export class EpubEngine implements ReaderEngine {
     this.contextMenuHandler = handler;
   }
 
+  onTap(handler: (position: { x: number; y: number }) => void): void {
+    this.tapHandler = handler;
+  }
+
   onSelectionEnd(handler: () => void): void {
     this.selectionEndHandler = handler;
   }
@@ -968,100 +976,11 @@ export class EpubEngine implements ReaderEngine {
     return outlineFromToc(book, book.navigation.toc, EpubCFI);
   }
 
-  // ---------------------------------------------------------------- find
-
-  /**
-   * epub.js ships no find controller, and its own `Section.find` is a plain
-   * substring scan with no case, accent or word-boundary handling. The search
-   * here is foliate-js's instead (src/vendor/foliate-js) — locale-aware
-   * through Intl.Segmenter, and a generator, so matches are reported as they
-   * are found rather than after the whole book.
-   *
-   * Every section still has to be loaded and unloaded to be searched, which
-   * is epub.js's shape and slow on a long book, so the search reports itself
-   * as pending and fills in as it goes.
-   */
-  find(query: FindQuery): void {
-    const book = this.book;
-    const trimmed = query.query.trim();
-    this.findHits = [];
-    this.findAt = -1;
-    const token = ++this.findToken;
-    if (!book || trimmed === "") {
-      this.reportFind(false);
-      return;
-    }
-    this.findStateHandler?.({ current: 0, total: 0, pending: true, notFound: false });
-
-    const matcher = searchMatcher(textWalker, {
-      matchCase: query.caseSensitive,
-      matchDiacritics: false,
-      matchWholeWords: false,
-    });
-
-    void (async () => {
-      for (const section of book.spine.spineItems) {
-        try {
-          await withSection(book, section, () => {
-            const doc = section.document;
-            if (!doc) return;
-            for (const result of matcher(doc, trimmed)) {
-              // The CFI has to be taken while the section is still loaded —
-              // the Range dies with the document when it is unloaded.
-              this.findHits.push(section.cfiFromRange(result.range));
-            }
-          });
-        } catch (error) {
-          console.error("[e-reader] failed to search an epub section", error);
-        }
-        if (token !== this.findToken) return; // a newer search replaced this one
-        if (this.findAt === -1 && this.findHits.length > 0) {
-          this.findAt = 0;
-          void this.goToHit();
-        }
-        this.reportFind(true);
-      }
-      if (token === this.findToken) this.reportFind(false);
-    })();
-  }
-
-  findNext(backwards: boolean): void {
-    if (this.findHits.length === 0) return;
-    const step = backwards ? -1 : 1;
-    this.findAt = (this.findAt + step + this.findHits.length) % this.findHits.length;
-    void this.goToHit();
-    this.reportFind(false);
-  }
-
-  findClose(): void {
-    this.findToken++;
-    this.findHits = [];
-    this.findAt = -1;
-  }
-
-  onFindState(handler: (state: FindState) => void): void {
-    this.findStateHandler = handler;
-  }
-
-  private async goToHit(): Promise<void> {
-    const cfi = this.findHits[this.findAt];
-    if (cfi === undefined) return;
-    await this.goTo({ kind: "epub", cfi });
-  }
-
-  private reportFind(pending: boolean): void {
-    this.findStateHandler?.({
-      current: this.findAt >= 0 ? this.findAt + 1 : 0,
-      total: this.findHits.length,
-      pending,
-      notFound: !pending && this.findHits.length === 0,
-    });
-  }
-
   destroy(): void {
     this.listeners?.abort();
     this.listeners = null;
     this.contextMenuHandler = null;
+    this.tapHandler = null;
     this.selectionEndHandler = null;
     this.changeHandler = null;
     this.resizeObserver?.disconnect();
@@ -1070,10 +989,6 @@ export class EpubEngine implements ReaderEngine {
       this.container?.win.clearTimeout(this.resizeTimer);
       this.resizeTimer = null;
     }
-    this.findStateHandler = null;
-    this.findHits = [];
-    this.findAt = -1;
-    this.findToken++;
     this.turning = false;
     this.turnBlocked = false;
     this.overscroll = 0;

@@ -139,41 +139,12 @@
   flex: 0 0 auto;
   background: var(--background-primary);
   border-bottom: var(--border-width) solid var(--background-modifier-border);
-}
-
-.ereader-toolbar__bar {
   display: flex;
   align-items: stretch;
   justify-content: space-between;
   gap: var(--size-4-2);
   padding: var(--size-4-1) var(--size-4-3);
   overflow-x: auto;
-}
-
-/* The find bar is a second row that appears beneath the toolbar proper. */
-.ereader-toolbar__find {
-  display: flex;
-  align-items: center;
-  gap: var(--size-4-1);
-  padding: var(--size-4-1) var(--size-4-3);
-  border-top: var(--border-width) solid var(--background-modifier-border);
-}
-
-.ereader-toolbar__find-input {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.ereader-toolbar__find-input.mod-not-found {
-  background-color: rgba(var(--background-modifier-error-rgb), 0.15);
-  border-color: rgba(var(--background-modifier-error-rgb), 0.6);
-}
-
-.ereader-toolbar__find-count {
-  white-space: nowrap;
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
 }
 
 .ereader-toolbar__group {
@@ -413,30 +384,6 @@
   position: absolute;
   border-radius: 2px;
   mix-blend-mode: multiply;
-}
-
-/* Find marks get their own layer beside the saved highlights so that
-   repainting a search does not wipe the highlights, or the other way round.
-   Same blend-mode reasoning as above: no `z-index`, so the boxes blend with
-   the rendered page rather than covering it. */
-.ereader-reader__pdf-find {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.ereader-reader__pdf-find .ereader-hl-find {
-  position: absolute;
-  border-radius: 2px;
-  mix-blend-mode: multiply;
-  background: var(--text-highlight-bg);
-}
-
-/* The match the find bar is currently on, told apart from the rest. */
-.ereader-reader__pdf-find .ereader-hl-find--current {
-  background: var(--text-selection);
-  outline: 1px solid var(--interactive-accent);
 }
 
 /* "Adapt to theme": the filter goes on the whole page, not just the canvas,

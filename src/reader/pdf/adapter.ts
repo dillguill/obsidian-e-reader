@@ -25,7 +25,7 @@ import { type App, Platform } from "obsidian";
 import type { PdfFit } from "../../settings/settings-model";
 import type { Locator } from "../../core/types";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
-import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine, SearchHit } from "../engine";
+import type { DisplayOption, EngineSelection, FindQuery, FindState, OutlineNode, PageState, PaintedHighlight, ReaderEngine } from "../engine";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
 import { pdfPageToPercent } from "../progress";
 import type { SpreadMode } from "../spread";
@@ -62,6 +62,7 @@ interface PdfjsModule {
 /** pdf.js's own event channel between the viewer and its host. */
 interface PdfjsEventBus {
   on(event: string, handler: (payload: Record<string, unknown>) => void): void;
+  dispatch(event: string, payload: Record<string, unknown>): void;
 }
 
 interface PdfjsPageView {
@@ -84,11 +85,18 @@ interface PdfjsLinkService {
   setDocument(doc: PdfjsDocument | null, baseUrl?: unknown): void;
 }
 
+/** pdf.js's own search: match counting, highlight-all, wrapping, all of it. */
+interface PdfjsFindController {
+  setDocument(doc: PdfjsDocument | null): void;
+}
+
 interface PdfjsViewerModule {
   EventBus: new () => PdfjsEventBus;
   PDFViewer: new (options: Record<string, unknown>) => PdfjsViewer;
   PDFLinkService: new (options: { eventBus: PdfjsEventBus }) => PdfjsLinkService;
+  PDFFindController: new (options: { eventBus: PdfjsEventBus; linkService: PdfjsLinkService }) => PdfjsFindController;
   SpreadMode: { NONE: number; ODD: number; EVEN: number };
+  FindState: { FOUND: number; NOT_FOUND: number; WRAPPED: number; PENDING: number };
 }
 
 export interface PdfPreferences {
@@ -143,6 +151,9 @@ async function outlineFromPdf(doc: PdfjsDocument, items: PdfjsOutlineItem[]): Pr
 function scaleValueFor(fit: PdfFit, scale: number): string {
   if (fit === "width") return "page-width";
   if (fit === "height") return "page-height";
+  // "page-fit" is the whole page in view — both dimensions — as against
+  // "page-height", which fits the height and lets the width overflow.
+  if (fit === "page") return "page-fit";
   return String(clampScale(scale));
 }
 
@@ -152,6 +163,12 @@ export class PdfEngine implements ReaderEngine {
   private scrollEl: HTMLElement | null = null;
   private viewer: PdfjsViewer | null = null;
   private linkService: PdfjsLinkService | null = null;
+  private findController: PdfjsFindController | null = null;
+  private eventBus: PdfjsEventBus | null = null;
+  private findStateHandler: ((state: FindState) => void) | null = null;
+  /** The query in force, so "find again" can repeat it. */
+  private findQuery: FindQuery | null = null;
+  private findStates: PdfjsViewerModule["FindState"] | null = null;
   private workerBlobUrl: string | null = null;
   private contextMenuHandler: ((position: { x: number; y: number }) => void) | null = null;
   private selectionEndHandler: (() => void) | null = null;
@@ -195,11 +212,16 @@ export class PdfEngine implements ReaderEngine {
 
     const eventBus = new viewerModule.EventBus();
     const linkService = new viewerModule.PDFLinkService({ eventBus });
+    const findController = new viewerModule.PDFFindController({ eventBus, linkService });
+    this.eventBus = eventBus;
+    this.findController = findController;
+    this.findStates = viewerModule.FindState;
     const viewer = new viewerModule.PDFViewer({
       container: scrollEl,
       viewer: viewerEl,
       eventBus,
       linkService,
+      findController,
       // `textLayerMode` is deliberately NOT passed: TextLayerMode is internal
       // to pdf_viewer.mjs and is not among its exports, so reaching for it
       // threw before a page could render. ENABLE is the default anyway.
@@ -233,11 +255,17 @@ export class PdfEngine implements ReaderEngine {
       if (pageNumber) this.paintPage(pageNumber);
     });
 
+    // pdf.js reports a find's progress through the bus rather than a promise,
+    // because it streams over the document a page at a time.
+    eventBus.on("updatefindcontrolstate", (payload) => this.reportFindState(payload));
+    eventBus.on("updatefindmatchescount", (payload) => this.reportFindState(payload));
+
     const data = await this.app.vault.adapter.readBinary(path);
     const doc = await lib.getDocument({ data }).promise;
     this.doc = doc;
     viewer.setDocument(doc);
     linkService.setDocument(doc, null);
+    findController.setDocument(doc);
 
     this.addSelectionListeners();
     this.addPinchListeners();
@@ -338,9 +366,17 @@ export class PdfEngine implements ReaderEngine {
       },
       {
         section: "zoom",
+        id: "fit-page",
+        label: "Fit page",
+        icon: "scan",
+        checked: this.fit === "page",
+        apply: () => this.setFit("page"),
+      },
+      {
+        section: "zoom",
         id: "actual-size",
         label: "Actual size",
-        icon: "scan",
+        icon: "square",
         checked: this.fit === "none" && Math.abs(this.scaleValue - 1) < 0.01,
         apply: () => this.setFit("none", 1),
       },
@@ -552,27 +588,56 @@ export class PdfEngine implements ReaderEngine {
     return items ? outlineFromPdf(this.doc, items) : [];
   }
 
-  async search(query: string): Promise<SearchHit[]> {
-    const doc = this.doc;
-    if (!doc || query.trim() === "") return [];
-    const needle = query.toLowerCase();
-    const hits: SearchHit[] = [];
-    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
-      const content = await (await doc.getPage(pageNumber)).getTextContent();
-      const text = content.items.map((item) => item.str).join(" ");
-      const lower = text.toLowerCase();
-      let fromIndex = 0;
-      while (true) {
-        const at = lower.indexOf(needle, fromIndex);
-        if (at === -1) break;
-        hits.push({
-          excerpt: text.slice(Math.max(0, at - 40), Math.min(text.length, at + needle.length + 40)),
-          locator: { kind: "pdf", page: pageNumber },
-        });
-        fromIndex = at + needle.length;
-      }
-    }
-    return hits;
+  // ---------------------------------------------------------------- find
+
+  find(query: FindQuery): void {
+    this.findQuery = query;
+    this.dispatchFind("");
+  }
+
+  findNext(backwards: boolean): void {
+    if (!this.findQuery) return;
+    this.dispatchFind("again", backwards);
+  }
+
+  findClose(): void {
+    this.findQuery = null;
+    // Clears the marks pdf.js painted over the matches.
+    this.eventBus?.dispatch("findbarclose", { source: this });
+  }
+
+  onFindState(handler: (state: FindState) => void): void {
+    this.findStateHandler = handler;
+  }
+
+  private dispatchFind(type: string, findPrevious = false): void {
+    const query = this.findQuery;
+    if (!query || !this.eventBus) return;
+    this.eventBus.dispatch("find", {
+      source: this,
+      type,
+      query: query.query,
+      caseSensitive: query.caseSensitive,
+      entireWord: false,
+      highlightAll: query.highlightAll,
+      findPrevious,
+      matchDiacritics: false,
+    });
+  }
+
+  /** Turns one of pdf.js's two find events into the state the find bar shows. */
+  private reportFindState(payload: Record<string, unknown>): void {
+    const handler = this.findStateHandler;
+    if (!handler) return;
+    const counts = (payload["matchesCount"] ?? {}) as { current?: number; total?: number };
+    const state = payload["state"];
+    const states = this.findStates;
+    handler({
+      current: counts.current ?? 0,
+      total: counts.total ?? 0,
+      pending: states !== null && state === states.PENDING,
+      notFound: states !== null && state === states.NOT_FOUND,
+    });
   }
 
   destroy(): void {
@@ -581,7 +646,12 @@ export class PdfEngine implements ReaderEngine {
     this.contextMenuHandler = null;
     this.selectionEndHandler = null;
     this.changeHandler = null;
+    this.findStateHandler = null;
+    this.findQuery = null;
     this.highlights = [];
+    this.findController?.setDocument(null);
+    this.findController = null;
+    this.eventBus = null;
     this.viewer?.setDocument(null);
     this.linkService?.setDocument(null);
     this.viewer = null;

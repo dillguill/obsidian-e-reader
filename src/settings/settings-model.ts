@@ -118,7 +118,7 @@ export type EpubFlow = "scrolled" | "paginated";
  * 1 is far wider than a phone — so the fit itself is remembered and
  * re-applied whenever the pane is resized or the device rotated.
  */
-export type PdfFit = "none" | "width" | "height";
+export type PdfFit = "none" | "width" | "height" | "page";
 
 /** One reader-configurable highlight kind and the colour it is painted in. */
 export interface AnnotationType {
@@ -190,7 +190,7 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 function isPdfFit(value: unknown): value is PdfFit {
-  return value === "none" || value === "width" || value === "height";
+  return value === "none" || value === "width" || value === "height" || value === "page";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

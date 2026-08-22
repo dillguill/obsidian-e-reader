@@ -11,9 +11,23 @@ export interface OutlineNode {
   children: OutlineNode[];
 }
 
-export interface SearchHit {
-  excerpt: string;
-  locator: Locator;
+/** What a find is looking for. */
+export interface FindQuery {
+  query: string;
+  caseSensitive: boolean;
+  /** Mark every match, not only the current one. */
+  highlightAll: boolean;
+}
+
+/** Where a find has got to, for the find bar to report. */
+export interface FindState {
+  /** 1-based position of the current match; 0 when there is none. */
+  current: number;
+  total: number;
+  /** Still working through the document — an EPUB has to load every section. */
+  pending: boolean;
+  /** A query that finished and matched nothing. */
+  notFound: boolean;
 }
 
 /** A selection inside the rendered document, ready to become an entry. */
@@ -80,7 +94,17 @@ export interface ReaderEngine {
   /** 0–100. */
   progress(): number;
   outline(): Promise<OutlineNode[]>;
-  search(query: string): Promise<SearchHit[]>;
+
+  // ---------------------------------------------------------------- find
+
+  /** Starts a new search, moving to the first match. */
+  find(query: FindQuery): void;
+  /** Moves to the next match, or the previous one. */
+  findNext(backwards: boolean): void;
+  /** Ends the search and clears any marks it left. */
+  findClose(): void;
+  /** Reports progress, since a find runs over the whole document. */
+  onFindState(handler: (state: FindState) => void): void;
   /**
    * The current selection inside the rendered document, or null when there
    * is none. Reading it is a poll rather than an event so callers decide

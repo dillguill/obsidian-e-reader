@@ -140,6 +140,9 @@ export class ReaderView extends FileView {
         this.setHighlightMode(true);
       },
       toggleBookmark: () => void this.toggleBookmark(),
+      find: (query) => this.engine?.find({ query, caseSensitive: false, highlightAll: true }),
+      findNext: (backwards) => this.engine?.findNext(backwards),
+      findClose: () => this.engine?.findClose(),
     });
     this.toolbar.setVisible(false);
 
@@ -296,6 +299,7 @@ export class ReaderView extends FileView {
     engine.onContextMenu((position) => this.showAnnotationMenu(position));
     engine.onSelectionEnd(() => void this.onSelectionEnd());
     engine.onChange(() => this.updateToolbar());
+    engine.onFindState((state) => this.toolbar?.updateFind(state));
     this.toolbar?.setVisible(true);
 
     const restored = this.readStoredLocator(file);

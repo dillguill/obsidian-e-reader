@@ -21,7 +21,7 @@
 import type { Component } from "obsidian";
 import { Menu, setIcon, setTooltip } from "obsidian";
 import type { AnnotationType } from "../settings/settings-model";
-import type { DisplayOption } from "./engine";
+import type { DisplayOption, FindState } from "./engine";
 import type { ToolbarState } from "./toolbar-model";
 import { clampPageInput } from "./toolbar-model";
 
@@ -49,7 +49,14 @@ export interface ToolbarCallbacks {
   /** Chooses the type highlight mode writes, and arms it. */
   chooseHighlightType(name: string): void;
   toggleBookmark(): void;
+  /** Starts or refreshes a search. An empty query ends it. */
+  find(query: string): void;
+  findNext(backwards: boolean): void;
+  findClose(): void;
 }
+
+/** How long to wait after a keystroke before searching. */
+const FIND_DEBOUNCE_MS = 300;
 
 /**
  * Menu sections, in the order they appear. Obsidian's Menu draws a separator
@@ -67,6 +74,10 @@ export class ReaderToolbar {
   private readonly pageCountEl: HTMLElement;
   private readonly highlightEl: HTMLElement;
   private readonly bookmarkEl: HTMLElement;
+  private findEl!: HTMLElement;
+  private findInputEl!: HTMLInputElement;
+  private findCountEl!: HTMLElement;
+  private readonly findButtonEl: HTMLElement;
   /** The last value the box was given, restored when a typed entry is not a number. */
   private lastPageValue = "";
   /** Name of the type the picker ticks. Kept so the menu can be built on demand. */
@@ -74,7 +85,8 @@ export class ReaderToolbar {
 
   constructor(parentEl: HTMLElement, component: Component, callbacks: ToolbarCallbacks) {
     this.rootEl = parentEl.createDiv({ cls: "ereader-toolbar" });
-    const leftEl = this.rootEl.createDiv({ cls: "ereader-toolbar__group" });
+    const barEl = this.rootEl.createDiv({ cls: "ereader-toolbar__bar" });
+    const leftEl = barEl.createDiv({ cls: "ereader-toolbar__group" });
 
     this.zoomOutEl = this.addButton(leftEl, component, "zoom-out", "Zoom out", () => callbacks.zoomOut());
     leftEl.createDiv({ cls: "ereader-toolbar__divider" });
@@ -101,7 +113,8 @@ export class ReaderToolbar {
       callbacks.goToPage(page);
     });
 
-    const rightEl = this.rootEl.createDiv({ cls: "ereader-toolbar__group" });
+    const rightEl = barEl.createDiv({ cls: "ereader-toolbar__group" });
+    this.findButtonEl = this.addButton(rightEl, component, "search", "Find in book", () => this.toggleFind(callbacks));
     this.highlightEl = this.addButton(rightEl, component, "highlighter", "Highlight mode", () =>
       callbacks.highlightOrToggleMode(),
     );
@@ -110,6 +123,7 @@ export class ReaderToolbar {
       this.showTypePicker(event, callbacks);
     });
     this.bookmarkEl = this.addButton(rightEl, component, "bookmark", "Bookmark this page", () => callbacks.toggleBookmark());
+    this.buildFindBar(component, callbacks);
   }
 
   /**
@@ -137,6 +151,77 @@ export class ReaderToolbar {
     }
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     menu.showAtPosition({ x: rect.x, y: rect.bottom });
+  }
+
+  /** The find bar, a second row that appears beneath the toolbar proper. */
+  private buildFindBar(component: Component, callbacks: ToolbarCallbacks): void {
+    const findEl = this.rootEl.createDiv({ cls: "ereader-toolbar__find" });
+    findEl.hide();
+    const inputEl = findEl.createEl("input", {
+      cls: "ereader-toolbar__find-input",
+      attr: { type: "text", placeholder: "Find in book…", "aria-label": "Find in book" },
+    });
+    const countEl = findEl.createSpan({ cls: "ereader-toolbar__find-count" });
+    this.addButton(findEl, component, "chevron-up", "Previous match", () => callbacks.findNext(true));
+    this.addButton(findEl, component, "chevron-down", "Next match", () => callbacks.findNext(false));
+    this.addButton(findEl, component, "x", "Close", () => this.closeFind(callbacks));
+
+    let pending: number | null = null;
+    component.registerDomEvent(inputEl, "input", () => {
+      if (pending !== null) inputEl.win.clearTimeout(pending);
+      // A search runs over the whole document — for an EPUB that means loading
+      // every section — so it waits for the typing to stop.
+      pending = inputEl.win.setTimeout(() => {
+        pending = null;
+        callbacks.find(inputEl.value);
+      }, FIND_DEBOUNCE_MS);
+    });
+    component.registerDomEvent(inputEl, "keydown", (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        this.closeFind(callbacks);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        callbacks.findNext(event.shiftKey);
+      }
+    });
+
+    this.findEl = findEl;
+    this.findInputEl = inputEl;
+    this.findCountEl = countEl;
+  }
+
+  private toggleFind(callbacks: ToolbarCallbacks): void {
+    if (this.findEl.isShown()) {
+      this.closeFind(callbacks);
+      return;
+    }
+    this.findEl.show();
+    this.findButtonEl.addClass("is-active");
+    this.findInputEl.focus();
+    this.findInputEl.select();
+    if (this.findInputEl.value !== "") callbacks.find(this.findInputEl.value);
+  }
+
+  private closeFind(callbacks: ToolbarCallbacks): void {
+    this.findEl.hide();
+    this.findButtonEl.removeClass("is-active");
+    this.findCountEl.setText("");
+    callbacks.findClose();
+  }
+
+  /** Reports where the search has got to. */
+  updateFind(state: FindState): void {
+    if (state.pending && state.total === 0) {
+      this.findCountEl.setText("searching…");
+    } else if (state.notFound) {
+      this.findCountEl.setText("no matches");
+    } else if (state.total === 0) {
+      this.findCountEl.setText("");
+    } else {
+      this.findCountEl.setText(`${state.current} of ${state.total}${state.pending ? "…" : ""}`);
+    }
+    this.findInputEl.toggleClass("mod-not-found", state.notFound);
   }
 
   private addButton(

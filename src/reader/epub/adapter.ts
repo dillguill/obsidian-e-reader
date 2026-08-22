@@ -21,6 +21,8 @@
 import { type App, Platform } from "obsidian";
 import type { Locator } from "../../core/types";
 import type { EpubFlow } from "../../settings/settings-model";
+import { searchMatcher } from "../../vendor/foliate-js/search";
+import { textWalker } from "../../vendor/foliate-js/text-walker";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
 import type { DisplayOption, EngineSelection, FindQuery, FindState, OutlineNode, PageState, PaintedHighlight, ReaderEngine } from "../engine";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
@@ -37,18 +39,15 @@ interface EpubNavigation {
   toc: EpubNavItem[];
 }
 
-interface EpubSectionMatch {
-  cfi: string;
-  excerpt: string;
-}
-
 /** epub.js's Section (book.spine.get(...) / book.spine.spineItems entries). */
 interface EpubSection {
   /** Resolves with the section document's `documentElement`, not its body. */
   load(request: (url: string) => Promise<unknown>): Promise<Element>;
   unload(): void;
-  find(query: string): EpubSectionMatch[];
   cfiFromElement(el: Element): string;
+  cfiFromRange(range: Range): string;
+  /** Set by `load`; the section's parsed document. Undefined once unloaded. */
+  document?: Document;
 }
 
 interface EpubSpine {
@@ -136,6 +135,26 @@ export interface EpubEngineOptions extends EpubPreferences {
 }
 
 /**
+ * Loads a section for inspection and leaves it as it was found.
+ *
+ * `Section.unload()` clears the section's parsed document, and epub.js's
+ * rendered view holds the SAME Section objects the spine does — so unloading
+ * one that is currently on screen pulls the document out from under the
+ * reader and the page goes blank. Searching walks every section in the book,
+ * which always includes the one being read, so a section that was already
+ * loaded is left loaded.
+ */
+async function withSection<T>(book: EpubBook, section: EpubSection, use: () => T): Promise<T> {
+  const wasLoaded = section.document !== undefined;
+  await section.load((url) => book.load(url));
+  try {
+    return use();
+  } finally {
+    if (!wasLoaded) section.unload();
+  }
+}
+
+/**
  * The element a TOC entry should anchor to.
  *
  * NOT the element `section.load()` resolves with. That is the document's
@@ -174,10 +193,12 @@ async function cfiForHref(book: EpubBook, href: string, EpubCFI: EpubCfiClass): 
   const section = book.spine.get(href);
   if (!section) return null;
   try {
-    const root = await section.load((url) => book.load(url));
-    const target = anchorElement(root, href);
-    if (!target) return null;
-    const cfi = section.cfiFromElement(target);
+    return await withSection(book, section, () => {
+      const root = section.document?.documentElement;
+      if (!root) return null;
+      const target = anchorElement(root, href);
+      if (!target) return null;
+      const cfi = section.cfiFromElement(target);
 
     // Prove it resolves while the section's document is still in hand. A CFI
     // that cannot become a Range takes the reader's view manager down with
@@ -186,20 +207,19 @@ async function cfiForHref(book: EpubBook, href: string, EpubCFI: EpubCfiClass): 
     // returns never settles and the caller waits forever on a blank page
     // with nothing thrown and nothing logged. Far better to drop the entry
     // here, where the outline can simply omit it.
-    const doc = root.ownerDocument;
-    if (doc) {
-      const range = new EpubCFI(cfi).toRange(doc);
-      if (!range) {
-        console.warn("[e-reader] dropping a TOC entry whose CFI does not resolve", href, cfi);
-        return null;
+      const doc = root.ownerDocument;
+      if (doc) {
+        const range = new EpubCFI(cfi).toRange(doc);
+        if (!range) {
+          console.warn("[e-reader] dropping a TOC entry whose CFI does not resolve", href, cfi);
+          return null;
+        }
       }
-    }
-    return cfi;
+      return cfi;
+    });
   } catch (error) {
     console.error("[e-reader] failed to resolve TOC entry to a CFI", href, error);
     return null;
-  } finally {
-    section.unload();
   }
 }
 
@@ -359,9 +379,10 @@ export class EpubEngine implements ReaderEngine {
       contents.document.addEventListener("contextmenu", (event: MouseEvent) => {
         const handler = this.contextMenuHandler;
         if (!handler) return;
-        // See the PDF adapter: preventing a long press's `contextmenu` on a
-        // touchscreen cancels the selection UI it was meant to start.
-        if (Platform.isMobile && this.getSelection() === null) return;
+        // See the PDF adapter: a long press fires `contextmenu` with the
+        // platform's selection already made, so claiming it interrupts the
+        // selection the reader is still adjusting.
+        if (Platform.isMobile) return;
         event.preventDefault();
         const frame = contents.window.frameElement;
         const frameRect = frame?.getBoundingClientRect();
@@ -910,10 +931,15 @@ export class EpubEngine implements ReaderEngine {
   // ---------------------------------------------------------------- find
 
   /**
-   * epub.js has no find controller, so this is built on its per-section
-   * `find`. Every section has to be loaded and unloaded to be searched, which
-   * is slow enough that the search reports itself as pending and fills in as
-   * it goes rather than blocking on the whole book.
+   * epub.js ships no find controller, and its own `Section.find` is a plain
+   * substring scan with no case, accent or word-boundary handling. The search
+   * here is foliate-js's instead (src/vendor/foliate-js) — locale-aware
+   * through Intl.Segmenter, and a generator, so matches are reported as they
+   * are found rather than after the whole book.
+   *
+   * Every section still has to be loaded and unloaded to be searched, which
+   * is epub.js's shape and slow on a long book, so the search reports itself
+   * as pending and fills in as it goes.
    */
   find(query: FindQuery): void {
     const book = this.book;
@@ -926,24 +952,29 @@ export class EpubEngine implements ReaderEngine {
       return;
     }
     this.findStateHandler?.({ current: 0, total: 0, pending: true, notFound: false });
+
+    const matcher = searchMatcher(textWalker, {
+      matchCase: query.caseSensitive,
+      matchDiacritics: false,
+      matchWholeWords: false,
+    });
+
     void (async () => {
       for (const section of book.spine.spineItems) {
         try {
-          await section.load((url) => book.load(url));
-          // epub.js's own find is case-sensitive only in the sense that it
-          // does a plain substring match, so a case-insensitive search is
-          // filtered here rather than asked of it.
-          for (const match of section.find(trimmed)) {
-            if (query.caseSensitive && !match.excerpt.includes(trimmed)) continue;
-            this.findHits.push(match.cfi);
-          }
+          await withSection(book, section, () => {
+            const doc = section.document;
+            if (!doc) return;
+            for (const result of matcher(doc, trimmed)) {
+              // The CFI has to be taken while the section is still loaded —
+              // the Range dies with the document when it is unloaded.
+              this.findHits.push(section.cfiFromRange(result.range));
+            }
+          });
         } catch (error) {
           console.error("[e-reader] failed to search an epub section", error);
-        } finally {
-          section.unload();
         }
         if (token !== this.findToken) return; // a newer search replaced this one
-        // Land on the first match as soon as there is one to land on.
         if (this.findAt === -1 && this.findHits.length > 0) {
           this.findAt = 0;
           void this.goToHit();

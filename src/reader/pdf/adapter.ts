@@ -149,6 +149,10 @@ async function outlineFromPdf(doc: PdfjsDocument, items: PdfjsOutlineItem[]): Pr
 
 /** pdf.js's name for each of our fit modes. */
 function scaleValueFor(fit: PdfFit, scale: number): string {
+  // pdf.js's own default: it picks between fitting the width and showing the
+  // page whole, by how wide the pane is. On a phone, where "actual size" is
+  // a page far wider than the screen, that is the sane thing to land on.
+  if (fit === "auto") return "auto";
   if (fit === "width") return "page-width";
   if (fit === "height") return "page-height";
   // "page-fit" is the whole page in view — both dimensions — as against
@@ -350,6 +354,14 @@ export class PdfEngine implements ReaderEngine {
     return [
       {
         section: "zoom",
+        id: "fit-auto",
+        label: "Automatic",
+        icon: "wand",
+        checked: this.fit === "auto",
+        apply: () => this.setFit("auto"),
+      },
+      {
+        section: "zoom",
         id: "fit-width",
         label: "Fit width",
         icon: "move-horizontal",
@@ -512,11 +524,13 @@ export class PdfEngine implements ReaderEngine {
       (event: MouseEvent) => {
         const handler = this.contextMenuHandler;
         if (!handler) return;
-        // A long press on a touchscreen fires `contextmenu`, and preventing it
-        // cancels the platform's own selection UI along with it — so the press
-        // meant to select text would open this menu instead. On touch the menu
-        // is only claimed once there is a selection to act on.
-        if (Platform.isMobile && this.getSelection() === null) return;
+        // Never on a touchscreen. A long press fires `contextmenu`, and the
+        // platform has already selected a word by the time it does — so
+        // "claim it only when there is a selection" claimed every one of
+        // them, opening this menu on top of the selection the reader was
+        // still adjusting. Touch reaches the same actions by selecting and
+        // then tapping the toolbar, which needs no gesture of its own.
+        if (Platform.isMobile) return;
         event.preventDefault();
         handler({ x: event.clientX, y: event.clientY });
       },

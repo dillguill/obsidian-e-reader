@@ -118,6 +118,8 @@ export interface AnnotationType {
 }
 
 export interface Settings {
+  /** Schema version of this object, so a rename can be migrated once. */
+  version: number;
   properties: PropertyNames;
   /** Reader-configurable highlight types. Never contains `bookmark` — reserved (FR-020a, FR-028a). */
   annotationTypes: AnnotationType[];
@@ -127,7 +129,27 @@ export interface Settings {
   reader: ReaderPreferences;
 }
 
+/**
+ * Bump when a saved value's MEANING changes and old data has to be upgraded.
+ * 2: the written properties moved to the `reading_` namespace.
+ */
+export const SETTINGS_VERSION = 2;
+
+/**
+ * The names those properties had at version 1. Data saved then pinned these
+ * into `data.json` — not because anyone chose them, but because saving any
+ * setting persists the whole object — and a saved value normally wins over a
+ * default, which would have left the reader writing the old names forever.
+ * A name that does NOT appear here was typed by the reader and is kept.
+ */
+const LEGACY_PROPERTY_NAMES: Partial<Record<keyof PropertyNames, string>> = {
+  progress: "progress",
+  lastRead: "last-read",
+  furthestRead: "furthest-read",
+};
+
 export const DEFAULT_SETTINGS: Settings = {
+  version: SETTINGS_VERSION,
   properties: {
     marker: "type",
     markerValue: "book",
@@ -176,14 +198,16 @@ function mergeString(value: unknown, fallback: string): string {
 
 const PROPERTY_KEYS = Object.keys(DEFAULT_SETTINGS.properties) as (keyof PropertyNames)[];
 
-function mergeProperties(saved: unknown): PropertyNames {
+function mergeProperties(saved: unknown, version: number): PropertyNames {
   const savedProperties = isRecord(saved) ? saved : {};
   const result: PropertyNames = { ...DEFAULT_SETTINGS.properties };
   for (const key of PROPERTY_KEYS) {
     const value = savedProperties[key];
-    if (typeof value === "string" && value.trim() !== "") {
-      result[key] = value;
-    }
+    if (typeof value !== "string" || value.trim() === "") continue;
+    // Pre-namespace data carries the old defaults; those are upgraded rather
+    // than honoured. Anything else is a real override and is kept.
+    if (version < 2 && LEGACY_PROPERTY_NAMES[key] === value) continue;
+    result[key] = value;
   }
   return result;
 }
@@ -272,7 +296,10 @@ function mergeReaderPreferences(saved: Record<string, unknown>, types: Annotatio
  */
 export function mergeSettings(saved: unknown): Settings {
   const savedObject = isRecord(saved) ? saved : {};
+  // Absent means version 1 — the schema predates this field.
+  const version = typeof savedObject["version"] === "number" ? savedObject["version"] : 1;
   const {
+    version: _version,
     properties: _properties,
     annotationTypes: _annotationTypes,
     readers: _readers,
@@ -284,7 +311,8 @@ export function mergeSettings(saved: unknown): Settings {
   const annotationTypes = mergeAnnotationTypes(savedObject.annotationTypes);
   return {
     ...rest,
-    properties: mergeProperties(savedObject.properties),
+    version: SETTINGS_VERSION,
+    properties: mergeProperties(savedObject.properties, version),
     annotationTypes,
     readers: mergeReaders(savedObject),
     panes: mergePanes(savedObject),

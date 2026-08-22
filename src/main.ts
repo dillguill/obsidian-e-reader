@@ -6,7 +6,7 @@ import { READER_VIEW_TYPE, ReaderView } from "./reader/reader-view";
 import { HIGHLIGHTS_VIEW_TYPE, HighlightsView } from "./sidebar/highlights-view";
 import { OUTLINE_VIEW_TYPE, OutlineView } from "./sidebar/outline-view";
 import { EReaderSettingTab, type SettingsHost } from "./settings/settings-tab";
-import { type Settings, DEFAULT_SETTINGS, mergeSettings } from "./settings/settings-model";
+import { type Settings, DEFAULT_SETTINGS, SETTINGS_VERSION, mergeSettings } from "./settings/settings-model";
 
 /** Obsidian's own outline pane. Closed once at startup when the reader asks for it. */
 const NATIVE_OUTLINE_VIEW_TYPE = "outline";
@@ -92,7 +92,14 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
   }
 
   private async setUp(): Promise<void> {
-    this.settings = mergeSettings(await this.loadData());
+    const saved: unknown = await this.loadData();
+    this.settings = mergeSettings(saved);
+    // Persist a migration straight away rather than waiting for whatever
+    // incidental save happens to come next, so `data.json` and the running
+    // settings never disagree about which properties the reader writes.
+    const savedVersion =
+      typeof saved === "object" && saved !== null ? (saved as { version?: unknown }).version : undefined;
+    if (savedVersion !== SETTINGS_VERSION) await this.saveSettings();
 
     this.addSettingTab(new EReaderSettingTab(this.app, this));
 

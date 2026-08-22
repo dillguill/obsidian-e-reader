@@ -43,6 +43,7 @@ interface EpubSectionMatch {
 
 /** epub.js's Section (book.spine.get(...) / book.spine.spineItems entries). */
 interface EpubSection {
+  /** Resolves with the section document's `documentElement`, not its body. */
   load(request: (url: string) => Promise<unknown>): Promise<Element>;
   unload(): void;
   find(query: string): EpubSectionMatch[];
@@ -134,19 +135,48 @@ export interface EpubEngineOptions extends EpubPreferences {
 }
 
 /**
+ * The element a TOC entry should anchor to.
+ *
+ * NOT the element `section.load()` resolves with. That is the document's
+ * `documentElement` — the `<html>` — and a CFI built from it has no path
+ * steps of its own, because epub.js walks from the element up to the document
+ * and stops immediately. `EpubCFI.toRange` then hands that empty step list to
+ * `stepsToXpath`, which reads `.index` off a step that is not there and
+ * throws. Inside `display()` that rejection lands between rendering the new
+ * view and `views.show()`, so the section is rendered but never revealed and
+ * the promise never settles: a blank, inert page and a navigation that
+ * silently hangs.
+ *
+ * An href's fragment is honoured where it has one, so a TOC entry pointing
+ * partway into a file lands there rather than at the top of the file.
+ */
+function anchorElement(root: Element, href: string): Element | null {
+  const doc = root.ownerDocument;
+  const fragment = href.split("#")[1];
+  if (doc && fragment) {
+    const byId = doc.getElementById(fragment);
+    if (byId) return byId;
+  }
+  const body = doc?.body ?? root.querySelector("body");
+  return body?.firstElementChild ?? body ?? null;
+}
+
+/**
  * Resolves a TOC entry's href to a real CFI by briefly loading that
- * section's document and asking epub.js for a CFI at its root element, then
- * unloading it again. epub.js's navigation.toc only carries hrefs, but this
- * plugin's Locator (core/types.ts) is CFI-only — see locator.ts's EPUB_RE —
- * so outline entries need converting once, up front, rather than deferring
- * to a href-based Locator variant.
+ * section's document and asking epub.js for a CFI at a real element inside
+ * it, then unloading it again. epub.js's navigation.toc only carries hrefs,
+ * but this plugin's Locator (core/types.ts) is CFI-only — see locator.ts's
+ * EPUB_RE — so outline entries need converting once, up front, rather than
+ * deferring to a href-based Locator variant.
  */
 async function cfiForHref(book: EpubBook, href: string): Promise<string | null> {
   const section = book.spine.get(href);
   if (!section) return null;
   try {
     const root = await section.load((url) => book.load(url));
-    return section.cfiFromElement(root);
+    const target = anchorElement(root, href);
+    if (!target) return null;
+    return section.cfiFromElement(target);
   } catch (error) {
     console.error("[e-reader] failed to resolve TOC entry to a CFI", href, error);
     return null;

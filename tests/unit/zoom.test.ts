@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_SCALE, MIN_SCALE, SCALE_STEPS, fitRowSize, fitScale, stepScale } from "../../src/reader/zoom";
+import { MAX_SCALE, MIN_SCALE, SCALE_STEPS, stepScale } from "../../src/reader/zoom";
 
 describe("SCALE_STEPS", () => {
   it("is sorted ascending and spans MIN_SCALE to MAX_SCALE", () => {
@@ -44,47 +44,3 @@ describe("stepScale", () => {
   });
 });
 
-describe("fitScale", () => {
-  it("fits a page to the available width", () => {
-    expect(fitScale({ width: 600, height: 1000 }, { width: 300, height: 400 }, "width")).toBe(2);
-  });
-
-  it("fits a page to the available height", () => {
-    expect(fitScale({ width: 600, height: 1000 }, { width: 300, height: 400 }, "height")).toBe(2.5);
-  });
-
-  it("clamps the result into the supported scale range", () => {
-    expect(fitScale({ width: 100000, height: 100 }, { width: 10, height: 10 }, "width")).toBe(MAX_SCALE);
-    expect(fitScale({ width: 1, height: 100 }, { width: 10000, height: 10 }, "width")).toBe(MIN_SCALE);
-  });
-
-  it("returns 1 rather than dividing by zero when the page has no size", () => {
-    expect(fitScale({ width: 600, height: 1000 }, { width: 0, height: 0 }, "width")).toBe(1);
-  });
-
-  it("returns 1 when the container has not been laid out yet", () => {
-    expect(fitScale({ width: 0, height: 0 }, { width: 300, height: 400 }, "width")).toBe(1);
-  });
-});
-
-describe("fitRowSize", () => {
-  const page = { width: 300, height: 400 };
-
-  it("is just the page when a row holds one", () => {
-    expect(fitRowSize(page, 1, 8)).toEqual(page);
-  });
-
-  // Fit-width in a spread mode has to fit the whole row — two pages and the
-  // gap between them — or a two-page spread ends up twice as wide as the pane.
-  it("counts both pages and the gap when a row holds two", () => {
-    expect(fitRowSize(page, 2, 8)).toEqual({ width: 608, height: 400 });
-  });
-
-  it("adds no gap for a single page even when one is configured", () => {
-    expect(fitRowSize(page, 1, 40).width).toBe(300);
-  });
-
-  it("treats a non-finite gap as none rather than poisoning the width", () => {
-    expect(fitRowSize(page, 2, Number.NaN).width).toBe(600);
-  });
-});

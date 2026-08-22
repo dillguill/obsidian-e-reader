@@ -18,7 +18,7 @@
 // epub.js type may leak past this module — callers only see
 // ReaderEngine/OutlineNode/... (../engine.ts).
 
-import { type App, Platform } from "obsidian";
+import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
 import type { EpubFlow } from "../../settings/settings-model";
 import { searchMatcher } from "../../vendor/foliate-js/search";
@@ -112,6 +112,8 @@ interface EpubAnnotations {
 
 interface EpubRendition {
   display(target?: string): Promise<void>;
+  /** Recomputes the layout and re-displays at the current position. */
+  resize(width?: number, height?: number, epubcfi?: string): void;
   next(): Promise<void>;
   prev(): Promise<void>;
   on(event: "relocated", callback: (location: EpubCurrentLocation) => void): void;
@@ -257,6 +259,9 @@ const OVERSCROLL_THRESHOLD_PX = 160;
 /** A gesture is over once no scroll event has arrived for this long. */
 const GESTURE_IDLE_MS = 180;
 
+/** How long the pane must hold still before the book is reflowed. */
+const RESIZE_SETTLE_MS = 200;
+
 /**
  * epub.js's name for each of our flow modes.
  *
@@ -302,7 +307,7 @@ export class EpubEngine implements ReaderEngine {
   private rendition: EpubRendition | null = null;
   private container: HTMLElement | null = null;
   private lastCfi: string | null = null;
-  private contextMenuHandler: ((position: { x: number; y: number }) => void) | null = null;
+  private contextMenuHandler: ((position: { x: number; y: number }) => boolean) | null = null;
   private selectionEndHandler: (() => void) | null = null;
   private changeHandler: (() => void) | null = null;
   private textScale: number;
@@ -329,6 +334,9 @@ export class EpubEngine implements ReaderEngine {
    * epub.js tearing down the iframes and the caller removing the container.
    */
   private listeners: AbortController | null = null;
+  /** Reflows the book when the pane changes size — see watchForResize. */
+  private resizeObserver: ResizeObserver | null = null;
+  private resizeTimer: number | null = null;
   /** Every match of the query in force, in reading order. */
   private findHits: string[] = [];
   private findAt = -1;
@@ -379,17 +387,15 @@ export class EpubEngine implements ReaderEngine {
       contents.document.addEventListener("contextmenu", (event: MouseEvent) => {
         const handler = this.contextMenuHandler;
         if (!handler) return;
-        // See the PDF adapter: a long press fires `contextmenu` with the
-        // platform's selection already made, so claiming it interrupts the
-        // selection the reader is still adjusting.
-        if (Platform.isMobile) return;
-        event.preventDefault();
         const frame = contents.window.frameElement;
         const frameRect = frame?.getBoundingClientRect();
-        handler({
+        // Only suppress the default if the reader took the press — see the
+        // PDF adapter.
+        const claimed = handler({
           x: event.clientX + (frameRect?.left ?? 0),
           y: event.clientY + (frameRect?.top ?? 0),
         });
+        if (claimed) event.preventDefault();
       }, options);
       // Selection gestures, like the context menu, do not cross the iframe
       // boundary and have to be attached per section.
@@ -409,6 +415,7 @@ export class EpubEngine implements ReaderEngine {
     // covers everything in the pane that is NOT the section's iframe.
     this.addScrollIntentListeners(container);
     this.addPinchListeners(container);
+    this.watchForResize(container);
     await rendition.display();
 
     // Whole-book percentage needs the character-offset index epub.js builds
@@ -695,6 +702,39 @@ export class EpubEngine implements ReaderEngine {
     }, GESTURE_IDLE_MS);
   }
 
+  /**
+   * Reflows the book when the pane changes size.
+   *
+   * epub.js watches `window` for resizes and nothing else (its Stage attaches
+   * a plain window listener), which misses every way this pane actually
+   * changes size: a mobile keyboard opening, the find bar appearing, a split
+   * being dragged. None of those resize the window, so the stage kept the
+   * size it was built with and the reader was left looking at empty space
+   * outside the content.
+   *
+   * `rendition.resize()` is epub.js's own reflow, re-displaying at the
+   * current position, so this is a matter of telling it something happened
+   * rather than laying anything out here.
+   */
+  private watchForResize(container: HTMLElement): void {
+    if (typeof ResizeObserver === "undefined") return;
+    this.resizeObserver = new ResizeObserver(() => {
+      // A keyboard animating in fires this many times a second; reflowing a
+      // book is far too expensive to do per frame.
+      const win = container.win;
+      if (this.resizeTimer !== null) win.clearTimeout(this.resizeTimer);
+      this.resizeTimer = win.setTimeout(() => {
+        this.resizeTimer = null;
+        try {
+          this.rendition?.resize();
+        } catch (error) {
+          console.error("[e-reader] failed to reflow after a resize", error);
+        }
+      }, RESIZE_SETTLE_MS);
+    });
+    this.resizeObserver.observe(container);
+  }
+
   /** epub.js's stage, which is what scrolls in `scrolled-doc`. */
   private stageEl(): HTMLElement | null {
     return this.container?.querySelector<HTMLElement>(".epub-container") ?? null;
@@ -906,7 +946,7 @@ export class EpubEngine implements ReaderEngine {
     return null;
   }
 
-  onContextMenu(handler: (position: { x: number; y: number }) => void): void {
+  onContextMenu(handler: (position: { x: number; y: number }) => boolean): void {
     this.contextMenuHandler = handler;
   }
 
@@ -1024,6 +1064,12 @@ export class EpubEngine implements ReaderEngine {
     this.contextMenuHandler = null;
     this.selectionEndHandler = null;
     this.changeHandler = null;
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    if (this.resizeTimer !== null) {
+      this.container?.win.clearTimeout(this.resizeTimer);
+      this.resizeTimer = null;
+    }
     this.findStateHandler = null;
     this.findHits = [];
     this.findAt = -1;

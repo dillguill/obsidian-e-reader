@@ -78,6 +78,12 @@ export class ReaderView extends FileView {
    * one click.
    */
   private highlightMode = false;
+  /**
+   * The selection as it stood when the highlight button was pressed. Pressing
+   * a button outside the text collapses the selection, so by the time the
+   * click handler runs there may be nothing left to read.
+   */
+  private capturedSelection: EngineSelection | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -121,7 +127,10 @@ export class ReaderView extends FileView {
       zoomOut: () => void this.zoom(-1),
       goToPage: (page) => void this.goToPage(page),
       displayOptions: () => this.displayOptions(),
-      toggleHighlightMode: () => this.setHighlightMode(!this.highlightMode),
+      highlightOrToggleMode: () => void this.highlightOrToggleMode(),
+      captureSelection: () => {
+        this.capturedSelection = this.selection();
+      },
       annotationTypes: () => this.getSettings().annotationTypes,
       chooseHighlightType: (name) => {
         this.getSettings().reader.activeAnnotationType = name;
@@ -233,6 +242,7 @@ export class ReaderView extends FileView {
     this.entries = [];
     this.lastEntrySignature = null;
     this.highlightMode = false;
+    this.capturedSelection = null;
     this.toolbar?.setVisible(false);
     this.clearViewport();
 
@@ -500,6 +510,26 @@ export class ReaderView extends FileView {
     const active = settings.reader.activeAnnotationType;
     if (active !== "" && settings.annotationTypes.some((type) => type.name === active)) return active;
     return settings.annotationTypes[0]?.name ?? "";
+  }
+
+  /**
+   * The highlight button does whichever of its two jobs the moment calls for:
+   * with text selected it highlights that, and with nothing selected it arms
+   * the mode so a drag highlights directly. One button, because on a
+   * touchscreen there is no drag-release to trigger on — a long-press
+   * selection settles after the touch ends — so "select, then tap" is the
+   * only gesture that works there.
+   */
+  private async highlightOrToggleMode(): Promise<void> {
+    const selection = this.selection() ?? this.capturedSelection;
+    this.capturedSelection = null;
+    const type = this.activeType();
+    if (selection && selection.exact !== "" && type !== "") {
+      this.clearSelection();
+      await this.createEntry(type, selection);
+      return;
+    }
+    this.setHighlightMode(!this.highlightMode);
   }
 
   private setHighlightMode(on: boolean): void {

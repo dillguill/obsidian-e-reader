@@ -31,8 +31,19 @@ export interface ToolbarCallbacks {
   goToPage(page: number): void;
   /** Read fresh each time the menu opens, so the ticks reflect the current state. */
   displayOptions(): DisplayOption[];
-  /** Arms or disarms highlight mode. */
-  toggleHighlightMode(): void;
+  /**
+   * Highlights the current selection if there is one, and otherwise arms or
+   * disarms highlight mode.
+   */
+  highlightOrToggleMode(): void;
+  /**
+   * Called as the highlight button is pressed, BEFORE the press can collapse
+   * the selection. Pressing a button outside the text clears it on the way in,
+   * so the selection has to be taken at pointer-down or it is already gone by
+   * the time the click arrives — which is what makes "select, then tap" work
+   * on a touchscreen, where there is no drag-release to trigger on.
+   */
+  captureSelection(): void;
   /** The configured types, read fresh so a change in settings shows up here. */
   annotationTypes(): readonly AnnotationType[];
   /** Chooses the type highlight mode writes, and arms it. */
@@ -92,8 +103,9 @@ export class ReaderToolbar {
 
     const rightEl = this.rootEl.createDiv({ cls: "ereader-toolbar__group" });
     this.highlightEl = this.addButton(rightEl, component, "highlighter", "Highlight mode", () =>
-      callbacks.toggleHighlightMode(),
+      callbacks.highlightOrToggleMode(),
     );
+    component.registerDomEvent(this.highlightEl, "pointerdown", () => callbacks.captureSelection());
     this.addButton(rightEl, component, "chevron-down", "Highlight type", (event) => {
       this.showTypePicker(event, callbacks);
     });
@@ -182,11 +194,11 @@ export class ReaderToolbar {
     this.highlightEl.style.setProperty("--ereader-active-hl", state.activeColor);
     setTooltip(
       this.highlightEl,
-      state.highlightMode
-        ? `Highlighting as "${state.activeType}" — click to stop`
-        : state.activeType === ""
-          ? "Highlight mode (no types configured)"
-          : `Highlight mode — writes "${state.activeType}"`,
+      state.activeType === ""
+        ? "Highlight (no types configured)"
+        : state.highlightMode
+          ? `Highlighting as "${state.activeType}" — click to stop`
+          : `Highlight the selection, or click with none to keep highlighting as "${state.activeType}"`,
     );
 
     this.bookmarkEl.toggleClass("is-active", state.bookmarked);

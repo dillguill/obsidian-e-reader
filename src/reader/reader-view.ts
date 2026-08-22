@@ -42,8 +42,6 @@ export interface ReaderViewState {
 }
 
 const POSITION_FLUSH_INTERVAL_MS = 2000;
-const PROGRESS_PROPERTY = "progress";
-const LAST_READ_PROPERTY = "last-read";
 const BOOKMARK_TYPE = RESERVED_ENTRY_TYPE;
 
 function isReaderViewState(state: unknown): state is ReaderViewState {
@@ -695,7 +693,7 @@ export class ReaderView extends FileView {
 
   private readStoredLocator(bookNote: TFile): Locator | null {
     const cache = this.app.metadataCache.getFileCache(bookNote);
-    const raw = cache?.frontmatter?.[LAST_READ_PROPERTY];
+    const raw = cache?.frontmatter?.[this.getSettings().properties.lastRead];
     return typeof raw === "string" ? parseLocator(raw) : null;
   }
 
@@ -707,8 +705,11 @@ export class ReaderView extends FileView {
   }
 
   /**
-   * Writes progress/last-read to the book note's frontmatter — and only
-   * those two keys (FileManager.processFrontMatter mutates the parsed
+   * Writes progress and position to the book note's frontmatter, under the
+   * reader's CONFIGURED names (FR-006) — these were hardcoded, so renaming
+   * either in settings left the reader writing one key while the library
+   * read another, and progress silently stopped updating. Only those two
+   * keys are touched (FileManager.processFrontMatter mutates the parsed
    * frontmatter object in place; nothing else is touched). Skipped when the
    * position hasn't changed, and (unless `force`) debounced against
    * POSITION_FLUSH_INTERVAL_MS.
@@ -723,9 +724,10 @@ export class ReaderView extends FileView {
     this.lastWritten = current;
     this.lastFlushAt = Date.now();
     try {
+      const properties = this.getSettings().properties;
       await this.app.fileManager.processFrontMatter(bookNote, (frontmatter: Record<string, unknown>) => {
-        frontmatter[PROGRESS_PROPERTY] = current.progress;
-        frontmatter[LAST_READ_PROPERTY] = current.locator;
+        frontmatter[properties.progress] = current.progress;
+        frontmatter[properties.lastRead] = current.locator;
       });
     } catch (error) {
       console.error("[e-reader] failed to write reading position", error);

@@ -25,14 +25,32 @@ function positiveNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-export function readLibraryViewConfig(config: BasesViewConfig): LibraryViewConfig {
+/** Just the names the overlays care about, so this stays free of the settings module. */
+export interface OverlayProperties {
+  readState: string;
+  progress: string;
+}
+
+/** `note.<name>`, or null when the reader has cleared that property's name. */
+function noteProperty(name: string): BasesPropertyId | null {
+  return name.trim() === "" ? null : (`note.${name}` as BasesPropertyId);
+}
+
+/**
+ * `properties` supplies the fallback bindings for the two overlays, so a
+ * plain `.base` shows read state and progress without the reader having to
+ * bind them by hand — the same courtesy `image` already got. An explicit
+ * binding in the `.base` still wins, since these are defaults and not
+ * overrides.
+ */
+export function readLibraryViewConfig(config: BasesViewConfig, properties: OverlayProperties): LibraryViewConfig {
   return {
     imageProperty: config.getAsPropertyId("image") ?? ("note.cover" as BasesPropertyId),
     imageFitContain: config.get("imageFit") === "contain",
     imageAspectRatio: positiveNumber(config.get("imageAspectRatio"), DEFAULT_ASPECT_RATIO),
     cardSize: positiveNumber(config.get("cardSize"), DEFAULT_CARD_SIZE),
-    readStateProperty: config.getAsPropertyId("readStateProperty"),
-    progressProperty: config.getAsPropertyId("progressProperty"),
+    readStateProperty: config.getAsPropertyId("readStateProperty") ?? noteProperty(properties.readState),
+    progressProperty: config.getAsPropertyId("progressProperty") ?? noteProperty(properties.progress),
     progressDisplay: config.get("progressDisplay") === "percent" ? "percent" : "bar",
   };
 }

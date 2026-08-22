@@ -18,6 +18,7 @@ import { addEntry, listEntries, removeEntry, setEntryType } from "../annotations
 import type { Entry } from "../annotations/entry";
 import type { ReaderEvents } from "../core/reader-events";
 import { describeAttachmentLookup, resolveBookAttachment, resolveBookAttachmentPath } from "../core/attachment";
+import { isBookNote } from "../core/book-note";
 import { parseLocator, serializeLocator } from "../core/locator";
 import { RESERVED_ENTRY_TYPE, type Locator } from "../core/types";
 import type { Settings } from "../settings/settings-model";
@@ -187,9 +188,28 @@ export class ReaderView extends FileView {
     await super.onClose();
   }
 
-  /** The book note this reader is reading, or null when it opened a bare file. */
+  /**
+   * The book note this reader is reading, or null when there is none to write
+   * to — a bare `.epub` opened from the file explorer, or a markdown note the
+   * reader has not marked as a book.
+   *
+   * Everything that writes goes through here, so the marker property is what
+   * keeps this plugin out of notes that are not books. Rendering is NOT gated
+   * on it: a note with a readable attachment still opens and reads perfectly
+   * well, it simply does not get progress or highlights written into it.
+   */
   private bookNote(): TFile | null {
-    return this.file && this.file.extension === "md" ? this.file : null;
+    const file = this.file;
+    if (!file || file.extension !== "md") return null;
+    const properties = this.getSettings().properties;
+    const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    return isBookNote(frontmatter, properties.marker, properties.markerValue) ? file : null;
+  }
+
+  /** Explains a refused write in terms of the property the reader configured. */
+  private notABookNoteNotice(): string {
+    const properties = this.getSettings().properties;
+    return `E-Reader: this note is not marked as a book (${properties.marker}: ${properties.markerValue}), so nothing was saved to it.`;
   }
 
   /** The element each engine renders into, rebuilt per book. */
@@ -535,7 +555,7 @@ export class ReaderView extends FileView {
   private async toggleBookmark(): Promise<void> {
     const note = this.bookNote();
     if (!note) {
-      new Notice("E-Reader: bookmarks are stored in a book note — open this book from your library.");
+      new Notice(this.notABookNoteNotice());
       return;
     }
     const existing = this.currentBookmark();
@@ -673,7 +693,7 @@ export class ReaderView extends FileView {
   async createEntry(type: string, selection: EngineSelection | null): Promise<void> {
     const note = this.bookNote();
     if (!note) {
-      new Notice("E-Reader: highlights are stored in a book note — open this book from your library.");
+      new Notice(this.notABookNoteNotice());
       return;
     }
     const hint = selection?.locator ?? this.engine?.currentLocator() ?? undefined;

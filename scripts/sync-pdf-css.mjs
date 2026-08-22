@@ -21,9 +21,19 @@ const BEGIN = "/* === BEGIN generated from pdfjs-dist/web/pdf_viewer.css — `np
 const END = "/* === END generated === */";
 const SCOPE = ".ereader-pdf-host";
 
-/** Layout and text-layer rules. Annotation and editor UI is disabled in the adapter. */
-const KEEP = /^\s*(\.pdfViewer\b|\.page\b|\.canvasWrapper\b|\.textLayer\b|\.spread\b|\.dummyPage\b|\.hiddenCanvasElement\b)/;
-const DROP = /editor|Editor|annotation|Annotation|comment|Comment|signature|Signature/;
+/**
+ * Layout, text layer, and the annotation layer — which draws a PDF's own
+ * links and form fields, and is on by default (`AnnotationMode.ENABLE_FORMS`).
+ * Dropping its styling while pdf.js still rendered it left links present in
+ * the DOM but unpositioned and invisible.
+ *
+ * Only the annotation EDITOR is excluded, along with the comment and
+ * signature UI that belongs to it: the adapter disables that editor, because
+ * this plugin's highlights live in the reader's notes rather than baked into
+ * the file.
+ */
+const KEEP = /^\s*(\.pdfViewer\b|\.page\b|\.canvasWrapper\b|\.textLayer\b|\.spread\b|\.dummyPage\b|\.hiddenCanvasElement\b|\.annotationLayer\b)/;
+const DROP = /annotationEditor|[Ee]ditorParams|freeTextEditor|inkEditor|stampEditor|highlightEditor|signatureEditor|commentPopup|colorPicker/;
 
 function topLevelRules(css) {
   const rules = [];

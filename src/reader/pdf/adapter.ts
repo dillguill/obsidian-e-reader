@@ -89,7 +89,6 @@ interface PdfjsViewerModule {
   PDFViewer: new (options: Record<string, unknown>) => PdfjsViewer;
   PDFLinkService: new (options: { eventBus: PdfjsEventBus }) => PdfjsLinkService;
   SpreadMode: { NONE: number; ODD: number; EVEN: number };
-  TextLayerMode: { ENABLE: number };
 }
 
 export interface PdfPreferences {
@@ -201,9 +200,13 @@ export class PdfEngine implements ReaderEngine {
       viewer: viewerEl,
       eventBus,
       linkService,
-      textLayerMode: viewerModule.TextLayerMode.ENABLE,
-      // Nothing here edits a PDF; leaving the editor out keeps its UI, its
-      // stylesheet and its localisation requirements out with it.
+      // `textLayerMode` is deliberately NOT passed: TextLayerMode is internal
+      // to pdf_viewer.mjs and is not among its exports, so reaching for it
+      // threw before a page could render. ENABLE is the default anyway.
+      //
+      // -1 is AnnotationEditorType.DISABLE. Nothing here edits a PDF, and
+      // leaving the editor out keeps its UI, its stylesheet and its
+      // localisation requirements out with it.
       annotationEditorMode: -1,
     });
     linkService.setViewer(viewer);

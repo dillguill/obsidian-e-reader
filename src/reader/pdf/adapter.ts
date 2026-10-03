@@ -119,13 +119,48 @@ export interface PdfEngineOptions extends PdfPreferences {
  */
 let pdfjsPromise: Promise<{ lib: PdfjsModule; workerSource: string }> | null = null;
 
+/**
+ * pdf.js 6 calls `Map.prototype.getOrInsertComputed` and `getOrInsert`, from
+ * the upsert proposal, which Obsidian's runtimes (its Electron and iOS's
+ * WebKit) do not ship yet. Where one is missing it is defined with the
+ * proposal's own semantics, on this window and, by prefixing the worker's
+ * source with the same code, inside the worker. Without it `getMetadata`
+ * throws on every PDF, which is what failed every PDF import.
+ */
+function installUpsertPolyfill(): void {
+  for (const C of [Map, WeakMap]) {
+    const proto = C.prototype as unknown as Record<string, unknown>;
+    if (typeof proto["getOrInsert"] !== "function") {
+      Object.defineProperty(proto, "getOrInsert", {
+        configurable: true,
+        writable: true,
+        value(this: Map<unknown, unknown>, key: unknown, value: unknown) {
+          if (!this.has(key)) this.set(key, value);
+          return this.get(key);
+        },
+      });
+    }
+    if (typeof proto["getOrInsertComputed"] !== "function") {
+      Object.defineProperty(proto, "getOrInsertComputed", {
+        configurable: true,
+        writable: true,
+        value(this: Map<unknown, unknown>, key: unknown, compute: (key: unknown) => unknown) {
+          if (!this.has(key)) this.set(key, compute(key));
+          return this.get(key);
+        },
+      });
+    }
+  }
+}
+
 function loadPdfjs(): Promise<{ lib: PdfjsModule; workerSource: string }> {
   pdfjsPromise ??= (async () => {
+    installUpsertPolyfill();
     const [lib, worker] = await Promise.all([
       import("pdfjs-dist") as Promise<unknown>,
       import("pdfjs-dist/build/pdf.worker.min.mjs"),
     ]);
-    return { lib: lib as PdfjsModule, workerSource: worker.default };
+    return { lib: lib as PdfjsModule, workerSource: `(${installUpsertPolyfill.toString()})();\n${worker.default}` };
   })();
   return pdfjsPromise;
 }
@@ -153,7 +188,15 @@ export async function readPdfMetadata(data: ArrayBuffer): Promise<{
   const task = lib.getDocument({ data: data.slice(0) });
   try {
     const doc = await task.promise;
-    const { info } = await doc.getMetadata().catch(() => ({ info: null }));
+    // A PDF whose info dictionary cannot be read still imports. This has to
+    // be a try, not a .catch: a failure inside getMetadata can throw before
+    // it returns a promise.
+    let info: Record<string, unknown> | null = null;
+    try {
+      info = (await doc.getMetadata()).info;
+    } catch (error) {
+      console.debug("[e-reader] could not read a PDF's info dictionary", error);
+    }
     const text = (key: string): string | null => {
       const value = info?.[key];
       return typeof value === "string" && value.trim() !== "" ? value.trim() : null;

@@ -22,7 +22,7 @@ import { noteLink, quoteBlock } from "./links";
 export const DEFAULT_EXPORT_TEMPLATE = "{{highlight}}\n\n{{comment}}\n";
 
 /** Words of the quote that go into an exported note's name. */
-const NAME_WORDS = 6;
+const NAME_WORDS = 8;
 
 /** The placeholders a template can use, and their values for `entry`. */
 export function templateValues(app: App, book: TFile, entry: Entry, sourcePath: string): Record<string, string> {
@@ -47,13 +47,11 @@ export function renderTemplate(template: string, values: Record<string, string>)
   return `${filled.replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "").replace(/\s+$/, "")}\n`;
 }
 
-/** An exported note's name: the book, the page where there is one, and the quote's opening words. */
-export function exportName(app: App, book: TFile, entry: Entry): string {
-  const hint = entry.anchor.hint;
+/** An exported note's name: the quote's opening words, or the book and id for a highlight with no text. */
+export function exportName(book: TFile, entry: Entry): string {
   const words = entry.exact.split(/\s+/).filter((word) => word !== "");
-  const opening = words.slice(0, NAME_WORDS).join(" ") + (words.length > NAME_WORDS ? "…" : "");
-  const parts = [bookTitle(app, book), hint?.kind === "pdf" ? `p. ${hint.page}` : entry.anchor.section, opening];
-  return safeFileName(parts.filter((part): part is string => part !== undefined && part !== "").join(" – "));
+  if (words.length === 0) return safeFileName(`${book.basename} ${entry.id}`);
+  return safeFileName(words.slice(0, NAME_WORDS).join(" ") + (words.length > NAME_WORDS ? "…" : ""));
 }
 
 async function readTemplate(app: App, settings: HighlightSettings): Promise<string> {
@@ -69,7 +67,7 @@ export async function exportHighlightNote(app: App, book: TFile, entry: Entry, s
   const template = await readTemplate(app, settings);
   const folder = highlightFolder(book, settings);
   await ensureFolder(app, folder);
-  const path = availablePath(app, joinPath(folder, `${exportName(app, book, entry)}.md`));
+  const path = availablePath(app, joinPath(folder, `${exportName(book, entry)}.md`));
   const file = await app.vault.create(path, renderTemplate(template, templateValues(app, book, entry, path)));
   const names = settings.properties;
   const hint = entry.anchor.hint;

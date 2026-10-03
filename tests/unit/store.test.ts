@@ -104,7 +104,7 @@ describe("copying and exporting a highlight", () => {
     const { app, book } = await setup();
     const entry = await addEntry(app, book, draft, SETTINGS, NOW, random);
     const note = await exportHighlightNote(app, book, entry, SETTINGS.highlights);
-    expect(note.path).toBe("Highlights/Dune/Dune – p. 35 – the spice must flow.md");
+    expect(note.path).toBe("Highlights/Dune/the spice must flow.md");
     expect(app.metadataCache.getFileCache(note)?.frontmatter).toEqual({
       book: "[[Dune]]",
       highlight: "idea",

@@ -358,7 +358,7 @@ export class EReaderSettingTab extends PluginSettingTab {
       .setDesc("The note's tags, or a list property of your own.")
       .addDropdown((dropdown) =>
         dropdown
-          .addOptions({ tags: "Tags", property: "A list property" })
+          .addOptions({ tags: "Tags", property: "List Property" })
           .setValue(status.useTags ? "tags" : "property")
           .onChange((value) => {
             status.useTags = value === "tags";

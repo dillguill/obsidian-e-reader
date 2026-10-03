@@ -184,6 +184,8 @@ export interface Settings {
    * to be moved over to the status list. Cleared once they have been.
    */
   pendingReadLaterMigration?: string;
+  /** Book notes with no file still need the wishlist status. Cleared once they have it. */
+  pendingWishlistMigration?: boolean;
   /** Reader-configurable highlight types. Never contains `bookmark` — reserved (FR-020a, FR-028a). */
   annotationTypes: AnnotationType[];
   readers: ReaderChoices;
@@ -197,8 +199,9 @@ export interface Settings {
  * Bump when a saved value's MEANING changes and old data has to be upgraded.
  * 2: the written properties moved to the `reading_` namespace.
  * 3: read later moved from a checkbox into the status list.
+ * 4: books with no file are given the wishlist status.
  */
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
 
 /** The read later checkbox's name before version 3, unless the reader had renamed it. */
 const LEGACY_READ_LATER = "read_later";
@@ -380,6 +383,12 @@ function mergePendingReadLater(saved: Record<string, unknown>, version: number):
   return typeof name === "string" && name.trim() !== "" ? name.trim() : LEGACY_READ_LATER;
 }
 
+/** Whether notes from before version 4 still need the wishlist status. Nothing to do on a fresh install. */
+function mergePendingWishlist(saved: Record<string, unknown>, version: number): boolean {
+  if (saved["pendingWishlistMigration"] === true) return true;
+  return version < 4 && Object.keys(saved).length > 0;
+}
+
 function mergeImport(saved: Record<string, unknown>): ImportSettings {
   const from = group(saved, "import");
   const defaults = DEFAULT_SETTINGS.import;
@@ -454,6 +463,7 @@ export function mergeSettings(saved: unknown): Settings {
     reader: _reader,
     status: _status,
     pendingReadLaterMigration: _pendingReadLaterMigration,
+    pendingWishlistMigration: _pendingWishlistMigration,
     ...rest
   } = savedObject;
   const annotationTypes = mergeAnnotationTypes(savedObject.annotationTypes);
@@ -470,5 +480,6 @@ export function mergeSettings(saved: unknown): Settings {
     reader: mergeReaderPreferences(savedObject, annotationTypes),
     status: mergeStatus(savedObject),
     ...(pendingReadLaterMigration === undefined ? {} : { pendingReadLaterMigration }),
+    ...(mergePendingWishlist(savedObject, version) ? { pendingWishlistMigration: true } : {}),
   };
 }

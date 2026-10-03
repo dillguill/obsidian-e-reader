@@ -62,11 +62,13 @@ async function readMetadata(
   // A PDF's Title is often whatever program made it filled in: the source
   // file's name, or "Untitled". The file name is a better guess than that.
   const usableTitle = pdf.title && !/(\.(docx?|pdf|indd|tex|dvi|odt|pages)$)|^untitled\b|^microsoft word/i.test(pdf.title);
+  // Likewise for the placeholder values some producers write.
+  const placeholder = (value: string): boolean => /^(anonymous|unknown|unspecified|none|n\/a|-)$/i.test(value.trim());
   return {
     title: usableTitle && pdf.title ? pdf.title : fallbackTitle,
-    authors: pdf.authors,
+    authors: pdf.authors.filter((name) => !placeholder(name)),
     pages: pdf.pages,
-    subjects: pdf.subject ? [pdf.subject] : [],
+    subjects: pdf.subject && !placeholder(pdf.subject) ? [pdf.subject] : [],
     cover: pdf.cover ? { data: pdf.cover, extension: "jpg" } : undefined,
   };
 }

@@ -58,14 +58,15 @@ export interface NoteProperties {
 export function buildFrontmatter(
   meta: BookMetadata,
   names: NoteProperties,
-  links: { book: string; cover: string | null },
+  links: { book: string | null; cover: string | null },
 ): Record<string, unknown> {
   const fm: Record<string, unknown> = {};
   if (names.marker.trim() !== "") fm[names.marker] = names.markerValue.trim() === "" ? "book" : names.markerValue;
   fm["title"] = meta.title;
   if (meta.authors.length > 0) fm["author"] = [...meta.authors];
   if (links.cover && names.cover.trim() !== "") fm[names.cover] = links.cover;
-  fm[names.attachments] = [links.book];
+  // A wishlist book has no file yet; its attachments arrive when one is added.
+  if (links.book !== null) fm[names.attachments] = [links.book];
   if (meta.published) fm["published"] = meta.published;
   if (meta.publisher) fm["publisher"] = meta.publisher;
   if (meta.language) fm["language"] = meta.language;

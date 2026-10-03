@@ -3,7 +3,9 @@
 //
 // The overlays only appear when they say something. An unread book is a
 // clean cover; a book in progress gets a fade along the bottom carrying its
-// percentage and a thin bar; a finished one gets a small check.
+// percentage and a thin bar; a finished one gets a small check. A book marked
+// to read later gets a bookmark, and a wishlist book (a note with no file
+// yet) is faded and labelled, so it is never mistaken for one you can open.
 import type { App, BasesEntry, BasesPropertyId, BasesViewConfig } from "obsidian";
 import { setIcon } from "obsidian";
 import { decideProgressOverlay, decideReadStateOverlay } from "./overlay";
@@ -25,13 +27,22 @@ function coverSrc(app: App, entry: BasesEntry, value: string): string {
   return dest ? app.vault.getResourcePath(dest) : value;
 }
 
+/** What the library knows about a book beyond its Bases properties. */
+export interface CardState {
+  /** False for a wishlist book: a note whose attachments link no file yet. */
+  hasFile: boolean;
+  readLater: boolean;
+}
+
 export function renderCard(
   app: App,
   entry: BasesEntry,
   basesConfig: BasesViewConfig,
   cfg: LibraryViewConfig,
+  state: CardState,
 ): HTMLElement {
   const card = createDiv({ cls: "ereader-card", attr: { tabindex: "0", role: "button" } });
+  card.toggleClass("is-wishlist", !state.hasFile);
   // Sized inline so the card renders even if the stylesheet has not loaded.
   const coverHeight = Math.round(cfg.cardSize * cfg.imageAspectRatio);
   card.setCssStyles({ display: "flex", flexDirection: "column", gap: "6px", cursor: "pointer" });
@@ -66,6 +77,15 @@ export function renderCard(
     img.addEventListener("error", () => img.remove(), { once: true });
   }
 
+  if (state.readLater) {
+    const mark = cover.createDiv({ cls: "ereader-badge is-read-later", attr: { "aria-label": "Read later", title: "Read later" } });
+    setIcon(mark, "bookmark");
+  }
+  if (!state.hasFile) {
+    cover.createDiv({ cls: "ereader-wishlist-label", text: "Wishlist" });
+    return finishCard(card, entry, basesConfig);
+  }
+
   const progressRaw = raw(entry, cfg.progressProperty);
   const readState = decideReadStateOverlay(cfg.progressProperty, progressRaw);
   const progress = decideProgressOverlay(cfg.progressProperty, progressRaw);
@@ -80,13 +100,16 @@ export function renderCard(
     track.createDiv({ cls: "ereader-progress__fill" }).setCssStyles({ width: `${progress.percent}%` });
   }
 
-  // Only what the view is configured to display. Nothing is forced.
+  return finishCard(card, entry, basesConfig);
+}
+
+/** The configured property lines under the cover. Only what the view is set to display; nothing is forced. */
+function finishCard(card: HTMLElement, entry: BasesEntry, basesConfig: BasesViewConfig): HTMLElement {
   for (const propertyId of basesConfig.getOrder()) {
     const text = raw(entry, propertyId);
     if (text === null) continue;
     card.createDiv({ cls: "ereader-line", text });
   }
-
   return card;
 }
 

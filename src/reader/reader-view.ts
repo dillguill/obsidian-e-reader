@@ -13,19 +13,22 @@
 // FileView.setState drive; do the actual book loading from `onLoadFile`.
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
-import { FileView, Menu, Notice, Platform, Scope, TFile } from "obsidian";
-import { addEntry, listEntries, removeEntry, setEntryType } from "../annotations/store";
+import { FileView, Menu, Notice, Platform, Scope, TFile, setIcon } from "obsidian";
+import { addEntry, fillSections, foldHighlightNotes, listEntries, migrateBookmarks, removeEntry, setEntryType } from "../annotations/store";
+import { linksToBook } from "../annotations/highlight-notes";
+import { addCopyItems } from "../annotations/entry-menu";
+import { activeRowIndex, rowsFromOutline } from "../sidebar/outline-model";
 import type { Entry } from "../annotations/entry";
 import type { ReaderEvents } from "../core/reader-events";
 import { describeAttachmentLookup, resolveBookAttachment, resolveBookAttachmentPath } from "../core/attachment";
 import { isBookNote } from "../core/book-note";
-import { parseLocator, serializeLocator } from "../core/locator";
+import { compareLocators, parseLocator, serializeLocator } from "../core/locator";
 import { RESERVED_ENTRY_TYPE, type Locator } from "../core/types";
 import type { Settings } from "../settings/settings-model";
 import { createEpubEngine } from "./epub/adapter";
 import type { DisplayOption, EngineSelection, OutlineNode, PaintedHighlight, ReaderEngine } from "./engine";
 import { createPdfEngine } from "./pdf/adapter";
-import { type ReadingPosition, positionChanged, shouldFlushNow } from "./position";
+import { type ReadingPosition, furthestOf, jumpTarget, positionChanged, shouldFlushNow } from "./position";
 import { clampProgress } from "./progress";
 import { highlightColor } from "./highlight-style";
 import { isTypingTarget, keyAction } from "./keys";
@@ -63,6 +66,7 @@ export class ReaderView extends FileView {
   private contentRoot: HTMLElement | null = null;
   private toolbar: ReaderToolbar | null = null;
   private lastWritten: ReadingPosition | null = null;
+  private jumpOffer: { el: HTMLElement; target: Locator } | null = null;
   private lastFlushAt = 0;
   private loadToken = 0;
   /** The open book's table of contents. Built once per book — for an EPUB it
@@ -88,6 +92,7 @@ export class ReaderView extends FileView {
     private readonly getSettings: () => Settings,
     private readonly saveSettings: () => void,
     private readonly events: ReaderEvents,
+    private readonly attachFile: (note: TFile) => Promise<boolean>,
   ) {
     super(leaf);
     this.navigation = true;
@@ -162,7 +167,12 @@ export class ReaderView extends FileView {
     // highlights pane — arrives here the same way the sidebar sees it.
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
-        if (file === this.bookNote()) void this.refreshEntries();
+        const book = this.bookNote();
+        if (!book) return;
+        // A highlight note of this book counts too: its entries are this book's.
+        if (file === book || linksToBook(this.app, file, book, this.getSettings().highlights.properties.book)) {
+          void this.refreshEntries();
+        }
       }),
     );
     // An EPUB renders inside iframes that inherit none of the vault's CSS, so
@@ -237,11 +247,40 @@ export class ReaderView extends FileView {
   }
 
   private clearViewport(): void {
+    this.closeJumpOffer();
     this.viewportEl()?.remove();
     this.contentRoot?.querySelector(".ereader-reader__empty")?.remove();
   }
 
-  private async loadBook(file: TFile): Promise<void> {
+  private renderNoFile(root: HTMLElement, note: TFile): void {
+    const box = root.createDiv({ cls: "ereader-reader__empty ereader-reader__no-file" });
+    setIcon(box.createDiv({ cls: "ereader-reader__no-file-icon" }), "book-dashed");
+    box.createDiv({ cls: "ereader-reader__no-file-title", text: "No file yet" });
+    box.createDiv({
+      cls: "ereader-reader__no-file-detail",
+      text: "This book is on your wishlist. Add its EPUB or PDF to start reading; the note keeps everything it already has.",
+    });
+    const actions = box.createDiv({ cls: "ereader-reader__no-file-actions" });
+    const add = actions.createEl("button", { cls: "mod-cta", text: "Add file…" });
+    add.addEventListener("click", () => {
+      void this.attachFile(note).then((attached) => {
+        if (attached && this.file === note) void this.loadBook(note);
+      });
+    });
+    const open = actions.createEl("button", { text: "Open note" });
+    open.addEventListener("click", () => void this.leaf.openFile(note, { state: { mode: "source" } }));
+  }
+
+  /** Resolves once the book being opened has loaded (or failed to), for callers that need it open. */
+  private loading: Promise<void> = Promise.resolve();
+
+  private loadBook(file: TFile): Promise<void> {
+    const load = this.loadBookNow(file);
+    this.loading = load.catch(() => undefined);
+    return load;
+  }
+
+  private async loadBookNow(file: TFile): Promise<void> {
     const root = this.contentRoot;
     if (!root) return;
     const token = ++this.loadToken;
@@ -263,9 +302,11 @@ export class ReaderView extends FileView {
         : { path: file.path, extension: file.extension, name: file.name };
 
     if (!attachment) {
-      // Nothing to read: fall back to the note itself rather than a dead end.
-      console.debug("[e-reader] no attachment; opening the note\n" + (await describeAttachmentLookup(this.app, file)));
-      await this.leaf.openFile(file);
+      // A wishlist book: a note with no file yet. Say so, and offer the way
+      // forward, rather than leaving an empty pane.
+      console.debug("[e-reader] no attachment\n" + (await describeAttachmentLookup(this.app, file)));
+      if (token !== this.loadToken) return;
+      this.renderNoFile(root, file);
       return;
     }
 
@@ -308,12 +349,14 @@ export class ReaderView extends FileView {
     engine.onSelectionChange(() => this.onSelectionChange());
     engine.onKeyDown((event) => this.handleKey(event));
     engine.onChange(() => {
+      this.dropJumpOfferIfReached();
       this.updateToolbar();
       this.repositionPopup();
     });
     this.toolbar?.setVisible(true);
 
-    const restored = this.readStoredLocator(file);
+    const properties = this.getSettings().properties;
+    const restored = this.readStoredLocator(file, properties.lastRead);
     if (restored) {
       try {
         await engine.goTo(restored);
@@ -321,10 +364,27 @@ export class ReaderView extends FileView {
         console.error("[e-reader] failed to restore reading position", error);
       }
     }
+    const further = jumpTarget(restored, this.readStoredLocator(file, properties.furthestRead));
+    if (further) this.offerJump(further);
     this.lastWritten = this.currentPosition();
     this.lastFlushAt = Date.now();
     this.announcePosition();
     this.updateToolbar();
+    if (file.extension === "md") {
+      // Bookmarks written into the note before 0.4.0 move to the bookmarks
+      // property, highlights betas kept in notes of their own move back into
+      // the book note, and older highlights gain their chapter.
+      try {
+        await migrateBookmarks(this.app, file, this.getSettings());
+        await foldHighlightNotes(this.app, file, this.getSettings());
+        // Highlights saved before their chapter was recorded get it from this book's contents.
+        await fillSections(this.app, file, this.getSettings(), (entry) =>
+          entry.anchor.hint ? this.sectionTitle(entry.anchor.hint) : Promise.resolve(undefined),
+        );
+      } catch (error) {
+        console.error("[e-reader] could not bring this book's highlights up to date", error);
+      }
+    }
     await this.refreshEntries();
   }
 
@@ -386,6 +446,20 @@ export class ReaderView extends FileView {
   private announcePosition(): void {
     if (!this.file) return;
     this.events.emitPosition(this.file.path, this.currentLocator());
+  }
+
+  /**
+   * Moves to one of this book's entries, for the links highlights carry. The
+   * book may still be opening, so this waits for it to finish loading first.
+   */
+  async goToEntry(id: string): Promise<void> {
+    await this.loading;
+    const note = this.bookNote();
+    if (!note) return;
+    const { entries } = await listEntries(this.app, note, this.getSettings());
+    const hint = entries.find((entry) => entry.id === id)?.anchor.hint;
+    if (hint) await this.goToLocator(hint);
+    else new Notice("E-Reader: that highlight is no longer in this book's notes.");
   }
 
   /** Scrolls this reader to `locator`. Used by the sidebar panes. */
@@ -592,7 +666,7 @@ export class ReaderView extends FileView {
     }
     let entries: Entry[] = [];
     try {
-      entries = (await listEntries(this.app, note)).entries;
+      entries = (await listEntries(this.app, note, this.getSettings())).entries;
     } catch (error) {
       console.error("[e-reader] failed to read the book note's entries", error);
       return;
@@ -795,12 +869,7 @@ export class ReaderView extends FileView {
             .onClick(() => void this.changeEntryType(note, entry, type.name)),
         );
       }
-      menu.addItem((item) =>
-        item
-          .setTitle("Copy text")
-          .setIcon("copy")
-          .onClick(() => void navigator.clipboard.writeText(entry.exact)),
-      );
+      addCopyItems(menu, this.app, note, entry, this.getSettings().highlights);
       menu.addSeparator();
     }
     menu.addItem((item) =>
@@ -813,7 +882,7 @@ export class ReaderView extends FileView {
 
   private async changeEntryType(note: TFile, entry: Entry, type: string): Promise<void> {
     try {
-      await setEntryType(this.app, note, entry.id, type);
+      await setEntryType(this.app, note, entry.id, type, this.getSettings());
     } catch (error) {
       console.error("[e-reader] failed to change an entry's type", error);
       new Notice("E-Reader: could not change that highlight — see the console.");
@@ -822,7 +891,7 @@ export class ReaderView extends FileView {
 
   private async deleteEntry(note: TFile, entry: Entry): Promise<void> {
     try {
-      await removeEntry(this.app, note, entry.id);
+      await removeEntry(this.app, note, entry.id, this.getSettings());
     } catch (error) {
       console.error("[e-reader] failed to remove an entry", error);
       new Notice("E-Reader: could not remove that entry — see the console.");
@@ -846,23 +915,80 @@ export class ReaderView extends FileView {
       new Notice("E-Reader: highlight saved. Turn on “Show saved highlights” in the display menu to see it in the book.");
     }
     try {
-      await addEntry(this.app, note, {
-        type,
-        exact: selection?.exact ?? "",
-        prefix: selection?.prefix ?? "",
-        suffix: selection?.suffix ?? "",
-        ...(hint === undefined ? {} : { hint }),
-      });
+      const page = hint ? (this.engine?.pageNumberFor(hint) ?? undefined) : undefined;
+      const section = hint ? await this.sectionTitle(hint) : undefined;
+      await addEntry(
+        this.app,
+        note,
+        {
+          type,
+          exact: selection?.exact ?? "",
+          prefix: selection?.prefix ?? "",
+          suffix: selection?.suffix ?? "",
+          ...(hint === undefined ? {} : { hint }),
+          ...(page === undefined ? {} : { page }),
+          ...(section === undefined ? {} : { section }),
+        },
+        this.getSettings(),
+      );
     } catch (error) {
       console.error("[e-reader] failed to write an entry", error);
       new Notice("E-Reader: could not save that highlight — see the console.");
     }
   }
 
-  private readStoredLocator(bookNote: TFile): Locator | null {
+  /** The table-of-contents entry `locator` falls under, recorded with each highlight. */
+  private async sectionTitle(locator: Locator): Promise<string | undefined> {
+    const rows = rowsFromOutline(await this.outline());
+    const row = rows[activeRowIndex(rows, locator)];
+    return row?.label.trim() || undefined;
+  }
+
+  private readStoredLocator(bookNote: TFile, property: string): Locator | null {
     const cache = this.app.metadataCache.getFileCache(bookNote);
-    const raw = cache?.frontmatter?.[this.getSettings().properties.lastRead];
+    const raw = cache?.frontmatter?.[property];
     return typeof raw === "string" ? parseLocator(raw) : null;
+  }
+
+  /**
+   * Offers a single-step jump to the furthest-read position (FR-015b). The
+   * reader stays where it was restored unless they accept; dismissing the
+   * offer, or reading on past that point, writes nothing.
+   */
+  private offerJump(target: Locator): void {
+    const root = this.contentRoot;
+    if (!root || !this.engine) return;
+    this.closeJumpOffer();
+    const page = this.engine.pageNumberFor(target);
+    const bar = root.createDiv({ cls: "ereader-reader__resume" });
+    bar.createSpan({ text: page === null ? "You read further in this book." : `You read up to page ${page}.` });
+    const jump = bar.createEl("button", { cls: "mod-cta", text: "Jump there" });
+    jump.addEventListener("click", () => {
+      this.closeJumpOffer();
+      void this.goToLocator(target);
+    });
+    const dismiss = bar.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Dismiss" } });
+    setIcon(dismiss, "x");
+    dismiss.addEventListener("click", () => this.closeJumpOffer());
+    // Just under the toolbar, whose height depends on the theme and whether
+    // its buttons wrap.
+    const toolbarEl = root.querySelector<HTMLElement>(".ereader-toolbar");
+    if (toolbarEl) bar.style.top = `${toolbarEl.offsetHeight + 8}px`;
+    this.jumpOffer = { el: bar, target };
+  }
+
+  private closeJumpOffer(): void {
+    this.jumpOffer?.el.remove();
+    this.jumpOffer = null;
+  }
+
+  /** Reading on to the offered place makes the offer moot. */
+  private dropJumpOfferIfReached(): void {
+    const offer = this.jumpOffer;
+    const current = this.engine?.currentLocator();
+    if (!offer || !current) return;
+    const order = compareLocators(current, offer.target);
+    if (order !== null && order >= 0) this.closeJumpOffer();
   }
 
   private currentPosition(): ReadingPosition | null {
@@ -873,11 +999,11 @@ export class ReaderView extends FileView {
   }
 
   /**
-   * Writes progress and position to the book note's frontmatter, under the
-   * reader's CONFIGURED names (FR-006) — these were hardcoded, so renaming
-   * either in settings left the reader writing one key while the library
-   * read another, and progress silently stopped updating. Only those two
-   * keys are touched (FileManager.processFrontMatter mutates the parsed
+   * Writes progress, position and furthest position to the book note's
+   * frontmatter, under the reader's CONFIGURED names (FR-006) — these were
+   * hardcoded, so renaming one in settings left the reader writing one key
+   * while the library read another, and progress silently stopped updating.
+   * Only those three keys are touched (FileManager.processFrontMatter mutates the parsed
    * frontmatter object in place; nothing else is touched). Skipped when the
    * position hasn't changed, and (unless `force`) debounced against
    * POSITION_FLUSH_INTERVAL_MS.
@@ -895,6 +1021,10 @@ export class ReaderView extends FileView {
       const properties = this.getSettings().properties;
       await this.app.fileManager.processFrontMatter(bookNote, (frontmatter: Record<string, unknown>) => {
         frontmatter[properties.progress] = current.progress;
+        frontmatter[properties.furthestRead] = furthestOf(
+          [frontmatter[properties.furthestRead], frontmatter[properties.lastRead]],
+          current.locator,
+        );
         frontmatter[properties.lastRead] = current.locator;
       });
     } catch (error) {

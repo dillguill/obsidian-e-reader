@@ -7,10 +7,16 @@
 // descriptions below, because they genuinely cannot take effect immediately
 // and saying so is better than appearing broken.
 
-import type { App, Plugin, TFolder } from "obsidian";
+import type { App, Plugin, TFile, TFolder } from "obsidian";
 import { AbstractInputSuggest, Notice, PluginSettingTab, Setting } from "obsidian";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
-import { DEFAULT_SETTINGS, HIGHLIGHT_PALETTE, type PropertyNames, type ReaderChoice, type Settings } from "./settings-model";
+import {
+  DEFAULT_SETTINGS,
+  HIGHLIGHT_PALETTE,
+  type PropertyNames,
+  type ReaderChoice,
+  type Settings,
+} from "./settings-model";
 
 /** What this tab needs from the plugin, beyond being a Plugin. */
 export interface SettingsHost {
@@ -20,6 +26,8 @@ export interface SettingsHost {
   applyPaneSettings(): void;
   /** Imports whatever already sits in the inbox folder. */
   scanInbox(): void;
+  /** Asks for a new name for a highlight type and renames it in every book. */
+  renameHighlightType(from: string, onDone: () => void): void;
 }
 
 const PROPERTY_FIELDS: { key: keyof PropertyNames; name: string; desc: string }[] = [
@@ -30,6 +38,8 @@ const PROPERTY_FIELDS: { key: keyof PropertyNames; name: string; desc: string }[
   { key: "progress", name: "Progress", desc: "Property the reader writes reading progress into, as a percentage." },
   { key: "lastRead", name: "Last read", desc: "Property the reader writes the current position into." },
   { key: "furthestRead", name: "Furthest read", desc: "Property holding the furthest position reached." },
+  { key: "readLater", name: "Read later", desc: "Checkbox property the library's card menu sets for books you want to read next." },
+  { key: "bookmarks", name: "Bookmarks", desc: "List property the reader's bookmark button adds positions to." },
 ];
 
 const READER_CHOICES: Record<ReaderChoice, string> = {
@@ -53,6 +63,7 @@ export class EReaderSettingTab extends PluginSettingTab {
     this.addImportSection(containerEl);
     this.addPropertiesSection(containerEl);
     this.addAnnotationTypesSection(containerEl);
+    this.addHighlightFormatSection(containerEl);
   }
 
   /**
@@ -225,6 +236,83 @@ export class EReaderSettingTab extends PluginSettingTab {
       );
   }
 
+  // ----------------------------------------------------- highlight format
+
+  private addHighlightFormatSection(containerEl: HTMLElement): void {
+    new Setting(containerEl)
+      .setName("Exported highlight notes")
+      .setDesc(
+        "Highlights are kept in the book note. These settings shape a highlight exported as a note of its own " +
+          "from its menu: the quote, a link back to it, and properties Bases can list.",
+      )
+      .setHeading();
+    const settings = this.host.settings.highlights;
+
+    new Setting(containerEl)
+      .setName("Template")
+      .setDesc(
+        "A note to use as the exported note's body. Placeholders: {{highlight}} (the quote with its source and note links), " +
+          "{{quote}}, {{comment}}, {{link}} (link to the highlight in the book note), {{source}}, {{book}}, " +
+          "{{chapter}}, {{page}}, {{type}}, {{created}}. Empty uses {{highlight}} then {{comment}}.",
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("Templates/Highlight")
+          .setValue(settings.template)
+          .onChange((value) => {
+            settings.template = value.trim();
+            this.save();
+          });
+        new NoteSuggest(this.app, text.inputEl);
+      });
+
+    new Setting(containerEl)
+      .setName("Folder")
+      .setDesc("Where exported highlight notes are created. Empty puts them at the root of the vault.")
+      .addText((text) => {
+        text
+          .setPlaceholder("Highlights")
+          .setValue(settings.folder)
+          .onChange((value) => {
+            settings.folder = value.trim().replace(/^\/+|\/+$/g, "");
+            this.save();
+          });
+        new FolderSuggest(this.app, text.inputEl);
+      });
+    new Setting(containerEl)
+      .setName("A subfolder per book")
+      .setDesc("Put each book's exported notes in a folder named after the book.")
+      .addToggle((toggle) =>
+        toggle.setValue(settings.subfolderPerBook).onChange((value) => {
+          settings.subfolderPerBook = value;
+          this.save();
+        }),
+      );
+
+    const names = settings.properties;
+    const rows: { key: keyof typeof names; name: string; desc: string }[] = [
+      { key: "book", name: "Book property", desc: "Link to the book note." },
+      { key: "type", name: "Type property", desc: "The highlight's type, such as idea or question." },
+      { key: "section", name: "Chapter property", desc: "The chapter or section, from the book's table of contents." },
+      { key: "page", name: "Page property", desc: "The page the highlight is on, where the book has pages." },
+      { key: "created", name: "Created property", desc: "When the highlight was made." },
+    ];
+    for (const row of rows) {
+      new Setting(containerEl)
+        .setName(row.name)
+        .setDesc(row.desc)
+        .addText((text) =>
+          text
+            .setPlaceholder(DEFAULT_SETTINGS.highlights.properties[row.key])
+            .setValue(names[row.key])
+            .onChange((value) => {
+              names[row.key] = value.trim() === "" ? DEFAULT_SETTINGS.highlights.properties[row.key] : value.trim();
+              this.save();
+            }),
+        );
+    }
+  }
+
   // ---------------------------------------------------------- properties
 
   private addPropertiesSection(containerEl: HTMLElement): void {
@@ -282,6 +370,12 @@ export class EReaderSettingTab extends PluginSettingTab {
             type.name = trimmed;
             this.save();
           }),
+        )
+        .addExtraButton((button) =>
+          button
+            .setIcon("pencil")
+            .setTooltip("Rename in every book")
+            .onClick(() => this.host.renameHighlightType(type.name, () => this.display())),
         )
         .addColorPicker((picker) =>
           picker.setValue(type.color).onChange((value) => {
@@ -354,6 +448,33 @@ class FolderSuggest extends AbstractInputSuggest<TFolder> {
 
   override selectSuggestion(folder: TFolder): void {
     this.setValue(folder.path);
+    this.input.dispatchEvent(new Event("input"));
+    this.close();
+  }
+}
+
+class NoteSuggest extends AbstractInputSuggest<TFile> {
+  constructor(
+    app: App,
+    private readonly input: HTMLInputElement,
+  ) {
+    super(app, input);
+  }
+
+  protected getSuggestions(query: string): TFile[] {
+    const wanted = query.toLowerCase();
+    return this.app.vault
+      .getMarkdownFiles()
+      .filter((file) => file.path.toLowerCase().includes(wanted))
+      .slice(0, 20);
+  }
+
+  renderSuggestion(file: TFile, el: HTMLElement): void {
+    el.setText(file.path);
+  }
+
+  override selectSuggestion(file: TFile): void {
+    this.setValue(file.path);
     this.input.dispatchEvent(new Event("input"));
     this.close();
   }

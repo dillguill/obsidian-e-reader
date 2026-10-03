@@ -114,9 +114,14 @@ function parseYamlScalar(raw: string): unknown {
   if (s === "false") return false;
   if (s === "null" || s === "~") return null;
   if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-    return s.slice(1, -1);
+  if (s.startsWith('"') && s.endsWith('"')) {
+    try {
+      return JSON.parse(s) as unknown;
+    } catch {
+      return s.slice(1, -1);
+    }
   }
+  if (s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1).replace(/''/g, "'");
   if (s.startsWith("[") && s.endsWith("]")) {
     const inner = s.slice(1, -1).trim();
     if (inner === "") return [];
@@ -167,6 +172,31 @@ function stringifyYamlScalar(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** Wikilinks in property values, keyed like Obsidian's: `cover` for a scalar, `attachments.0` for a list item. */
+function buildFrontmatterLinks(frontmatter: Record<string, unknown>): FrontmatterLinkCache[] {
+  const links: FrontmatterLinkCache[] = [];
+  const add = (key: string, value: unknown): void => {
+    const match = typeof value === "string" ? value.match(/^\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]$/) : null;
+    if (match) links.push({ key, link: match[1] as string, original: value as string });
+  };
+  for (const [key, value] of Object.entries(frontmatter)) {
+    if (Array.isArray(value)) value.forEach((item, index) => add(`${key}.${index}`, item));
+    else add(key, value);
+  }
+  return links;
+}
+
+/** Body wikilinks that are not embeds. Positions are not modelled. */
+function buildLinks(body: string): LinkCache[] {
+  const links: LinkCache[] = [];
+  for (const match of body.matchAll(/(!?)\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)) {
+    if (match[1] === "!") continue;
+    const zero = { line: 0, col: 0, offset: 0 };
+    links.push({ link: match[2] as string, original: match[0], position: { start: zero, end: zero } });
+  }
+  return links;
+}
+
 function stringifyFrontmatter(frontmatter: Record<string, unknown>): string {
   const lines: string[] = [];
   for (const [key, value] of Object.entries(frontmatter)) {
@@ -192,6 +222,7 @@ export interface Position {
 export interface SectionCache {
   type: string;
   position: Position;
+  id?: string;
 }
 
 export interface BlockCache {
@@ -199,7 +230,14 @@ export interface BlockCache {
   position: Position;
 }
 
+export interface LinkCache {
+  link: string;
+  original: string;
+  position: Position;
+}
+
 export interface CachedMetadata {
+  links?: LinkCache[];
   frontmatterLinks?: FrontmatterLinkCache[];
   frontmatter?: Record<string, unknown>;
   sections?: SectionCache[];
@@ -250,6 +288,11 @@ function buildSections(body: string): SectionCache[] {
   }
   flush(lines.length - 1, Math.max(offset - 1, 0));
   return sections;
+}
+
+function blankedFrontmatter(content: string, body: string): string {
+  const head = content.slice(0, content.length - body.length);
+  return head.replace(/[^\n]/g, " ") + body;
 }
 
 function buildBlocks(body: string): Record<string, BlockCache> {
@@ -339,6 +382,20 @@ export class Vault extends Events {
     return file;
   }
 
+  async cachedRead(file: TFile): Promise<string> {
+    return this.read(file);
+  }
+
+  async process(file: TFile, fn: (data: string) => string): Promise<string> {
+    const next = fn(await this.read(file));
+    await this.modify(file, next);
+    return next;
+  }
+
+  getName(): string {
+    return "Test Vault";
+  }
+
   async modify(file: TFile, data: string): Promise<void> {
     if (!this._files.has(file.path)) throw new Error(`File not found: ${file.path}`);
     this._contents.set(file.path, data);
@@ -406,10 +463,15 @@ export class MetadataCache extends Events {
     const content = this.vault._contents.get(file.path);
     if (content === undefined) return null;
     const { frontmatterText, body } = splitFrontmatter(content);
+    const frontmatter = frontmatterText !== null ? parseFrontmatterYaml(frontmatterText) : undefined;
     return {
-      frontmatter: frontmatterText !== null ? parseFrontmatterYaml(frontmatterText) : undefined,
-      sections: buildSections(body),
-      blocks: buildBlocks(body),
+      frontmatter,
+      frontmatterLinks: frontmatter ? buildFrontmatterLinks(frontmatter) : undefined,
+      // Offsets and lines count from the start of the file, as the real
+      // cache's do, so the frontmatter is blanked rather than cut off.
+      sections: buildSections(blankedFrontmatter(content, body)),
+      blocks: buildBlocks(blankedFrontmatter(content, body)),
+      links: buildLinks(body),
     };
   }
 
@@ -422,6 +484,20 @@ export class MetadataCache extends Events {
    * order), which is enough for tests that don't rely on that tie-break.
    */
   /** The real one shortens to the bare name when unambiguous; this fake always does, keeping the extension except for notes. */
+  /** Source path → linked path → count, from frontmatter links only (all this fake's callers need). */
+  get resolvedLinks(): Record<string, Record<string, number>> {
+    const result: Record<string, Record<string, number>> = {};
+    for (const file of this.vault.getMarkdownFiles()) {
+      const links: Record<string, number> = {};
+      for (const link of this.getFileCache(file)?.frontmatterLinks ?? []) {
+        const dest = this.getFirstLinkpathDest(link.link, file.path);
+        if (dest) links[dest.path] = (links[dest.path] ?? 0) + 1;
+      }
+      result[file.path] = links;
+    }
+    return result;
+  }
+
   fileToLinktext(file: TFile, _sourcePath: string, omitMdExtension = true): string {
     return omitMdExtension && file.extension === "md" ? file.basename : file.name;
   }
@@ -463,10 +539,20 @@ export class FileManager {
     await this.vault.modify(file, newContent);
   }
 
+  /** Always a wikilink, as with Obsidian's default "Use [[Wikilinks]]". */
+  generateMarkdownLink(file: TFile, _sourcePath: string, subpath = "", alias = ""): string {
+    const name = file.extension === "md" ? file.basename : file.name;
+    return `[[${name}${subpath}${alias === "" ? "" : `|${alias}`}]]`;
+  }
+
   /**
    * Does not model a configurable attachment folder (the real API does) —
    * this fake just avoids colliding with an existing vault path.
    */
+  async trashFile(file: TFile): Promise<void> {
+    await this.vault.delete(file);
+  }
+
   async renameFile(file: TFile, newPath: string): Promise<void> {
     await this.vault.rename(file, newPath);
   }

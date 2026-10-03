@@ -116,4 +116,55 @@ describe("BookImporter", () => {
     // The fake's attachment location is the vault root.
     expect(app.vault.getAbstractFileByPath("Dune.epub")).not.toBeNull();
   });
+
+  describe("wishlist", () => {
+    it("saves a book with no file, and refuses a second copy", async () => {
+      const { app, importer } = setup();
+      const added = await importer.addToWishlist({ title: "Piranesi", authors: ["Susanna Clarke"], subjects: [] });
+      expect(added.status).toBe("imported");
+      const note = app.vault.getAbstractFileByPath("Library/Piranesi.md") as TFile;
+      const fm = app.metadataCache.getFileCache(note)?.frontmatter;
+      expect(fm).toMatchObject({ type: "book", title: "Piranesi", author: ["Susanna Clarke"] });
+      expect(fm?.["attachments"]).toBeUndefined();
+      const again = await importer.addToWishlist({ title: "Piranesi", authors: ["Susanna Clarke"], subjects: [] });
+      expect(again.status).toBe("duplicate");
+    });
+
+    it("attaches a file to a wishlist book, filling only what the note lacks", async () => {
+      const { app, importer } = setup();
+      await importer.addToWishlist({ title: "Emma", authors: ["J. Austen"], subjects: [] });
+      const note = app.vault.getAbstractFileByPath("Library/Emma.md") as TFile;
+      const result = await importer.attach(note, { kind: "external", name: "x.epub", data: await epub("Emma: A Novel", "Jane Austen") });
+      expect(result.status).toBe("attached");
+      const fm = app.metadataCache.getFileCache(note)?.frontmatter;
+      expect(fm).toMatchObject({
+        title: "Emma",
+        author: ["J. Austen"],
+        attachments: ["[[Emma.epub]]"],
+        cover: "[[Emma cover.jpg]]",
+      });
+      expect(app.vault.getAbstractFileByPath("Library/files/Emma.epub")).not.toBeNull();
+    });
+
+    it("refuses a file that already belongs to another book", async () => {
+      const { app, importer } = setup();
+      await importer.import({ kind: "external", name: "dune.epub", data: await epub("Dune", "Frank Herbert") });
+      await importer.addToWishlist({ title: "Emma", authors: [], subjects: [] });
+      const dune = app.vault.getAbstractFileByPath("Library/files/Dune.epub") as TFile;
+      const emma = app.vault.getAbstractFileByPath("Library/Emma.md") as TFile;
+      const result = await importer.attach(emma, { kind: "vault", file: dune });
+      expect(result.status).toBe("in-use");
+    });
+
+    it("imports a book that is on the wishlist into that note", async () => {
+      const { app, importer } = setup();
+      await importer.addToWishlist({ title: "Dune", authors: ["Frank Herbert"], subjects: [] });
+      const result = await importer.import({ kind: "external", name: "dune.epub", data: await epub("Dune", "Frank Herbert") });
+      expect(result.status).toBe("imported");
+      if (result.status === "imported") expect(result.note.path).toBe("Library/Dune.md");
+      expect(app.vault.getAbstractFileByPath("Library/Dune 1.md")).toBeNull();
+      const fm = app.metadataCache.getFileCache(result.status === "imported" ? result.note : (null as never))?.frontmatter;
+      expect(fm?.["attachments"]).toEqual(["[[Dune.epub]]"]);
+    });
+  });
 });

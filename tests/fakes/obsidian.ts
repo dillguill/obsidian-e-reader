@@ -167,6 +167,20 @@ function stringifyYamlScalar(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** Wikilinks in property values, keyed like Obsidian's: `cover` for a scalar, `attachments.0` for a list item. */
+function buildFrontmatterLinks(frontmatter: Record<string, unknown>): FrontmatterLinkCache[] {
+  const links: FrontmatterLinkCache[] = [];
+  const add = (key: string, value: unknown): void => {
+    const match = typeof value === "string" ? value.match(/^\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]$/) : null;
+    if (match) links.push({ key, link: match[1] as string, original: value as string });
+  };
+  for (const [key, value] of Object.entries(frontmatter)) {
+    if (Array.isArray(value)) value.forEach((item, index) => add(`${key}.${index}`, item));
+    else add(key, value);
+  }
+  return links;
+}
+
 function stringifyFrontmatter(frontmatter: Record<string, unknown>): string {
   const lines: string[] = [];
   for (const [key, value] of Object.entries(frontmatter)) {
@@ -406,8 +420,10 @@ export class MetadataCache extends Events {
     const content = this.vault._contents.get(file.path);
     if (content === undefined) return null;
     const { frontmatterText, body } = splitFrontmatter(content);
+    const frontmatter = frontmatterText !== null ? parseFrontmatterYaml(frontmatterText) : undefined;
     return {
-      frontmatter: frontmatterText !== null ? parseFrontmatterYaml(frontmatterText) : undefined,
+      frontmatter,
+      frontmatterLinks: frontmatter ? buildFrontmatterLinks(frontmatter) : undefined,
       sections: buildSections(body),
       blocks: buildBlocks(body),
     };

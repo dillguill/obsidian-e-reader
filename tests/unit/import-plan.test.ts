@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { coverExtension, fillGaps } from "../../src/import/metadata";
-import { matchFromSearch, searchUrl } from "../../src/import/open-library";
+import { matchFromSearch, querySearchUrl, resultsFromSearch, searchUrl } from "../../src/import/open-library";
 import { buildFrontmatter, duplicateKeys, isInFolder, joinPath, normalizeForMatch, safeFileName } from "../../src/import/plan";
 
 const NAMES = { marker: "type", markerValue: "book", cover: "cover", attachments: "attachments" };
@@ -37,6 +37,15 @@ describe("duplicate matching", () => {
 });
 
 describe("buildFrontmatter", () => {
+  it("leaves attachments out for a book with no file yet", () => {
+    const fm = buildFrontmatter(
+      { title: "T", authors: [], subjects: [] },
+      { marker: "type", markerValue: "book", cover: "cover", attachments: "attachments" },
+      { book: null, cover: null },
+    );
+    expect(fm).not.toHaveProperty("attachments");
+  });
+
   it("writes the marker, links and every known field, leaving out what is empty", () => {
     const fm = buildFrontmatter(
       { title: "Dune", authors: ["Frank Herbert"], subjects: ["SF"], pages: 412, isbn: "123" },
@@ -139,5 +148,27 @@ describe("Open Library", () => {
   it("returns null for an empty or malformed response", () => {
     expect(matchFromSearch({ docs: [] }, { title: "Dune" })).toBeNull();
     expect(matchFromSearch(null, { title: "Dune" })).toBeNull();
+  });
+});
+
+describe("wishlist search", () => {
+  it("searches a bare ISBN as an ISBN and anything else as free text", () => {
+    expect(new URL(querySearchUrl("978-0-441-17271-9")).searchParams.get("isbn")).toBe("9780441172719");
+    expect(new URL(querySearchUrl("dune herbert")).searchParams.get("q")).toBe("dune herbert");
+  });
+
+  it("lists every titled result in order, with its cover", () => {
+    const response = {
+      docs: [
+        { title: "Dune", author_name: ["Frank Herbert"], first_publish_year: 1965, cover_i: 7 },
+        { author_name: ["No Title"] },
+        { title: "Dune Messiah" },
+      ],
+    };
+    const results = resultsFromSearch(response);
+    expect(results.map((result) => result.meta.title)).toEqual(["Dune", "Dune Messiah"]);
+    expect(results[0]?.meta).toMatchObject({ authors: ["Frank Herbert"], published: "1965" });
+    expect(results[0]?.coverUrl).toContain("/b/id/7-L.jpg");
+    expect(results[1]?.meta.authors).toEqual([]);
   });
 });

@@ -30,6 +30,7 @@ const PROPERTY_FIELDS: { key: keyof PropertyNames; name: string; desc: string }[
   { key: "progress", name: "Progress", desc: "Property the reader writes reading progress into, as a percentage." },
   { key: "lastRead", name: "Last read", desc: "Property the reader writes the current position into." },
   { key: "furthestRead", name: "Furthest read", desc: "Property holding the furthest position reached." },
+  { key: "readLater", name: "Read later", desc: "Checkbox property the library's card menu sets for books you want to read next." },
 ];
 
 const READER_CHOICES: Record<ReaderChoice, string> = {

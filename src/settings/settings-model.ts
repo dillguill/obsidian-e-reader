@@ -35,6 +35,8 @@ export interface PropertyNames {
   progress: string;
   lastRead: string;
   furthestRead: string;
+  /** Checkbox marking a book to read later. Written from the library's card menu. */
+  readLater: string;
 }
 
 /**
@@ -185,6 +187,7 @@ export const DEFAULT_SETTINGS: Settings = {
     progress: "reading_progress",
     lastRead: "reading_position",
     furthestRead: "furthest_position",
+    readLater: "read_later",
   },
   annotationTypes: [
     { name: "idea", color: "#ffd76e" },

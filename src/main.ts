@@ -2,6 +2,8 @@ import type { BasesAllOptions, WorkspaceLeaf } from "obsidian";
 import { FuzzySuggestModal, Modal, Notice, Plugin, Setting, TFile } from "obsidian";
 import { ReaderEvents } from "./core/reader-events";
 import { BookImporter, IMPORTABLE_EXTENSIONS, type ImportResult, type ImportSource } from "./import/importer";
+import { type WishlistPick, chooseBookFile, searchForWishlist } from "./import/modals";
+import { fetchCover } from "./import/open-library";
 import { isInFolder } from "./import/plan";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
 import { readPdfMetadata } from "./reader/pdf/adapter";
@@ -116,7 +118,8 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
 
     this.registerView(
       READER_VIEW_TYPE,
-      (leaf) => new ReaderView(leaf, () => this.settings, () => void this.saveSettings(), this.readerEvents),
+      (leaf) =>
+        new ReaderView(leaf, () => this.settings, () => void this.saveSettings(), this.readerEvents, (note) => this.attachFile(note)),
     );
     // Both panes are registered whatever the settings say: `registerView` has
     // no public counterpart to undo it, so the toggles gate the commands and
@@ -146,7 +149,13 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
         name: "Library",
         icon: "library",
         factory: (controller, containerEl) =>
-          new LibraryView(controller, containerEl, () => this.settings, (source) => this.importBook(source)),
+          new LibraryView(
+            controller,
+            containerEl,
+            () => this.settings,
+            (source) => this.importBook(source),
+            (note) => this.attachFile(note),
+          ),
         options: () => libraryViewOptions(this.settings),
       });
       if (!registered) {
@@ -226,6 +235,12 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       id: "import-book",
       name: "Import a book from the vault",
       callback: () => new ImportSuggestModal(this, (file) => void this.importBook({ kind: "vault", file })).open(),
+    });
+
+    this.addCommand({
+      id: "add-to-wishlist",
+      name: "Add a book to the wishlist",
+      callback: () => searchForWishlist(this.app, (pick) => void this.addToWishlist(pick)),
     });
 
     this.registerEvent(
@@ -368,6 +383,45 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       console.error("[e-reader] import failed", error);
       new Notice(`Could not import ${name}: ${String(error)}. Nothing was changed.`, 10000);
       return null;
+    }
+  }
+
+  /** Saves a book you do not have yet, with its cover when Open Library has one. */
+  async addToWishlist(pick: WishlistPick): Promise<void> {
+    try {
+      const cover = await fetchCover(pick.coverUrl);
+      const result = await this.importer.addToWishlist(cover ? { ...pick.meta, cover } : pick.meta);
+      if (result.status === "imported") new Notice(`Added “${result.title}” to your wishlist.`);
+      else if (result.status === "duplicate") {
+        new Notice(`“${result.title}” is already in your library, as ${result.existing.basename}. Nothing was changed.`, 8000);
+      }
+    } catch (error) {
+      console.error("[e-reader] could not add to the wishlist", error);
+      new Notice(`Could not add “${pick.meta.title}”: ${String(error)}. Nothing was changed.`, 10000);
+    }
+  }
+
+  /** Asks for a book's file and attaches it. Resolves true once the book has its file. */
+  async attachFile(note: TFile): Promise<boolean> {
+    const source = await chooseBookFile(this.app, () => {
+      const attached = this.attachedPaths();
+      return this.app.vault.getFiles().filter((file) => !attached.has(file.path));
+    });
+    if (!source) return false;
+    const name = source.kind === "vault" ? source.file.name : source.name;
+    try {
+      const result = await this.importer.attach(note, source);
+      if (result.status === "attached") {
+        new Notice(`Added ${result.file.name} to “${note.basename}”.`);
+        return true;
+      }
+      if (result.status === "in-use") new Notice(`${name} already belongs to “${result.existing.basename}”. Nothing was changed.`, 8000);
+      else new Notice(`${name} is not an EPUB or PDF.`);
+      return false;
+    } catch (error) {
+      console.error("[e-reader] could not attach a file", error);
+      new Notice(`Could not add ${name}: ${String(error)}. Nothing was changed.`, 10000);
+      return false;
     }
   }
 

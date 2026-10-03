@@ -56,7 +56,7 @@ copy or delete it. Each is written into the book note as a callout you can
 read, edit and link to:
 
 ```markdown
-> [!idea]
+> [!idea] Idea · [p. 35](obsidian://e-reader?vault=…&file=…&id=h-a1b2c3)
 > the spice must flow
 > %%{"id":"h-a1b2c3","created":"2026-08-20T10:04:00Z"}%%
 >
@@ -66,7 +66,11 @@ read, edit and link to:
 ```
 
 The callout's type is the highlight's type, so a CSS snippet can give each type
-its own callout style. The quote is the anchor as well as the display, so
+its own callout style, and the link in its title opens the book at that
+highlight. **Highlight format** in settings can write a plain `> quote`
+instead, or give each highlight a note of its own with properties you name
+(book, type, page, section, created), linked from the book note so Bases can
+list and group them. Highlights already written keep their format. The quote is the anchor as well as the display, so
 editing it by hand edits the anchor. Everything outside the plugin's `%%e-reader:begin/end%%` markers
 is yours and is never touched. Nothing lives in a sidecar database.
 

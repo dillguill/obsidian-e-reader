@@ -36,7 +36,11 @@ Whatever the reader has written about this book stays here, untouched.
 1. Everything outside the `begin`/`end` markers is the reader's and MUST NOT be modified.
 2. One callout per entry. The callout's type carries the entry `type` (`> [!idea]`) and its title is left
    empty; `bookmark` is reserved. The pre-0.3.7 form, `> [!quote] <type>` with the quote in `==…==`,
-   still parses.
+   still parses. The "quote" format drops the callout header and carries `type` in the anchor JSON
+   instead; the "note" format writes the same quote block as the body of a note of its own, tied to the
+   book by a link property, and the region lists links to those notes. A reader link
+   (`[p. 35](obsidian://e-reader?…)`) may follow the type in the callout title or sit on its own quoted
+   line; it is derived, ignored when parsing and rewritten when serialising.
 3. The quote line(s) before the comment are the authoritative anchor **and** the displayed quote. One copy only.
 4. The `%%…%%` comment holds the anchor record as JSON. It is hidden in reading view.
 5. The block reference `^id` sits on its **own line, separated from the blockquote by a blank line**.

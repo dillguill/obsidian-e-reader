@@ -206,6 +206,7 @@ export interface Position {
 export interface SectionCache {
   type: string;
   position: Position;
+  id?: string;
 }
 
 export interface BlockCache {
@@ -264,6 +265,11 @@ function buildSections(body: string): SectionCache[] {
   }
   flush(lines.length - 1, Math.max(offset - 1, 0));
   return sections;
+}
+
+function blankedFrontmatter(content: string, body: string): string {
+  const head = content.slice(0, content.length - body.length);
+  return head.replace(/[^\n]/g, " ") + body;
 }
 
 function buildBlocks(body: string): Record<string, BlockCache> {
@@ -353,6 +359,20 @@ export class Vault extends Events {
     return file;
   }
 
+  async cachedRead(file: TFile): Promise<string> {
+    return this.read(file);
+  }
+
+  async process(file: TFile, fn: (data: string) => string): Promise<string> {
+    const next = fn(await this.read(file));
+    await this.modify(file, next);
+    return next;
+  }
+
+  getName(): string {
+    return "Test Vault";
+  }
+
   async modify(file: TFile, data: string): Promise<void> {
     if (!this._files.has(file.path)) throw new Error(`File not found: ${file.path}`);
     this._contents.set(file.path, data);
@@ -424,8 +444,10 @@ export class MetadataCache extends Events {
     return {
       frontmatter,
       frontmatterLinks: frontmatter ? buildFrontmatterLinks(frontmatter) : undefined,
-      sections: buildSections(body),
-      blocks: buildBlocks(body),
+      // Offsets and lines count from the start of the file, as the real
+      // cache's do, so the frontmatter is blanked rather than cut off.
+      sections: buildSections(blankedFrontmatter(content, body)),
+      blocks: buildBlocks(blankedFrontmatter(content, body)),
     };
   }
 
@@ -438,6 +460,20 @@ export class MetadataCache extends Events {
    * order), which is enough for tests that don't rely on that tie-break.
    */
   /** The real one shortens to the bare name when unambiguous; this fake always does, keeping the extension except for notes. */
+  /** Source path → linked path → count, from frontmatter links only (all this fake's callers need). */
+  get resolvedLinks(): Record<string, Record<string, number>> {
+    const result: Record<string, Record<string, number>> = {};
+    for (const file of this.vault.getMarkdownFiles()) {
+      const links: Record<string, number> = {};
+      for (const link of this.getFileCache(file)?.frontmatterLinks ?? []) {
+        const dest = this.getFirstLinkpathDest(link.link, file.path);
+        if (dest) links[dest.path] = (links[dest.path] ?? 0) + 1;
+      }
+      result[file.path] = links;
+    }
+    return result;
+  }
+
   fileToLinktext(file: TFile, _sourcePath: string, omitMdExtension = true): string {
     return omitMdExtension && file.extension === "md" ? file.basename : file.name;
   }
@@ -483,6 +519,10 @@ export class FileManager {
    * Does not model a configurable attachment folder (the real API does) —
    * this fake just avoids colliding with an existing vault path.
    */
+  async trashFile(file: TFile): Promise<void> {
+    await this.vault.delete(file);
+  }
+
   async renameFile(file: TFile, newPath: string): Promise<void> {
     await this.vault.rename(file, newPath);
   }

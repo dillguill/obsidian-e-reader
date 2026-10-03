@@ -158,6 +158,12 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       readers: { epub: "plugin", pdf: "default" },
       panes: { outline: false, highlights: true, hideNativeOutline: true },
       import: { notesFolder: "Books", filesFolder: "Books/files", inboxFolder: "Inbox", lookUpMetadata: false, ignoredPdfs: ["Inbox/receipt.pdf"] },
+      highlights: {
+        format: "note",
+        folder: "Notes/Highlights",
+        subfolderPerBook: false,
+        properties: { book: "source", type: "kind", page: "p", section: "chapter", created: "made" },
+      },
       reader: {
         pdfScale: 1.25,
         pdfFit: "none",

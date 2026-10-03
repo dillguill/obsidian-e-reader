@@ -14,7 +14,7 @@
 // pdf.js needs its worker script served from a URL it can spin up a Worker
 // from; there is no vendor/ directory to point at anymore, so the worker's
 // minified source is inlined into main.js as a text asset (an esbuild plugin
-// in esbuild.config.mjs loads pdfjs-dist/build/pdf.worker.min.mjs as a
+// in esbuild.config.mjs loads pdfjs-dist/legacy/build/pdf.worker.min.mjs as a
 // string) and turned into a same-origin blob: URL at runtime instead.
 //
 // No pdfjs type may leak past this module — callers only see
@@ -120,47 +120,19 @@ export interface PdfEngineOptions extends PdfPreferences {
 let pdfjsPromise: Promise<{ lib: PdfjsModule; workerSource: string }> | null = null;
 
 /**
- * pdf.js 6 calls `Map.prototype.getOrInsertComputed` and `getOrInsert`, from
- * the upsert proposal, which Obsidian's runtimes (its Electron and iOS's
- * WebKit) do not ship yet. Where one is missing it is defined with the
- * proposal's own semantics, on this window and, by prefixing the worker's
- * source with the same code, inside the worker. Without it `getMetadata`
- * throws on every PDF, which is what failed every PDF import.
+ * pdf.js's legacy build, not its default one. The default build calls
+ * JavaScript that Obsidian's runtimes (its Electron, and iOS's WebKit) do not
+ * ship yet — `Map.prototype.getOrInsertComputed`, `Uint8Array.prototype.toHex`
+ * and more — and failed on real PDFs with "is not a function". The legacy
+ * build is the same library with those polyfilled, in the worker too.
  */
-function installUpsertPolyfill(): void {
-  for (const C of [Map, WeakMap]) {
-    const proto = C.prototype as unknown as Record<string, unknown>;
-    if (typeof proto["getOrInsert"] !== "function") {
-      Object.defineProperty(proto, "getOrInsert", {
-        configurable: true,
-        writable: true,
-        value(this: Map<unknown, unknown>, key: unknown, value: unknown) {
-          if (!this.has(key)) this.set(key, value);
-          return this.get(key);
-        },
-      });
-    }
-    if (typeof proto["getOrInsertComputed"] !== "function") {
-      Object.defineProperty(proto, "getOrInsertComputed", {
-        configurable: true,
-        writable: true,
-        value(this: Map<unknown, unknown>, key: unknown, compute: (key: unknown) => unknown) {
-          if (!this.has(key)) this.set(key, compute(key));
-          return this.get(key);
-        },
-      });
-    }
-  }
-}
-
 function loadPdfjs(): Promise<{ lib: PdfjsModule; workerSource: string }> {
   pdfjsPromise ??= (async () => {
-    installUpsertPolyfill();
     const [lib, worker] = await Promise.all([
-      import("pdfjs-dist") as Promise<unknown>,
-      import("pdfjs-dist/build/pdf.worker.min.mjs"),
+      import("pdfjs-dist/legacy/build/pdf.mjs") as Promise<unknown>,
+      import("pdfjs-dist/legacy/build/pdf.worker.min.mjs"),
     ]);
-    return { lib: lib as PdfjsModule, workerSource: `(${installUpsertPolyfill.toString()})();\n${worker.default}` };
+    return { lib: lib as PdfjsModule, workerSource: worker.default };
   })();
   return pdfjsPromise;
 }

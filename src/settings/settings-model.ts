@@ -86,7 +86,8 @@ export interface ReaderPreferences {
   /** Whether saved highlights are painted into the document. */
   showHighlights: boolean;
   /**
-   * The type the reader's highlight mode writes. A name from
+   * The type last chosen in the selection popup, which the "Highlight
+   * selection" command writes. A name from
    * {@link Settings.annotationTypes}, or empty when there are none left.
    */
   activeAnnotationType: string;

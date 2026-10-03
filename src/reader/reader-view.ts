@@ -13,7 +13,7 @@
 // FileView.setState drive; do the actual book loading from `onLoadFile`.
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
-import { FileView, Menu, Notice, Platform, TFile } from "obsidian";
+import { FileView, Menu, Notice, Platform, Scope, TFile } from "obsidian";
 import { addEntry, listEntries, removeEntry, setEntryType } from "../annotations/store";
 import type { Entry } from "../annotations/entry";
 import type { ReaderEvents } from "../core/reader-events";
@@ -28,6 +28,8 @@ import { createPdfEngine } from "./pdf/adapter";
 import { type ReadingPosition, positionChanged, shouldFlushNow } from "./position";
 import { clampProgress } from "./progress";
 import { highlightColor } from "./highlight-style";
+import { isTypingTarget, keyAction } from "./keys";
+import { SelectionPopup } from "./selection-popup";
 import { ReaderToolbar } from "./toolbar";
 import { toolbarState } from "./toolbar-model";
 import { stepScale } from "./zoom";
@@ -43,6 +45,12 @@ export interface ReaderViewState {
 }
 
 const POSITION_FLUSH_INTERVAL_MS = 2000;
+/**
+ * How long a touch selection must hold still before the popup opens. Handles
+ * dragged on a touchscreen send no touch events into the page, only a stream
+ * of `selectionchange`, so the popup waits for that stream to settle.
+ */
+const TOUCH_SELECTION_SETTLE_MS = 300;
 const BOOKMARK_TYPE = RESERVED_ENTRY_TYPE;
 
 function isReaderViewState(state: unknown): state is ReaderViewState {
@@ -71,19 +79,9 @@ export class ReaderView extends FileView {
    * each time, for a change that cannot possibly have touched an entry.
    */
   private lastEntrySignature: string | null = null;
-  /**
-   * Whether a completed drag becomes a highlight straight away. Deliberately
-   * NOT persisted: a reader that comes back to an armed book and silently
-   * turns its first drag into a note has been ambushed, and re-arming costs
-   * one click.
-   */
-  private highlightMode = false;
-  /**
-   * The selection as it stood when the highlight button was pressed. Pressing
-   * a button outside the text collapses the selection, so by the time the
-   * click handler runs there may be nothing left to read.
-   */
-  private capturedSelection: EngineSelection | null = null;
+  /** The bar of highlight swatches that opens over a selection. */
+  private popup: SelectionPopup | null = null;
+  private selectionSettleTimer: number | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -127,21 +125,28 @@ export class ReaderView extends FileView {
       zoomOut: () => void this.zoom(-1),
       goToPage: (page) => void this.goToPage(page),
       displayOptions: () => this.displayOptions(),
-      highlightOrToggleMode: () => void this.highlightOrToggleMode(),
-      captureSelection: () => {
-        this.capturedSelection = this.selection();
-      },
-      annotationTypes: () => this.getSettings().annotationTypes,
-      chooseHighlightType: (name) => {
-        this.getSettings().reader.activeAnnotationType = name;
-        this.saveSettings();
-        // Choosing a type is how most readers will start highlighting, so it
-        // arms rather than making them click the button as well.
-        this.setHighlightMode(true);
-      },
       toggleBookmark: () => void this.toggleBookmark(),
     });
     this.toolbar.setVisible(false);
+
+    this.popup = new SelectionPopup(this.contentRoot, this, {
+      highlight: (type, selection) => void this.highlightFromPopup(type, selection),
+      copy: (selection) => {
+        void navigator.clipboard.writeText(selection.exact);
+        this.closePopup(false);
+      },
+    });
+    // Scrolling moves the selection out from under the popup. `scroll` does
+    // not bubble, so it is caught on the way down instead.
+    this.registerDomEvent(this.contentRoot, "scroll", () => this.repositionPopup(), { capture: true });
+
+    // Keys pressed in the host document — a PDF, or the pane around an EPUB
+    // — reach the view through its Scope while it is the active leaf. Presses
+    // inside an EPUB's iframes arrive through the engine instead.
+    const scope = this.scope ?? (this.scope = new Scope(this.app.scope));
+    for (const key of ["ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Escape"]) {
+      scope.register([], key, (event) => (this.handleKey(event) ? false : true));
+    }
 
     this.registerInterval(
       window.setInterval(() => {
@@ -178,6 +183,7 @@ export class ReaderView extends FileView {
   }
 
   override async onUnloadFile(file: TFile): Promise<void> {
+    this.closePopup(false);
     await this.flushPosition(true);
     this.engine?.destroy();
     this.engine = null;
@@ -191,6 +197,7 @@ export class ReaderView extends FileView {
   }
 
   override async onClose(): Promise<void> {
+    this.closePopup(false);
     await this.flushPosition(true);
     this.engine?.destroy();
     this.engine = null;
@@ -241,8 +248,7 @@ export class ReaderView extends FileView {
     this.cachedOutline = null;
     this.entries = [];
     this.lastEntrySignature = null;
-    this.highlightMode = false;
-    this.capturedSelection = null;
+    this.closePopup(false);
     this.toolbar?.setVisible(false);
     this.clearViewport();
 
@@ -295,8 +301,13 @@ export class ReaderView extends FileView {
     this.engine = engine;
     engine.onContextMenu((position) => this.showAnnotationMenu(position));
     engine.onTap((position) => this.showEntryMenuAt(position));
-    engine.onSelectionEnd(() => void this.onSelectionEnd());
-    engine.onChange(() => this.updateToolbar());
+    engine.onSelectionEnd(() => this.onSelectionEnd());
+    engine.onSelectionChange(() => this.onSelectionChange());
+    engine.onKeyDown((event) => this.handleKey(event));
+    engine.onChange(() => {
+      this.updateToolbar();
+      this.repositionPopup();
+    });
     this.toolbar?.setVisible(true);
 
     const restored = this.readStoredLocator(file);
@@ -419,21 +430,17 @@ export class ReaderView extends FileView {
       this.toolbar.setVisible(false);
       return;
     }
-    const settings = this.getSettings();
-    const activeType = this.activeType();
     this.toolbar.update(
       toolbarState({
         pages: engine.pageState(),
         scale: engine.scale(),
-        highlightMode: this.highlightMode,
-        activeType,
-        activeColor: activeType === "" ? "" : highlightColor(settings.annotationTypes, activeType),
         bookmarked: this.currentBookmark() !== null,
       }),
     );
   }
 
-  private async zoom(direction: 1 | -1): Promise<void> {
+  /** Steps the zoom (PDF) or text size (EPUB). Used by the toolbar and the zoom commands. */
+  async zoom(direction: 1 | -1): Promise<void> {
     const engine = this.engine;
     if (!engine) return;
     await engine.setScale(stepScale(engine.scale(), direction));
@@ -444,6 +451,119 @@ export class ReaderView extends FileView {
     await this.engine?.goToPage(page);
     this.announcePosition();
     this.updateToolbar();
+  }
+
+  /** One page forward or back. Used by the arrow keys and the page commands. */
+  async turnPage(direction: 1 | -1): Promise<void> {
+    const engine = this.engine;
+    if (!engine) return;
+    this.closePopup(false);
+    try {
+      await engine.turnPage(direction);
+    } catch (error) {
+      console.error("[e-reader] failed to turn the page", error);
+    }
+    this.announcePosition();
+    this.updateToolbar();
+  }
+
+  /**
+   * Applies a key press from either route — the view's Scope or an EPUB's
+   * iframe. Returns whether it was taken, so the caller suppresses the
+   * default only then.
+   */
+  private handleKey(event: KeyboardEvent): boolean {
+    if (isTypingTarget(event.target)) return false;
+    const action = keyAction(event);
+    if (action === "next" || action === "prev") {
+      void this.turnPage(action === "next" ? 1 : -1);
+      return true;
+    }
+    if (action === "dismiss" && this.popup?.current()) {
+      this.closePopup(true);
+      return true;
+    }
+    return false;
+  }
+
+  // ------------------------------------------------------ selection popup
+
+  /** Where the popup sits by default. A touchscreen's own selection menu opens above, so it goes below there. */
+  private popupSide(): "above" | "below" {
+    return Platform.isMobile ? "below" : "above";
+  }
+
+  /**
+   * A drag finished inside the book. The selection can settle a moment after
+   * the release — a click that collapses it, a double-click that grows it —
+   * so it is read on the next tick rather than inside the event.
+   */
+  private onSelectionEnd(): void {
+    window.setTimeout(() => this.openPopupForSelection(), 0);
+  }
+
+  /**
+   * The selection changed. Cleared, or different from what the popup was
+   * opened for, the popup closes at once; a mouse drag re-opens it on
+   * release, while a touch selection — whose handles fire no release — re-
+   * opens it once the changes stop.
+   */
+  private onSelectionChange(): void {
+    if (this.popup?.isPressed()) return;
+    const selection = this.engine?.getSelection() ?? null;
+    const open = this.popup?.current() ?? null;
+    if (!selection || (open && open.exact !== selection.exact)) this.popup?.hide();
+    if (!selection || !Platform.isMobile) return;
+    if (this.selectionSettleTimer !== null) window.clearTimeout(this.selectionSettleTimer);
+    this.selectionSettleTimer = window.setTimeout(() => {
+      this.selectionSettleTimer = null;
+      this.openPopupForSelection();
+    }, TOUCH_SELECTION_SETTLE_MS);
+  }
+
+  private openPopupForSelection(): void {
+    const engine = this.engine;
+    const popup = this.popup;
+    if (!engine || !popup) return;
+    const selection = engine.getSelection();
+    const rect = engine.selectionRect();
+    if (!selection || selection.exact === "" || !rect) {
+      popup.hide();
+      return;
+    }
+    // A file that is not a book note cannot take highlights; Copy still works.
+    const types = this.bookNote() ? this.getSettings().annotationTypes : [];
+    popup.show(selection, rect, types, this.popupSide());
+  }
+
+  private repositionPopup(): void {
+    if (!this.popup?.current()) return;
+    this.popup.reposition(this.engine?.selectionRect() ?? null, this.popupSide());
+  }
+
+  /** Closes the popup, and with `clearSelection` the selection it was open for too. */
+  private closePopup(clearSelection: boolean): void {
+    if (this.selectionSettleTimer !== null) {
+      window.clearTimeout(this.selectionSettleTimer);
+      this.selectionSettleTimer = null;
+    }
+    if (clearSelection && this.popup?.current()) this.clearSelection();
+    this.popup?.hide();
+  }
+
+  /**
+   * A swatch in the popup. The type chosen is remembered as the one the
+   * "Highlight selection" command writes, so a hotkey repeats the last
+   * choice made by hand.
+   */
+  private async highlightFromPopup(type: string, selection: EngineSelection): Promise<void> {
+    this.closePopup(true);
+    const reader = this.getSettings().reader;
+    if (reader.activeAnnotationType !== type) {
+      reader.activeAnnotationType = type;
+      this.saveSettings();
+    }
+    await this.createEntry(type, selection);
   }
 
   // ---------------------------------------------------------- highlights
@@ -503,57 +623,6 @@ export class ReaderView extends FileView {
       console.error("[e-reader] failed to paint saved highlights", error);
     }
     this.updateToolbar();
-  }
-
-  /** The configured type highlight mode writes, or empty when there are none. */
-  private activeType(): string {
-    const settings = this.getSettings();
-    const active = settings.reader.activeAnnotationType;
-    if (active !== "" && settings.annotationTypes.some((type) => type.name === active)) return active;
-    return settings.annotationTypes[0]?.name ?? "";
-  }
-
-  /**
-   * The highlight button does whichever of its two jobs the moment calls for:
-   * with text selected it highlights that, and with nothing selected it arms
-   * the mode so a drag highlights directly. One button, because on a
-   * touchscreen there is no drag-release to trigger on — a long-press
-   * selection settles after the touch ends — so "select, then tap" is the
-   * only gesture that works there.
-   */
-  private async highlightOrToggleMode(): Promise<void> {
-    const selection = this.selection() ?? this.capturedSelection;
-    this.capturedSelection = null;
-    const type = this.activeType();
-    if (selection && selection.exact !== "" && type !== "") {
-      this.clearSelection();
-      await this.createEntry(type, selection);
-      return;
-    }
-    this.setHighlightMode(!this.highlightMode);
-  }
-
-  private setHighlightMode(on: boolean): void {
-    this.highlightMode = on && this.activeType() !== "";
-    if (on && this.activeType() === "") {
-      new Notice("E-Reader: add a highlight type in settings before using highlight mode.");
-    }
-    this.updateToolbar();
-  }
-
-  /**
-   * A drag finished inside the book. In highlight mode that becomes a
-   * highlight there and then — no menu — and the selection is cleared so the
-   * same words cannot be highlighted twice by an idle second release.
-   */
-  private async onSelectionEnd(): Promise<void> {
-    if (!this.highlightMode) return;
-    const type = this.activeType();
-    if (type === "") return;
-    const selection = this.selection();
-    if (!selection || selection.exact === "") return;
-    this.clearSelection();
-    await this.createEntry(type, selection);
   }
 
   private clearSelection(): void {
@@ -654,6 +723,9 @@ export class ReaderView extends FileView {
    * always opens.
    */
   private showAnnotationMenu(position: { x: number; y: number }): boolean {
+    // The menu offers everything the popup does; showing both stacks two
+    // answers to one question.
+    this.closePopup(false);
     const menu = new Menu();
     const note = this.bookNote();
     const types = this.getSettings().annotationTypes;

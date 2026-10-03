@@ -39,3 +39,14 @@ export function spreadRows(totalPages: number, mode: SpreadMode): number[][] {
   }
   return rows;
 }
+
+/**
+ * The first page of the row before or after the one holding `current` — a
+ * page turn, which in a spread moves two pages at once. Null at either end
+ * of the document, or when `current` is not in any row.
+ */
+export function adjacentRowPage(rows: readonly (readonly number[])[], current: number, direction: 1 | -1): number | null {
+  const index = rows.findIndex((row) => row.includes(current));
+  if (index === -1) return null;
+  return rows[index + direction]?.[0] ?? null;
+}

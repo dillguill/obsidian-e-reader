@@ -33,7 +33,7 @@ import type {
 } from "../engine";
 import { pdfPageToPercent } from "../progress";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
-import { type SpreadMode, spreadRows } from "../spread";
+import { type SpreadMode, adjacentRowPage, spreadRows } from "../spread";
 import type { PdfFit } from "../../settings/settings-model";
 import { clampScale, fitRowSize, fitScale } from "../zoom";
 
@@ -177,6 +177,7 @@ export class PdfEngine implements ReaderEngine {
   private contextMenuHandler: ((position: { x: number; y: number }) => boolean) | null = null;
   private tapHandler: ((position: { x: number; y: number }) => void) | null = null;
   private selectionEndHandler: (() => void) | null = null;
+  private selectionChangeHandler: (() => void) | null = null;
   private changeHandler: (() => void) | null = null;
   /** A page's size at scale 1, for the fit-to-width/height calculations. */
   private baseSize: { width: number; height: number } = { width: 0, height: 0 };
@@ -420,6 +421,17 @@ export class PdfEngine implements ReaderEngine {
 
   async goToPage(page: number): Promise<void> {
     await this.goTo({ kind: "pdf", page });
+  }
+
+  async turnPage(direction: 1 | -1): Promise<void> {
+    if (!this.doc) return;
+    const target = adjacentRowPage(spreadRows(this.doc.numPages, this.spread), this.currentPage, direction);
+    if (target !== null) await this.goTo({ kind: "pdf", page: target });
+  }
+
+  onKeyDown(_handler: (event: KeyboardEvent) => boolean): void {
+    // A PDF renders in the host document, where the view's own Scope already
+    // hears every key press; there is no inner document to forward from.
   }
 
   pageNumberFor(locator: Locator): number | null {
@@ -755,6 +767,28 @@ export class PdfEngine implements ReaderEngine {
     scrollEl.addEventListener("touchend", fire, options);
   }
 
+  onSelectionChange(handler: () => void): void {
+    this.selectionChangeHandler = handler;
+    const scrollEl = this.scrollEl;
+    if (!scrollEl) return;
+    // `selectionchange` fires on the document only. A change anywhere else in
+    // the app arrives here too; the handler reads the selection back through
+    // getSelection, which only reports one inside this book.
+    scrollEl.doc.addEventListener("selectionchange", () => this.selectionChangeHandler?.(), {
+      signal: this.listeners?.signal,
+    });
+  }
+
+  selectionRect(): { left: number; top: number; right: number; bottom: number } | null {
+    const scrollEl = this.scrollEl;
+    if (!scrollEl) return null;
+    const range = activeRange(scrollEl.win.getSelection());
+    if (!range || !scrollEl.contains(range.commonAncestorContainer)) return null;
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return null;
+    return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+  }
+
   async outline(): Promise<OutlineNode[]> {
     if (!this.doc) return [];
     const items = await this.doc.getOutline();
@@ -770,6 +804,7 @@ export class PdfEngine implements ReaderEngine {
     this.contextMenuHandler = null;
     this.tapHandler = null;
     this.selectionEndHandler = null;
+    this.selectionChangeHandler = null;
     this.changeHandler = null;
     this.observer?.disconnect();
     this.observer = null;

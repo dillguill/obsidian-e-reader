@@ -10,7 +10,14 @@
 import type { App, Plugin, TFolder } from "obsidian";
 import { AbstractInputSuggest, Notice, PluginSettingTab, Setting } from "obsidian";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
-import { DEFAULT_SETTINGS, HIGHLIGHT_PALETTE, type PropertyNames, type ReaderChoice, type Settings } from "./settings-model";
+import {
+  DEFAULT_SETTINGS,
+  HIGHLIGHT_PALETTE,
+  type HighlightMode,
+  type PropertyNames,
+  type ReaderChoice,
+  type Settings,
+} from "./settings-model";
 
 /** What this tab needs from the plugin, beyond being a Plugin. */
 export interface SettingsHost {
@@ -20,6 +27,10 @@ export interface SettingsHost {
   applyPaneSettings(): void;
   /** Imports whatever already sits in the inbox folder. */
   scanInbox(): void;
+  /** Offers to move existing highlights to where the newly chosen mode keeps them. */
+  offerToMoveHighlights(mode: HighlightMode): void;
+  /** Asks for a new name for a highlight type and renames it in every book. */
+  renameHighlightType(from: string, onDone: () => void): void;
 }
 
 const PROPERTY_FIELDS: { key: keyof PropertyNames; name: string; desc: string }[] = [
@@ -31,6 +42,7 @@ const PROPERTY_FIELDS: { key: keyof PropertyNames; name: string; desc: string }[
   { key: "lastRead", name: "Last read", desc: "Property the reader writes the current position into." },
   { key: "furthestRead", name: "Furthest read", desc: "Property holding the furthest position reached." },
   { key: "readLater", name: "Read later", desc: "Checkbox property the library's card menu sets for books you want to read next." },
+  { key: "bookmarks", name: "Bookmarks", desc: "List property the reader's bookmark button adds positions to." },
 ];
 
 const READER_CHOICES: Record<ReaderChoice, string> = {
@@ -230,27 +242,51 @@ export class EReaderSettingTab extends PluginSettingTab {
   // ----------------------------------------------------- highlight format
 
   private addHighlightFormatSection(containerEl: HTMLElement): void {
-    new Setting(containerEl).setName("Highlight format").setHeading();
+    new Setting(containerEl).setName("Highlights").setHeading();
     const settings = this.host.settings.highlights;
 
     new Setting(containerEl)
-      .setName("Write highlights as")
+      .setName("Keep highlights in")
       .setDesc(
-        "Callout and quote go into the book note. Note gives each highlight a note of its own, with properties, " +
-          "and lists links to them in the book note. Highlights already written keep their format.",
+        "The book note: highlights are written into the book's own note. Notes: each highlight gets a note of its own, " +
+          "with properties, and the book note shows them through an embedded Bases view. Both are always read.",
       )
       .addDropdown((dropdown) =>
         dropdown
-          .addOptions({ callout: "Callout", quote: "Quote", note: "Note" })
-          .setValue(settings.format)
+          .addOptions({ "book-note": "The book note", notes: "Notes" })
+          .setValue(settings.mode)
           .onChange((value) => {
-            settings.format = value === "quote" || value === "note" ? value : "callout";
+            settings.mode = value === "notes" ? "notes" : "book-note";
             this.save();
-            // The note-only settings below only apply to one choice.
+            this.host.offerToMoveHighlights(settings.mode);
+            // The settings below depend on the choice.
             this.display();
           }),
       );
-    if (settings.format !== "note") return;
+    if (settings.mode === "book-note") {
+      new Setting(containerEl)
+        .setName("Style")
+        .setDesc("A callout named after the highlight's type, so a CSS snippet can style each type; or a plain quote.")
+        .addDropdown((dropdown) =>
+          dropdown
+            .addOptions({ callout: "Callout", quote: "Quote" })
+            .setValue(settings.style)
+            .onChange((value) => {
+              settings.style = value === "quote" ? "quote" : "callout";
+              this.save();
+            }),
+        );
+    }
+    new Setting(containerEl)
+      .setName("Page links")
+      .setDesc("Write a link with each highlight that opens the book at that spot.")
+      .addToggle((toggle) =>
+        toggle.setValue(settings.pageLinks).onChange((value) => {
+          settings.pageLinks = value;
+          this.save();
+        }),
+      );
+    if (settings.mode !== "notes") return;
 
     new Setting(containerEl)
       .setName("Highlight notes folder")
@@ -282,6 +318,7 @@ export class EReaderSettingTab extends PluginSettingTab {
       { key: "page", name: "Page property", desc: "The page the highlight is on, where the book has pages." },
       { key: "section", name: "Section property", desc: "The chapter or section, from the book's table of contents." },
       { key: "created", name: "Created property", desc: "When the highlight was made." },
+      { key: "anchor", name: "Anchor property", desc: "Where the highlight sits in the book. Written by the reader; leave it as it is." },
     ];
     for (const row of rows) {
       new Setting(containerEl)
@@ -356,6 +393,12 @@ export class EReaderSettingTab extends PluginSettingTab {
             type.name = trimmed;
             this.save();
           }),
+        )
+        .addExtraButton((button) =>
+          button
+            .setIcon("pencil")
+            .setTooltip("Rename in every book")
+            .onClick(() => this.host.renameHighlightType(type.name, () => this.display())),
         )
         .addColorPicker((picker) =>
           picker.setValue(type.color).onChange((value) => {

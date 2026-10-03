@@ -14,6 +14,8 @@ import type { TFile, WorkspaceLeaf } from "obsidian";
 import { Component, ItemView, Menu, Notice, setIcon } from "obsidian";
 import type { Entry, MalformedEntry } from "../annotations/entry";
 import { listEntries, removeEntry, setEntryComment } from "../annotations/store";
+import { isBookmarkId } from "../annotations/bookmarks";
+import { entryLink } from "../annotations/links";
 import { linksToBook } from "../annotations/highlight-notes";
 import type { Settings } from "../settings/settings-model";
 import { compareLocators } from "../core/locator";
@@ -105,7 +107,7 @@ export class HighlightsView extends ItemView {
       return;
     }
 
-    const { entries, malformed } = await listEntries(this.app, file, this.getSettings().highlights);
+    const { entries, malformed } = await listEntries(this.app, file, this.getSettings());
     if (this.file !== file) return; // the active file changed while we read
 
     this.renderFilter(scope, container, entries);
@@ -164,19 +166,9 @@ export class HighlightsView extends ItemView {
       itemEl.createDiv({ cls: "ereader-highlights__quote", text: entry.exact });
     }
 
-    const commentEl = itemEl.createDiv({ cls: "ereader-highlights__comment" });
-    commentEl.setText(entry.comment);
-    commentEl.dataset["placeholder"] = "Add a note…";
-    commentEl.contentEditable = "true";
-    commentEl.toggleClass("is-empty", entry.comment === "");
-    scope.registerDomEvent(commentEl, "blur", () => {
-      const next = (commentEl.textContent ?? "").trim();
-      if (next === entry.comment) return;
-      void setEntryComment(this.app, file, entry.id, next, this.getSettings().highlights).catch((error: unknown) => {
-        console.error("[e-reader] failed to save a comment", error);
-        new Notice("E-Reader: could not save that note — see the console.");
-      });
-    });
+    // A bookmark is a property item, which has nowhere to keep a note.
+    const commentEl = isBookmarkId(entry.id) ? null : itemEl.createDiv({ cls: "ereader-highlights__comment" });
+    if (commentEl) this.wireComment(scope, commentEl, file, entry);
 
     scope.registerDomEvent(itemEl, "click", (event) => {
       if (event.target instanceof HTMLElement && event.target.isContentEditable) return;
@@ -185,6 +177,21 @@ export class HighlightsView extends ItemView {
     scope.registerDomEvent(itemEl, "contextmenu", (event) => {
       event.preventDefault();
       this.showEntryMenu(event, file, entry);
+    });
+  }
+
+  private wireComment(scope: Component, commentEl: HTMLElement, file: TFile, entry: Entry): void {
+    commentEl.setText(entry.comment);
+    commentEl.dataset["placeholder"] = "Add a note…";
+    commentEl.contentEditable = "true";
+    commentEl.toggleClass("is-empty", entry.comment === "");
+    scope.registerDomEvent(commentEl, "blur", () => {
+      const next = (commentEl.textContent ?? "").trim();
+      if (next === entry.comment) return;
+      void setEntryComment(this.app, file, entry.id, next, this.getSettings()).catch((error: unknown) => {
+        console.error("[e-reader] failed to save a comment", error);
+        new Notice("E-Reader: could not save that note — see the console.");
+      });
     });
   }
 
@@ -209,20 +216,27 @@ export class HighlightsView extends ItemView {
         return;
       }
     }
-    await this.app.workspace.openLinkText(`${file.path}#^${entry.id}`, file.path, false);
+    // Where the entry is written: its own note, its block in the book note, or (a bookmark) the book note's properties.
+    const target = entry.source ?? (isBookmarkId(entry.id) ? file.path : `${file.path}#^${entry.id}`);
+    await this.app.workspace.openLinkText(target, file.path, false);
   }
 
   private showEntryMenu(event: MouseEvent, file: TFile, entry: Entry): void {
     const menu = new Menu();
-    menu.addItem((item) =>
-      item
-        .setTitle("Copy block link")
-        .setIcon("link")
-        .onClick(() => {
-          const link = this.app.fileManager.generateMarkdownLink(file, "", `#^${entry.id}`);
-          void navigator.clipboard.writeText(link);
-        }),
-    );
+    if (!isBookmarkId(entry.id)) {
+      menu.addItem((item) =>
+        item
+          .setTitle("Copy link")
+          .setIcon("link")
+          .onClick(() => void navigator.clipboard.writeText(entryLink(this.app, file, entry, false))),
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle("Copy embed")
+          .setIcon("quote")
+          .onClick(() => void navigator.clipboard.writeText(entryLink(this.app, file, entry, true))),
+      );
+    }
     menu.addItem((item) =>
       item
         .setTitle("Open in note")
@@ -235,7 +249,7 @@ export class HighlightsView extends ItemView {
         .setTitle("Delete")
         .setIcon("trash")
         .onClick(() => {
-          void removeEntry(this.app, file, entry.id, this.getSettings().highlights).catch((error: unknown) => {
+          void removeEntry(this.app, file, entry.id, this.getSettings()).catch((error: unknown) => {
             console.error("[e-reader] failed to delete an entry", error);
             new Notice("E-Reader: could not delete that entry — see the console.");
           });

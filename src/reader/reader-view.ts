@@ -14,8 +14,9 @@
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { FileView, Menu, Notice, Platform, Scope, TFile, setIcon } from "obsidian";
-import { addEntry, listEntries, removeEntry, setEntryType } from "../annotations/store";
+import { addEntry, listEntries, migrateBookmarks, removeEntry, setEntryType } from "../annotations/store";
 import { linksToBook } from "../annotations/highlight-notes";
+import { entryLink } from "../annotations/links";
 import { activeRowIndex, rowsFromOutline } from "../sidebar/outline-model";
 import type { Entry } from "../annotations/entry";
 import type { ReaderEvents } from "../core/reader-events";
@@ -369,6 +370,14 @@ export class ReaderView extends FileView {
     this.lastFlushAt = Date.now();
     this.announcePosition();
     this.updateToolbar();
+    if (file.extension === "md") {
+      // Bookmarks written into the note before 0.4.0 move to the bookmarks property.
+      try {
+        await migrateBookmarks(this.app, file, this.getSettings());
+      } catch (error) {
+        console.error("[e-reader] could not move old bookmarks to the bookmarks property", error);
+      }
+    }
     await this.refreshEntries();
   }
 
@@ -440,7 +449,7 @@ export class ReaderView extends FileView {
     await this.loading;
     const note = this.bookNote();
     if (!note) return;
-    const { entries } = await listEntries(this.app, note, this.getSettings().highlights);
+    const { entries } = await listEntries(this.app, note, this.getSettings());
     const hint = entries.find((entry) => entry.id === id)?.anchor.hint;
     if (hint) await this.goToLocator(hint);
     else new Notice("E-Reader: that highlight is no longer in this book's notes.");
@@ -650,7 +659,7 @@ export class ReaderView extends FileView {
     }
     let entries: Entry[] = [];
     try {
-      entries = (await listEntries(this.app, note, this.getSettings().highlights)).entries;
+      entries = (await listEntries(this.app, note, this.getSettings())).entries;
     } catch (error) {
       console.error("[e-reader] failed to read the book note's entries", error);
       return;
@@ -859,6 +868,18 @@ export class ReaderView extends FileView {
           .setIcon("copy")
           .onClick(() => void navigator.clipboard.writeText(entry.exact)),
       );
+      menu.addItem((item) =>
+        item
+          .setTitle("Copy link")
+          .setIcon("link")
+          .onClick(() => void navigator.clipboard.writeText(entryLink(this.app, note, entry, false))),
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle("Copy embed")
+          .setIcon("quote")
+          .onClick(() => void navigator.clipboard.writeText(entryLink(this.app, note, entry, true))),
+      );
       menu.addSeparator();
     }
     menu.addItem((item) =>
@@ -871,7 +892,7 @@ export class ReaderView extends FileView {
 
   private async changeEntryType(note: TFile, entry: Entry, type: string): Promise<void> {
     try {
-      await setEntryType(this.app, note, entry.id, type, this.getSettings().highlights);
+      await setEntryType(this.app, note, entry.id, type, this.getSettings());
     } catch (error) {
       console.error("[e-reader] failed to change an entry's type", error);
       new Notice("E-Reader: could not change that highlight — see the console.");
@@ -880,7 +901,7 @@ export class ReaderView extends FileView {
 
   private async deleteEntry(note: TFile, entry: Entry): Promise<void> {
     try {
-      await removeEntry(this.app, note, entry.id, this.getSettings().highlights);
+      await removeEntry(this.app, note, entry.id, this.getSettings());
     } catch (error) {
       console.error("[e-reader] failed to remove an entry", error);
       new Notice("E-Reader: could not remove that entry — see the console.");
@@ -918,7 +939,7 @@ export class ReaderView extends FileView {
           ...(page === undefined ? {} : { page }),
           ...(section === undefined ? {} : { section }),
         },
-        this.getSettings().highlights,
+        this.getSettings(),
       );
     } catch (error) {
       console.error("[e-reader] failed to write an entry", error);

@@ -99,9 +99,12 @@ marker, and both the property name and the value are configurable.
 Then create a base, add a view, and choose **Library** as its type. Clicking a
 cover opens the book.
 
-The reader writes back only `reading_progress` (0-100) and `reading_position`
-(where you left off), and only while you are reading. Both names are
-configurable in settings, along with the properties the plugin reads and the
+The reader writes back only `reading_progress` (0-100), `reading_position`
+(where you left off) and `furthest_position` (the furthest you have read,
+which only moves forward), and only while you are reading. A book opens where
+you left off; if you read further elsewhere, for example on another device,
+a bar offers to jump there. **Mark as unread** on a library card clears all
+three. The names are configurable in settings, along with the properties the plugin reads and the
 highlight types and their colours.
 
 ## Building

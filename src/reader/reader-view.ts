@@ -13,19 +13,19 @@
 // FileView.setState drive; do the actual book loading from `onLoadFile`.
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
-import { FileView, Menu, Notice, Platform, Scope, TFile } from "obsidian";
+import { FileView, Menu, Notice, Platform, Scope, TFile, setIcon } from "obsidian";
 import { addEntry, listEntries, removeEntry, setEntryType } from "../annotations/store";
 import type { Entry } from "../annotations/entry";
 import type { ReaderEvents } from "../core/reader-events";
 import { describeAttachmentLookup, resolveBookAttachment, resolveBookAttachmentPath } from "../core/attachment";
 import { isBookNote } from "../core/book-note";
-import { parseLocator, serializeLocator } from "../core/locator";
+import { compareLocators, parseLocator, serializeLocator } from "../core/locator";
 import { RESERVED_ENTRY_TYPE, type Locator } from "../core/types";
 import type { Settings } from "../settings/settings-model";
 import { createEpubEngine } from "./epub/adapter";
 import type { DisplayOption, EngineSelection, OutlineNode, PaintedHighlight, ReaderEngine } from "./engine";
 import { createPdfEngine } from "./pdf/adapter";
-import { type ReadingPosition, positionChanged, shouldFlushNow } from "./position";
+import { type ReadingPosition, furthestOf, jumpTarget, positionChanged, shouldFlushNow } from "./position";
 import { clampProgress } from "./progress";
 import { highlightColor } from "./highlight-style";
 import { isTypingTarget, keyAction } from "./keys";
@@ -63,6 +63,7 @@ export class ReaderView extends FileView {
   private contentRoot: HTMLElement | null = null;
   private toolbar: ReaderToolbar | null = null;
   private lastWritten: ReadingPosition | null = null;
+  private jumpOffer: { el: HTMLElement; target: Locator } | null = null;
   private lastFlushAt = 0;
   private loadToken = 0;
   /** The open book's table of contents. Built once per book — for an EPUB it
@@ -237,6 +238,7 @@ export class ReaderView extends FileView {
   }
 
   private clearViewport(): void {
+    this.closeJumpOffer();
     this.viewportEl()?.remove();
     this.contentRoot?.querySelector(".ereader-reader__empty")?.remove();
   }
@@ -308,12 +310,14 @@ export class ReaderView extends FileView {
     engine.onSelectionChange(() => this.onSelectionChange());
     engine.onKeyDown((event) => this.handleKey(event));
     engine.onChange(() => {
+      this.dropJumpOfferIfReached();
       this.updateToolbar();
       this.repositionPopup();
     });
     this.toolbar?.setVisible(true);
 
-    const restored = this.readStoredLocator(file);
+    const properties = this.getSettings().properties;
+    const restored = this.readStoredLocator(file, properties.lastRead);
     if (restored) {
       try {
         await engine.goTo(restored);
@@ -321,6 +325,8 @@ export class ReaderView extends FileView {
         console.error("[e-reader] failed to restore reading position", error);
       }
     }
+    const further = jumpTarget(restored, this.readStoredLocator(file, properties.furthestRead));
+    if (further) this.offerJump(further);
     this.lastWritten = this.currentPosition();
     this.lastFlushAt = Date.now();
     this.announcePosition();
@@ -859,10 +865,51 @@ export class ReaderView extends FileView {
     }
   }
 
-  private readStoredLocator(bookNote: TFile): Locator | null {
+  private readStoredLocator(bookNote: TFile, property: string): Locator | null {
     const cache = this.app.metadataCache.getFileCache(bookNote);
-    const raw = cache?.frontmatter?.[this.getSettings().properties.lastRead];
+    const raw = cache?.frontmatter?.[property];
     return typeof raw === "string" ? parseLocator(raw) : null;
+  }
+
+  /**
+   * Offers a single-step jump to the furthest-read position (FR-015b). The
+   * reader stays where it was restored unless they accept; dismissing the
+   * offer, or reading on past that point, writes nothing.
+   */
+  private offerJump(target: Locator): void {
+    const root = this.contentRoot;
+    if (!root || !this.engine) return;
+    this.closeJumpOffer();
+    const page = this.engine.pageNumberFor(target);
+    const bar = root.createDiv({ cls: "ereader-reader__resume" });
+    bar.createSpan({ text: page === null ? "You read further in this book." : `You read up to page ${page}.` });
+    const jump = bar.createEl("button", { cls: "mod-cta", text: "Jump there" });
+    jump.addEventListener("click", () => {
+      this.closeJumpOffer();
+      void this.goToLocator(target);
+    });
+    const dismiss = bar.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Dismiss" } });
+    setIcon(dismiss, "x");
+    dismiss.addEventListener("click", () => this.closeJumpOffer());
+    // Just under the toolbar, whose height depends on the theme and whether
+    // its buttons wrap.
+    const toolbarEl = root.querySelector<HTMLElement>(".ereader-toolbar");
+    if (toolbarEl) bar.style.top = `${toolbarEl.offsetHeight + 8}px`;
+    this.jumpOffer = { el: bar, target };
+  }
+
+  private closeJumpOffer(): void {
+    this.jumpOffer?.el.remove();
+    this.jumpOffer = null;
+  }
+
+  /** Reading on to the offered place makes the offer moot. */
+  private dropJumpOfferIfReached(): void {
+    const offer = this.jumpOffer;
+    const current = this.engine?.currentLocator();
+    if (!offer || !current) return;
+    const order = compareLocators(current, offer.target);
+    if (order !== null && order >= 0) this.closeJumpOffer();
   }
 
   private currentPosition(): ReadingPosition | null {
@@ -873,11 +920,11 @@ export class ReaderView extends FileView {
   }
 
   /**
-   * Writes progress and position to the book note's frontmatter, under the
-   * reader's CONFIGURED names (FR-006) — these were hardcoded, so renaming
-   * either in settings left the reader writing one key while the library
-   * read another, and progress silently stopped updating. Only those two
-   * keys are touched (FileManager.processFrontMatter mutates the parsed
+   * Writes progress, position and furthest position to the book note's
+   * frontmatter, under the reader's CONFIGURED names (FR-006) — these were
+   * hardcoded, so renaming one in settings left the reader writing one key
+   * while the library read another, and progress silently stopped updating.
+   * Only those three keys are touched (FileManager.processFrontMatter mutates the parsed
    * frontmatter object in place; nothing else is touched). Skipped when the
    * position hasn't changed, and (unless `force`) debounced against
    * POSITION_FLUSH_INTERVAL_MS.
@@ -895,6 +942,10 @@ export class ReaderView extends FileView {
       const properties = this.getSettings().properties;
       await this.app.fileManager.processFrontMatter(bookNote, (frontmatter: Record<string, unknown>) => {
         frontmatter[properties.progress] = current.progress;
+        frontmatter[properties.furthestRead] = furthestOf(
+          [frontmatter[properties.furthestRead], frontmatter[properties.lastRead]],
+          current.locator,
+        );
         frontmatter[properties.lastRead] = current.locator;
       });
     } catch (error) {

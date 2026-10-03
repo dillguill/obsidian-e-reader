@@ -278,11 +278,22 @@ export class LibraryView extends BasesView {
     return menu;
   }
 
-  /** Sets the book's progress, or with `null` removes it, which is what marks a book unread. */
+  /**
+   * Sets the book's progress, or with `null` removes it, which is what marks
+   * a book unread. Unread also clears the last-read and furthest-read
+   * positions: it is the explicit reset that lets furthest-read move back
+   * (FR-015a), so the book next opens at its start with no jump offered.
+   */
   private async writeProgress(entry: BasesEntry, name: string, value: number | null): Promise<void> {
+    const { lastRead, furthestRead } = this.getSettings().properties;
     await this.app.fileManager.processFrontMatter(entry.file, (frontmatter: Record<string, unknown>) => {
-      if (value === null) delete frontmatter[name];
-      else frontmatter[name] = value;
+      if (value === null) {
+        delete frontmatter[name];
+        delete frontmatter[lastRead];
+        delete frontmatter[furthestRead];
+      } else {
+        frontmatter[name] = value;
+      }
     });
   }
 

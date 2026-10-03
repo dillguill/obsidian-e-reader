@@ -243,7 +243,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     });
 
     // The links each highlight carries (annotations/highlight-notes.ts,
-    // jumpLink): obsidian://e-reader?id=<entry> opens the book in the reader
+    // readerUrl): obsidian://e-reader?id=<entry> opens the book in the reader
     // at that highlight. Links written by 0.3.7 betas also name the book
     // note (`file=`), which is used when it still resolves.
     this.registerObsidianProtocolHandler("e-reader", (params) => void this.openHighlight(params["file"], params["id"]));

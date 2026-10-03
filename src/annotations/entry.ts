@@ -9,10 +9,11 @@
 // surrounding metadata.
 //
 // The "quote" format is the same without the callout: a plain `> quote`, with
-// the type carried in the anchor JSON instead. Either form may carry a link
-// that opens the reader at the highlight (`[p. 35](obsidian://e-reader?…)`):
-// in the callout's title (after the type's name), or on its own quoted line. The link is derived, so
-// it is skipped when parsing and rewritten when serialising.
+// the type carried in the anchor JSON instead. Under the quote, either form
+// carries an attribution line that opens the reader at the highlight:
+// `– [Dune, Book One, p. 35](obsidian://e-reader?…)`. It is derived, so it is
+// skipped when parsing and rewritten when serialising. Betas put a bare link
+// in the callout's title or on its own line instead; those parse too.
 //
 // Entries written before 0.3.7 used `> [!quote] <type>` with the quote
 // wrapped in `==…==`. Those still parse, and the whole region is rewritten
@@ -46,12 +47,8 @@ export interface Entry {
  */
 export type EntryFormat = "callout" | "quote" | "note";
 
-/** A reader link (`[label](obsidian://e-reader?…)`), which is derived and never part of the quote. */
-const JUMP_LINK_RE = /^\[[^\]]*\]\(obsidian:\/\/e-reader\?[^)]*\)$/;
-
-function capitalise(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
+/** A reader link (`[label](obsidian://e-reader?…)`), optionally after a dash, which is derived and never part of the quote. */
+const JUMP_LINK_RE = /^(?:[–—-]\s*)?\[[^\]]*\]\(obsidian:\/\/e-reader\?[^)]*\)$/;
 
 export function isJumpLink(text: string): boolean {
   return JUMP_LINK_RE.test(text.trim());
@@ -91,6 +88,7 @@ interface AnchorJson {
   prefix?: string;
   suffix?: string;
   hint?: string;
+  section?: string;
   created?: string;
 }
 
@@ -107,6 +105,7 @@ function encodeAnchorJson(anchor: AnchorRecord, type?: string): string {
   if (anchor.prefix !== undefined && anchor.prefix !== "") json.prefix = anchor.prefix;
   if (anchor.suffix !== undefined && anchor.suffix !== "") json.suffix = anchor.suffix;
   if (anchor.hint !== undefined) json.hint = serializeLocator(anchor.hint);
+  if (anchor.section !== undefined && anchor.section !== "") json.section = anchor.section;
   return JSON.stringify(json).replace(/%/g, "\\u0025");
 }
 
@@ -120,18 +119,12 @@ export function quoteLines(text: string): string[] {
  * specifies that form for structured blocks (quotes, callouts, lists,
  * tables), unlike simple paragraphs where the identifier ends the line.
  */
-export function serializeEntry(entry: Entry, jumpLink: string | null = null): string {
+export function serializeEntry(entry: Entry, attribution: string | null = null): string {
   const lines: string[] = [];
-  if (entry.format === "quote") {
-    if (entry.exact !== "") lines.push(...quoteLines(entry.exact));
-    if (jumpLink !== null) lines.push(`> ${jumpLink}`);
-    lines.push(`> %%${encodeAnchorJson(entry.anchor, entry.type)}%%`);
-  } else {
-    // With a link in the title Obsidian no longer shows the type there, so the title names it again.
-    lines.push(jumpLink === null ? `> [!${entry.type}]` : `> [!${entry.type}] ${capitalise(entry.type)} · ${jumpLink}`);
-    if (entry.exact !== "") lines.push(...quoteLines(entry.exact));
-    lines.push(`> %%${encodeAnchorJson(entry.anchor)}%%`);
-  }
+  if (entry.format !== "quote") lines.push(`> [!${entry.type}]`);
+  if (entry.exact !== "") lines.push(...quoteLines(entry.exact));
+  if (attribution !== null) lines.push(`> ${attribution}`);
+  lines.push(`> %%${encodeAnchorJson(entry.anchor, entry.format === "quote" ? entry.type : undefined)}%%`);
   if (entry.comment !== "") {
     lines.push(">");
     lines.push(...quoteLines(entry.comment));
@@ -169,6 +162,7 @@ function parseAnchor(json: string, fallbackId: string | null): { anchor: AnchorR
     // so the entry stays usable and simply re-anchors by search instead.
     if (hint !== null) anchor.hint = hint;
   }
+  if (typeof record["section"] === "string" && record["section"].trim() !== "") anchor.section = record["section"].trim();
   return typeof record["type"] === "string" && record["type"].trim() !== "" ? { anchor, type: record["type"].trim() } : { anchor };
 }
 

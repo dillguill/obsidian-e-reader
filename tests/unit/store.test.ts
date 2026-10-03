@@ -1,10 +1,12 @@
 import { App, type TFile } from "obsidian";
 import { describe, expect, it } from "vitest";
 import { bookmarkId } from "../../src/annotations/bookmarks";
-import { exportHighlightNote, parseNote } from "../../src/annotations/highlight-notes";
-import { entryAsCallout, entryAsQuote, entryLink, findBookForEntry, highlightOfNote } from "../../src/annotations/links";
+import { exportHighlightNote, renderTemplate } from "../../src/annotations/export-note";
+import { parseNote } from "../../src/annotations/highlight-notes";
+import { entryCopy, entryLink, findBookForEntry, highlightOfNote } from "../../src/annotations/links";
 import {
   addEntry,
+  fillSections,
   foldHighlightNotes,
   listEntries,
   migrateBookmarks,
@@ -26,18 +28,35 @@ async function setup(): Promise<{ app: App; book: TFile }> {
   return { app, book };
 }
 
-const draft = { type: "idea", exact: "the spice must flow", prefix: "He said", suffix: "and left", hint: { kind: "pdf" as const, page: 35 } };
-const LINK_RE = /\[p\. 35\]\(obsidian:\/\/e-reader\?vault=Test%20Vault&id=h-[0-9a-f]{6}\)/;
+const draft = {
+  type: "idea",
+  exact: "the spice must flow",
+  prefix: "He said",
+  suffix: "and left",
+  hint: { kind: "pdf" as const, page: 35 },
+  section: "Book One",
+};
+const SOURCE = "– [Dune, Book One, p. 35](obsidian://e-reader?vault=Test%20Vault&id=";
 
 describe("entry store", () => {
-  it("writes a callout whose title links back to the page by entry id alone", async () => {
+  it("writes a callout with a source line under the quote that opens the reader by entry id", async () => {
     const { app, book } = await setup();
-    await addEntry(app, book, draft, SETTINGS, NOW, random);
+    const entry = await addEntry(app, book, draft, SETTINGS, NOW, random);
     const text = await app.vault.read(book);
-    expect(text).toMatch(new RegExp(`> \\[!idea\\] Idea · ${LINK_RE.source}`));
-    expect(text).toContain("> the spice must flow\n");
+    expect(text).toContain(`> [!idea]\n> the spice must flow\n> ${SOURCE}${entry.id})\n> %%`);
+    expect(text).toContain('"section":"Book One"');
     const { entries } = await listEntries(app, book, SETTINGS);
     expect(entries.map((entry) => [entry.type, entry.exact])).toEqual([["idea", "the spice must flow"]]);
+  });
+
+  it("fills in the chapter of highlights saved without one, once", async () => {
+    const { app, book } = await setup();
+    const { section: _section, ...noSection } = draft;
+    const entry = await addEntry(app, book, noSection, SETTINGS, NOW, random);
+    const lookup = async (): Promise<string> => "Book One";
+    expect(await fillSections(app, book, SETTINGS, lookup)).toBe(1);
+    expect(await fillSections(app, book, SETTINGS, lookup)).toBe(0);
+    expect(await app.vault.read(book)).toContain(`${SOURCE}${entry.id})`);
   });
 
   it("comments on, retypes and removes a highlight", async () => {
@@ -63,30 +82,58 @@ describe("entry store", () => {
 });
 
 describe("copying and exporting a highlight", () => {
-  it("copies it as a quote, a callout or a link, each pointing back at its block", async () => {
+  it("copies it as a quote or a callout, with the comment after it and a separate link to the note", async () => {
     const { app, book } = await setup();
-    const entry = await addEntry(app, book, draft, SETTINGS, NOW, random);
-    expect(entryAsQuote(app, book, entry)).toBe(`> the spice must flow\n> — [[Dune#^${entry.id}|p. 35]]`);
-    expect(entryAsCallout(app, book, entry)).toBe(`> [!idea] Idea · [[Dune#^${entry.id}|p. 35]]\n> the spice must flow`);
+    const entry = await addEntry(app, book, { ...draft, comment: "Worth comparing." }, SETTINGS, NOW, random);
+    const source = `> ${SOURCE}${entry.id})`;
+    const tail = `Worth comparing.\n\n[[Dune#^${entry.id}|Link to note]]`;
+    expect(entryCopy(app, book, entry, false)).toBe(`> the spice must flow\n${source}\n\n${tail}`);
+    expect(entryCopy(app, book, entry, true)).toBe(`> [!idea]\n> the spice must flow\n${source}\n\n${tail}`);
     expect(entryLink(app, book, entry)).toBe(`[[Dune#^${entry.id}]]`);
     expect(findBookForEntry(app, entry.id, SETTINGS.highlights)?.path).toBe(book.path);
   });
 
-  it("exports it as a plain-text note with properties and a link back", async () => {
+  it("leaves out a missing chapter rather than an empty slot", async () => {
+    const { app, book } = await setup();
+    const { section: _section, ...noSection } = draft;
+    const entry = await addEntry(app, book, noSection, SETTINGS, NOW, random);
+    expect(entryCopy(app, book, entry, false)).toContain("– [Dune, p. 35](");
+  });
+
+  it("exports it with the built-in layout: the quote copy, then properties", async () => {
     const { app, book } = await setup();
     const entry = await addEntry(app, book, draft, SETTINGS, NOW, random);
     const note = await exportHighlightNote(app, book, entry, SETTINGS.highlights);
-    expect(note.path).toBe("Highlights/Dune/the spice must flow.md");
-    expect(app.metadataCache.getFileCache(note)?.frontmatter).toEqual({ book: "[[Dune]]", highlight: "idea", page: 35, created: NOW.toISOString() });
+    expect(note.path).toBe("Highlights/Dune/Dune – p. 35 – the spice must flow.md");
+    expect(app.metadataCache.getFileCache(note)?.frontmatter).toEqual({
+      book: "[[Dune]]",
+      highlight: "idea",
+      chapter: "Book One",
+      page: 35,
+      created: NOW.toISOString(),
+    });
     const text = await app.vault.read(note);
-    expect(text).toMatch(new RegExp(`---\\nthe spice must flow\\n\\n\\[\\[Dune#\\^${entry.id}\\|Dune, p\\. 35\\]\\]\\n$`));
-    expect(text).not.toContain("![[");
-    expect(text).not.toMatch(/^>/m);
+    expect(text.replace(/^---\n[\s\S]*?\n---\n/, "")).toBe(
+      `> the spice must flow\n> ${SOURCE}${entry.id})\n\n[[Dune#^${entry.id}|Link to note]]\n`,
+    );
 
     // The export is not a second copy: the book note still lists it once.
     expect((await listEntries(app, book, SETTINGS)).entries).toHaveLength(1);
     expect(highlightOfNote(app, note, SETTINGS.highlights)).toEqual({ id: entry.id, book });
     expect(highlightOfNote(app, book, SETTINGS.highlights)).toBeNull();
+  });
+
+  it("exports through a template, keeping the template's own properties", async () => {
+    const { app, book } = await setup();
+    await app.vault.create("Templates/Highlight.md", "---\ntags: reading\n---\n## {{book}} — {{chapter}}\n\n{{quote}}\n\n{{comment}}\n\n{{link}}\n");
+    const entry = await addEntry(app, book, draft, SETTINGS, NOW, random);
+    const note = await exportHighlightNote(app, book, entry, { ...SETTINGS.highlights, template: "Templates/Highlight" });
+    expect(app.metadataCache.getFileCache(note)?.frontmatter).toMatchObject({ tags: "reading", book: "[[Dune]]" });
+    expect(await app.vault.read(note)).toContain(`## Dune — Book One\n\nthe spice must flow\n\n[[Dune#^${entry.id}|Link to note]]\n`);
+  });
+
+  it("fills placeholders, keeps unknown ones and closes up blank lines", () => {
+    expect(renderTemplate("{{a}}\n\n{{b}}\n\n{{c}}\n{{nope}}", { a: "A", b: "", c: "C" })).toBe("A\n\nC\n{{nope}}\n");
   });
 });
 

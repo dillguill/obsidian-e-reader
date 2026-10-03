@@ -161,9 +161,10 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       panes: { outline: false, highlights: true, hideNativeOutline: true },
       import: { notesFolder: "Books", filesFolder: "Books/files", inboxFolder: "Inbox", lookUpMetadata: false, ignoredPdfs: ["Inbox/receipt.pdf"] },
       highlights: {
+        template: "Templates/Highlight.md",
         folder: "Notes/Highlights",
         subfolderPerBook: false,
-        properties: { book: "source", type: "kind", page: "p", created: "made" },
+        properties: { book: "source", type: "kind", section: "part", page: "p", created: "made" },
       },
       reader: {
         pdfScale: 1.25,

@@ -14,7 +14,7 @@
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { FileView, Menu, Notice, Platform, Scope, TFile, setIcon } from "obsidian";
-import { addEntry, foldHighlightNotes, listEntries, migrateBookmarks, removeEntry, setEntryType } from "../annotations/store";
+import { addEntry, fillSections, foldHighlightNotes, listEntries, migrateBookmarks, removeEntry, setEntryType } from "../annotations/store";
 import { linksToBook } from "../annotations/highlight-notes";
 import { addCopyItems } from "../annotations/entry-menu";
 import { activeRowIndex, rowsFromOutline } from "../sidebar/outline-model";
@@ -372,11 +372,15 @@ export class ReaderView extends FileView {
     this.updateToolbar();
     if (file.extension === "md") {
       // Bookmarks written into the note before 0.4.0 move to the bookmarks
-      // property, and highlights betas kept in notes of their own move back
-      // into the book note.
+      // property, highlights betas kept in notes of their own move back into
+      // the book note, and older highlights gain their chapter.
       try {
         await migrateBookmarks(this.app, file, this.getSettings());
         await foldHighlightNotes(this.app, file, this.getSettings());
+        // Highlights saved before their chapter was recorded get it from this book's contents.
+        await fillSections(this.app, file, this.getSettings(), (entry) =>
+          entry.anchor.hint ? this.sectionTitle(entry.anchor.hint) : Promise.resolve(undefined),
+        );
       } catch (error) {
         console.error("[e-reader] could not bring this book's highlights up to date", error);
       }
@@ -933,7 +937,7 @@ export class ReaderView extends FileView {
     }
   }
 
-  /** The table-of-contents entry `locator` falls under, for a highlight note's section property. */
+  /** The table-of-contents entry `locator` falls under, recorded with each highlight. */
   private async sectionTitle(locator: Locator): Promise<string | undefined> {
     const rows = rowsFromOutline(await this.outline());
     const row = rows[activeRowIndex(rows, locator)];

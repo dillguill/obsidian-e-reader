@@ -77,6 +77,8 @@ export interface HighlightNoteProperties {
   /** Link to the book note. */
   book: string;
   type: string;
+  /** The chapter or section, from the book's table of contents. */
+  section: string;
   page: string;
   created: string;
 }
@@ -87,6 +89,8 @@ export interface HighlightNoteProperties {
  * embeds the highlight rather than copying it.
  */
 export interface HighlightSettings {
+  /** A note whose text, with `{{placeholders}}` filled in, becomes an exported note's body. Empty uses the built-in layout. */
+  template: string;
   /** Where exported highlight notes go. Empty means the vault root. */
   folder: string;
   /** Put each book's exported notes in a subfolder named after the book. */
@@ -224,9 +228,10 @@ export const DEFAULT_SETTINGS: Settings = {
   panes: { outline: true, highlights: true, hideNativeOutline: false },
   import: { notesFolder: "Library", filesFolder: "", inboxFolder: "", lookUpMetadata: true, ignoredPdfs: [] },
   highlights: {
+    template: "",
     folder: "Highlights",
     subfolderPerBook: true,
-    properties: { book: "book", type: "highlight", page: "page", created: "created" },
+    properties: { book: "book", type: "highlight", section: "chapter", page: "page", created: "created" },
   },
   reader: {
     pdfScale: 1,
@@ -359,6 +364,7 @@ function mergeHighlights(saved: Record<string, unknown>): HighlightSettings {
     if (typeof value === "string" && value.trim() !== "") properties[key] = value.trim();
   }
   return {
+    template: typeof from["template"] === "string" ? from["template"].trim() : defaults.template,
     folder: mergeFolder(from["folder"], defaults.folder),
     subfolderPerBook: mergeBoolean(from["subfolderPerBook"], defaults.subfolderPerBook),
     properties,

@@ -48,8 +48,8 @@ copy or delete it. Each is written into the book note as a callout you can
 read, edit and link to:
 
 ```markdown
-> [!quote] idea
-> ==the spice must flow==
+> [!idea]
+> the spice must flow
 > %%{"id":"h-a1b2c3","created":"2026-08-20T10:04:00Z"}%%
 >
 > Worth comparing to the guild's monopoly argument.
@@ -57,8 +57,9 @@ read, edit and link to:
 ^h-a1b2c3
 ```
 
-The quote is the anchor as well as the display, so editing it by hand edits
-the anchor. Everything outside the plugin's `%%e-reader:begin/end%%` markers
+The callout's type is the highlight's type, so a CSS snippet can give each type
+its own callout style. The quote is the anchor as well as the display, so
+editing it by hand edits the anchor. Everything outside the plugin's `%%e-reader:begin/end%%` markers
 is yours and is never touched. Nothing lives in a sidecar database.
 
 **Outline.** The book's own table of contents, nested, with the current

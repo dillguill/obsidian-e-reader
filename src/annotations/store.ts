@@ -1,36 +1,27 @@
 // Reading and writing a book's annotation entries.
 //
-// A highlight lives in one of two places, chosen by the highlight mode:
-// written into the book note's region (as a callout or a plain quote), or as
-// a note of its own (highlight-notes.ts). Bookmarks live in a list property
-// on the book note (bookmarks.ts). Every function here reads all three, so
-// callers never need to know where an entry is, and changing the mode only
-// affects entries written afterwards until the reader moves the old ones
-// (moveToNotes, moveToBookNote).
+// The book note is the one place highlights are stored: each is a callout in
+// the plugin's region of the note (entry.ts), whose title links back to the
+// page. Bookmarks live in a list property on the book note (bookmarks.ts).
+// A highlight exported as a note of its own only embeds the callout, so it
+// is never a second copy to keep in sync.
+//
+// Betas briefly stored highlights as notes of their own; foldHighlightNotes
+// moves those back into the book note when the book is opened.
 //
 // Every write to the book note goes through `Vault.process`, which reads and
 // replaces the file in one atomic step, so a highlight created while the note
 // is open in another pane cannot clobber an edit made there. Writes only ever
-// touch the text between the region markers (region.ts), apart from moving
-// highlights out of or into the note, which also removes or adds the region
-// and the embedded highlights view.
+// touch the text between the region markers (region.ts), apart from folding
+// beta notes back in, which also removes the view 0.4.0-beta.1 embedded.
 
 import type { App, TFile } from "obsidian";
 import type { AnchorRecord, Locator } from "../core/types";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
 import type { Settings } from "../settings/settings-model";
 import { addBookmarks, isBookmarkId, listBookmarks, removeBookmark } from "./bookmarks";
-import { type Entry, type EntryFormat, type MalformedEntry, newEntryId, serializeEntry } from "./entry";
-import {
-  type NoteDetails,
-  type NoteEntry,
-  createHighlightNote,
-  ensureEmbed,
-  jumpLink,
-  listHighlightNotes,
-  updateHighlightNote,
-  withoutEmbed,
-} from "./highlight-notes";
+import { type Entry, type MalformedEntry, newEntryId, serializeEntry } from "./entry";
+import { type NoteDetails, jumpLink, linksToBook, listHighlightNotes, withoutEmbed } from "./highlight-notes";
 import { type LocatedEntry, locateEntries } from "./locate";
 import { findRegion, removeRegion, writeRegion } from "./region";
 
@@ -68,7 +59,7 @@ export async function listEntries(app: App, note: TFile, settings: Settings): Pr
   return {
     entries: [
       ...region.entries,
-      // A highlight half-way through moving can briefly be in both places.
+      // Beta highlight notes not yet folded back in, so nothing disappears meanwhile.
       ...notes.map((item) => item.entry).filter((entry) => !seen.has(entry.id)),
       ...listBookmarks(app, note, settings.properties.bookmarks),
     ],
@@ -85,19 +76,11 @@ function buildEntry(draft: EntryDraft, now: Date, random: () => number): Entry {
   return { id, type: draft.type, exact: draft.exact, comment: draft.comment ?? "", anchor };
 }
 
-function detailsOf(entry: Entry, draft?: NoteDetails): NoteDetails {
-  const details: NoteDetails = {};
-  const page = draft?.page ?? (entry.anchor.hint?.kind === "pdf" ? entry.anchor.hint.page : undefined);
-  if (page !== undefined) details.page = page;
-  if (draft?.section !== undefined) details.section = draft.section;
-  return details;
-}
-
 function blockFor(app: App, entry: Entry, settings: Settings): string {
-  return serializeEntry(entry, settings.highlights.pageLinks ? jumpLink(app, entry) : null);
+  return serializeEntry(entry, jumpLink(app, entry));
 }
 
-/** Writes a new entry where the settings say. Returns it. */
+/** Writes a new highlight into the book note, or a bookmark into its bookmarks property. Returns it. */
 export async function addEntry(
   app: App,
   note: TFile,
@@ -112,13 +95,6 @@ export async function addEntry(
     return bookmark as Entry;
   }
   const entry = buildEntry(draft, now, random);
-  if (settings.highlights.mode === "notes") {
-    const created: Entry = { ...entry, format: "note" };
-    const file = await createHighlightNote(app, note, created, detailsOf(entry, draft), settings.highlights);
-    await ensureEmbed(app, note, settings.highlights);
-    return { ...created, source: file.path };
-  }
-  if (settings.highlights.style === "quote") entry.format = "quote";
   const block = blockFor(app, entry, settings);
   await app.vault.process(note, (text) => {
     const region = findRegion(text);
@@ -170,10 +146,6 @@ async function rewriteRegion(
   if (stale) throw new StaleNoteError(note);
 }
 
-async function findNoteEntry(app: App, note: TFile, id: string, settings: Settings): Promise<NoteEntry | null> {
-  return (await listHighlightNotes(app, note, settings.highlights)).find((item) => item.entry.id === id) ?? null;
-}
-
 async function inRegion(app: App, note: TFile, id: string): Promise<boolean> {
   return (await regionEntries(app, note)).entries.some((entry) => entry.id === id);
 }
@@ -183,23 +155,21 @@ export async function removeEntry(app: App, note: TFile, id: string, settings: S
     await removeBookmark(app, note, id, settings.properties.bookmarks);
     return;
   }
+  await foldHighlightNotes(app, note, settings);
   if (await inRegion(app, note, id)) {
     await rewriteRegion(app, note, settings, (entries) => entries.filter((item) => item.entry.id !== id));
   }
-  const owned = await findNoteEntry(app, note, id, settings);
-  if (owned) await app.fileManager.trashFile(owned.file);
 }
 
 async function updateEntry(app: App, note: TFile, id: string, settings: Settings, change: (entry: Entry) => Entry): Promise<void> {
   if (isBookmarkId(id)) return;
+  // Fold first, so a highlight still in a beta note is edited where it now lives.
+  await foldHighlightNotes(app, note, settings);
   if (await inRegion(app, note, id)) {
     await rewriteRegion(app, note, settings, (entries) =>
       entries.map((item) => (item.entry.id === id ? { ...item, entry: change(item.entry) } : item)),
     );
-    return;
   }
-  const owned = await findNoteEntry(app, note, id, settings);
-  if (owned) await updateHighlightNote(app, owned, change(owned.entry), settings.highlights);
 }
 
 export async function setEntryComment(app: App, note: TFile, id: string, comment: string, settings: Settings): Promise<void> {
@@ -233,53 +203,25 @@ export async function migrateBookmarks(app: App, note: TFile, settings: Settings
 }
 
 /**
- * Moves every highlight in the book note into notes of its own, and embeds
- * the highlights view in its place. All or nothing for the book: if any note
- * cannot be written, the ones already written are removed again and the
- * book note is left as it was. Returns how many moved.
+ * Moves highlights stored in beta highlight notes into the book note as
+ * callouts, and removes the view 0.4.0-beta.1 embedded. The notes are only
+ * deleted once the book note holds their highlights. Returns how many moved.
  */
-export async function moveToNotes(app: App, note: TFile, settings: Settings): Promise<number> {
-  await migrateBookmarks(app, note, settings);
-  const moving = (await regionEntries(app, note)).entries.filter((entry) => entry.type !== RESERVED_ENTRY_TYPE);
-  if (moving.length === 0) return 0;
-  const created: TFile[] = [];
-  try {
-    for (const entry of moving) {
-      created.push(await createHighlightNote(app, note, { ...entry, format: "note" }, detailsOf(entry), settings.highlights));
-    }
-    const ids = new Set(moving.map((entry) => entry.id));
-    await rewriteRegion(app, note, settings, (located) => located.filter((item) => !ids.has(item.entry.id)), {
-      dropIfEmpty: true,
-    });
-  } catch (error) {
-    for (const file of created) await app.fileManager.trashFile(file);
-    throw error;
-  }
-  await ensureEmbed(app, note, settings.highlights);
-  return moving.length;
-}
-
-/**
- * Moves every highlight note of the book into the book note, in the
- * configured style, and removes the embedded highlights view. The notes are
- * only deleted once the book note holds their highlights. Returns how many
- * moved.
- */
-export async function moveToBookNote(app: App, note: TFile, settings: Settings): Promise<number> {
+export async function foldHighlightNotes(app: App, note: TFile, settings: Settings): Promise<number> {
   const notes = await listHighlightNotes(app, note, settings.highlights);
   if (notes.length === 0) return 0;
-  const style: EntryFormat | undefined = settings.highlights.style === "quote" ? "quote" : undefined;
   const added = notes.map(({ entry }): Entry => {
     const { source: _source, format: _format, ...rest } = entry;
-    return style ? { ...rest, format: style } : rest;
+    return rest;
   });
   await rewriteRegion(app, note, settings, (located) => located, { added, edit: withoutEmbed });
   for (const item of notes) await app.fileManager.trashFile(item.file);
   return notes.length;
 }
 
-/** Renames a highlight type throughout one book, wherever its highlights live. Returns how many changed. */
+/** Renames a highlight type throughout one book, including the type property of its exported notes. Returns how many highlights changed. */
 export async function renameTypeInBook(app: App, note: TFile, from: string, to: string, settings: Settings): Promise<number> {
+  await foldHighlightNotes(app, note, settings);
   let count = 0;
   const region = await regionEntries(app, note);
   const inNote = region.entries.filter((entry) => entry.type === from).length;
@@ -289,10 +231,24 @@ export async function renameTypeInBook(app: App, note: TFile, from: string, to: 
     );
     count += inNote;
   }
-  for (const item of await listHighlightNotes(app, note, settings.highlights)) {
-    if (item.entry.type !== from) continue;
-    await updateHighlightNote(app, item, { ...item.entry, type: to }, settings.highlights);
-    count++;
+  const typeProperty = settings.highlights.properties.type;
+  for (const file of exportedNotes(app, note, settings)) {
+    if (app.metadataCache.getFileCache(file)?.frontmatter?.[typeProperty] !== from) continue;
+    await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+      fm[typeProperty] = to;
+    });
   }
   return count;
+}
+
+/** Notes whose book property links to `note`: exported highlight notes, among others. */
+function exportedNotes(app: App, note: TFile, settings: Settings): TFile[] {
+  const found: TFile[] = [];
+  for (const [path, targets] of Object.entries(app.metadataCache.resolvedLinks)) {
+    if (!targets[note.path] || path === note.path) continue;
+    const file = app.vault.getAbstractFileByPath(path);
+    if (!file || !("extension" in file) || (file as TFile).extension !== "md") continue;
+    if (linksToBook(app, file as TFile, note, settings.highlights.properties.book)) found.push(file as TFile);
+  }
+  return found;
 }

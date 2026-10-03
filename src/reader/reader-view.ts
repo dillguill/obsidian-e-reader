@@ -14,9 +14,9 @@
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { FileView, Menu, Notice, Platform, Scope, TFile, setIcon } from "obsidian";
-import { addEntry, listEntries, migrateBookmarks, removeEntry, setEntryType } from "../annotations/store";
+import { addEntry, foldHighlightNotes, listEntries, migrateBookmarks, removeEntry, setEntryType } from "../annotations/store";
 import { linksToBook } from "../annotations/highlight-notes";
-import { entryLink } from "../annotations/links";
+import { addCopyItems } from "../annotations/entry-menu";
 import { activeRowIndex, rowsFromOutline } from "../sidebar/outline-model";
 import type { Entry } from "../annotations/entry";
 import type { ReaderEvents } from "../core/reader-events";
@@ -371,11 +371,14 @@ export class ReaderView extends FileView {
     this.announcePosition();
     this.updateToolbar();
     if (file.extension === "md") {
-      // Bookmarks written into the note before 0.4.0 move to the bookmarks property.
+      // Bookmarks written into the note before 0.4.0 move to the bookmarks
+      // property, and highlights betas kept in notes of their own move back
+      // into the book note.
       try {
         await migrateBookmarks(this.app, file, this.getSettings());
+        await foldHighlightNotes(this.app, file, this.getSettings());
       } catch (error) {
-        console.error("[e-reader] could not move old bookmarks to the bookmarks property", error);
+        console.error("[e-reader] could not bring this book's highlights up to date", error);
       }
     }
     await this.refreshEntries();
@@ -862,24 +865,7 @@ export class ReaderView extends FileView {
             .onClick(() => void this.changeEntryType(note, entry, type.name)),
         );
       }
-      menu.addItem((item) =>
-        item
-          .setTitle("Copy text")
-          .setIcon("copy")
-          .onClick(() => void navigator.clipboard.writeText(entry.exact)),
-      );
-      menu.addItem((item) =>
-        item
-          .setTitle("Copy link")
-          .setIcon("link")
-          .onClick(() => void navigator.clipboard.writeText(entryLink(this.app, note, entry, false))),
-      );
-      menu.addItem((item) =>
-        item
-          .setTitle("Copy embed")
-          .setIcon("quote")
-          .onClick(() => void navigator.clipboard.writeText(entryLink(this.app, note, entry, true))),
-      );
+      addCopyItems(menu, this.app, note, entry, this.getSettings().highlights);
       menu.addSeparator();
     }
     menu.addItem((item) =>

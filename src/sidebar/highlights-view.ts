@@ -15,7 +15,7 @@ import { Component, ItemView, Menu, Notice, setIcon } from "obsidian";
 import type { Entry, MalformedEntry } from "../annotations/entry";
 import { listEntries, removeEntry, setEntryComment } from "../annotations/store";
 import { isBookmarkId } from "../annotations/bookmarks";
-import { entryLink } from "../annotations/links";
+import { addCopyItems } from "../annotations/entry-menu";
 import { linksToBook } from "../annotations/highlight-notes";
 import type { Settings } from "../settings/settings-model";
 import { compareLocators } from "../core/locator";
@@ -224,18 +224,8 @@ export class HighlightsView extends ItemView {
   private showEntryMenu(event: MouseEvent, file: TFile, entry: Entry): void {
     const menu = new Menu();
     if (!isBookmarkId(entry.id)) {
-      menu.addItem((item) =>
-        item
-          .setTitle("Copy link")
-          .setIcon("link")
-          .onClick(() => void navigator.clipboard.writeText(entryLink(this.app, file, entry, false))),
-      );
-      menu.addItem((item) =>
-        item
-          .setTitle("Copy embed")
-          .setIcon("quote")
-          .onClick(() => void navigator.clipboard.writeText(entryLink(this.app, file, entry, true))),
-      );
+      addCopyItems(menu, this.app, file, entry, this.getSettings().highlights);
+      menu.addSeparator();
     }
     menu.addItem((item) =>
       item

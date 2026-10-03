@@ -1,48 +1,39 @@
-// Highlights kept as notes of their own (the "notes" highlight mode).
+// Highlight notes.
 //
-// A highlight note is tied to its book by one property, a link to the book
-// note, under the name the reader chose (`book` by default). Everything the
-// plugin needs to find the passage again sits in properties too: the type,
-// and an `anchor` property holding the entry id, the text either side and
-// the position as JSON. The body is the reader's: the quote, the link back
-// into the book, then whatever they write underneath. The quote stays the
-// authority on what was highlighted, so editing it edits the anchor, exactly
-// as it does for an entry in the book note.
+// Highlights live in the book note; that is the one place they are stored.
+// A highlight can be exported as a note of its own: the quote as plain text,
+// then a link back to its block in the book note (`[[Book#^id|p. 35]]`), then
+// room for the reader's own thoughts. The note is a starting point, not a
+// second store: nothing here reads it back as a highlight. Its properties
+// (book, type, page, created, under names the reader chose) let Bases list
+// and group exported highlights.
 //
-// Notes written by 0.3.7 betas kept the anchor in a hidden `%%…%%` line of a
-// quote block in the body instead. Those still parse, and are rewritten in
-// the current shape the next time they change.
-//
-// The book note carries nothing of this except, once, an embedded Bases view
-// (`![[Highlights.base#This book]]`) listing the notes whose book property
-// links to it, so there is one place highlights live and the book note never
-// goes stale.
-//
-// Notes are found through `metadataCache.resolvedLinks`, which already knows
-// every note linking to the book, so listing a book's highlights does not
-// scan the vault.
+// Betas of 0.3.7 and 0.4.0 could instead store a highlight only in a note of
+// its own, with its anchor in a hidden `%%…%%` line (0.3.7) or an `anchor`
+// property (0.4.0-beta.1). Those notes are still read here, so they can be
+// folded back into their book note (store.ts, foldHighlightNotes).
 
 import type { App, TFile } from "obsidian";
 import { parseLocator, serializeLocator } from "../core/locator";
 import type { AnchorRecord } from "../core/types";
 import { joinPath, safeFileName } from "../import/plan";
-import type { HighlightNoteProperties, HighlightSettings } from "../settings/settings-model";
-import { type Entry, isJumpLink, isValidEntryId, parseEntry, quoteLines } from "./entry";
+import type { HighlightSettings } from "../settings/settings-model";
+import { type Entry, isJumpLink, isValidEntryId, parseEntry } from "./entry";
 
 /** A short name for a highlight note: the opening words of its quote. */
 const NAME_WORDS = 8;
 
-/** The Bases file listing highlight notes, kept in the highlight folder. */
-export const HIGHLIGHTS_BASE_NAME = "Highlights.base";
-/** The view of that base a book note embeds: only that book's highlights. */
-export const THIS_BOOK_VIEW = "This book";
+/** Where 0.4.0-beta.1 kept a highlight note's anchor. */
+const LEGACY_ANCHOR_PROPERTY = "anchor";
+/** Where 0.4.0-beta.1 kept a highlight note's type when nothing else names it. */
+const LEGACY_TYPE_PROPERTY = "highlight";
 
 export interface NoteEntry {
   entry: Entry;
   file: TFile;
 }
 
-/** Extra details a new highlight note records as properties. */
+/** Extra details recorded with a new highlight. */
 export interface NoteDetails {
   page?: number;
   section?: string;
@@ -98,7 +89,7 @@ export function linksToBook(app: App, file: TFile, book: TFile, property: string
   );
 }
 
-/** Every highlight note of `book`, in the order they were created. */
+/** Every note of `book` that stores a highlight rather than embedding one (beta formats), oldest first. */
 export async function listHighlightNotes(app: App, book: TFile, settings: HighlightSettings): Promise<NoteEntry[]> {
   const found: NoteEntry[] = [];
   for (const [path, targets] of Object.entries(app.metadataCache.resolvedLinks)) {
@@ -118,15 +109,6 @@ interface AnchorProperty {
   prefix?: string;
   suffix?: string;
   hint?: string;
-}
-
-/** The anchor property's value: everything but the type and creation time, which have properties of their own. */
-export function encodeAnchorProperty(anchor: AnchorRecord): string {
-  const json: AnchorProperty = { id: anchor.id };
-  if (anchor.prefix !== undefined && anchor.prefix !== "") json.prefix = anchor.prefix;
-  if (anchor.suffix !== undefined && anchor.suffix !== "") json.suffix = anchor.suffix;
-  if (anchor.hint !== undefined) json.hint = serializeLocator(anchor.hint);
-  return JSON.stringify(json);
 }
 
 /** Reads an anchor property back. Null when it is missing or does not carry a valid id. */
@@ -152,9 +134,9 @@ export function decodeAnchorProperty(value: unknown, created: string): AnchorRec
   return anchor;
 }
 
-/** The entry id a note's properties name, without reading its body. Used to find a highlight from a link. */
-export function anchorIdOf(frontmatter: Record<string, unknown> | undefined, properties: HighlightNoteProperties): string | null {
-  return decodeAnchorProperty(frontmatter?.[properties.anchor], "")?.id ?? null;
+/** The entry id a 0.4.0-beta.1 highlight note's properties name. */
+export function anchorIdOf(frontmatter: Record<string, unknown> | undefined): string | null {
+  return decodeAnchorProperty(frontmatter?.[LEGACY_ANCHOR_PROPERTY], "")?.id ?? null;
 }
 
 function stringProperty(frontmatter: Record<string, unknown> | undefined, name: string): string | null {
@@ -162,12 +144,12 @@ function stringProperty(frontmatter: Record<string, unknown> | undefined, name: 
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 
-/** The entry a highlight note holds, or null when it does not hold one. */
+/** The entry a beta highlight note stores, or null when it stores none (an exported note embeds its highlight instead). */
 export function parseNote(text: string, frontmatter: Record<string, unknown> | undefined, settings: HighlightSettings): Entry | null {
   const names = settings.properties;
   const split = splitBody(bodyOf(text));
-  const type = stringProperty(frontmatter, names.type);
-  const anchor = decodeAnchorProperty(frontmatter?.[names.anchor], stringProperty(frontmatter, names.created) ?? "");
+  const type = stringProperty(frontmatter, names.type) ?? stringProperty(frontmatter, LEGACY_TYPE_PROPERTY);
+  const anchor = decodeAnchorProperty(frontmatter?.[LEGACY_ANCHOR_PROPERTY], stringProperty(frontmatter, names.created) ?? "");
   if (anchor) {
     if (type === null) return null;
     const quote = split
@@ -190,14 +172,6 @@ export function parseNote(text: string, frontmatter: Record<string, unknown> | u
   const parsed = parseEntry(split.block);
   if (!parsed.ok || !isValidEntryId(parsed.entry.id)) return null;
   return { ...parsed.entry, type: type ?? parsed.entry.type, comment: split.rest, format: "note" };
-}
-
-function noteBody(app: App, entry: Entry, settings: HighlightSettings): string {
-  const parts: string[] = [];
-  if (entry.exact !== "") parts.push(quoteLines(entry.exact).join("\n"));
-  if (settings.pageLinks) parts.push(jumpLink(app, entry));
-  if (entry.comment !== "") parts.push(entry.comment);
-  return parts.length === 0 ? "" : `${parts.join("\n\n")}\n`;
 }
 
 /** Where a book's highlight notes go. */
@@ -225,124 +199,37 @@ async function ensureFolder(app: App, folder: string): Promise<void> {
   }
 }
 
-function writeProperties(
-  app: App,
-  book: TFile,
-  file: TFile,
-  entry: Entry,
-  details: NoteDetails,
-  settings: HighlightSettings,
-): (fm: Record<string, unknown>) => void {
-  const names = settings.properties;
-  return (fm) => {
-    fm[names.book] = `[[${app.metadataCache.fileToLinktext(book, file.path, true)}]]`;
-    fm[names.type] = entry.type;
-    if (details.page !== undefined) fm[names.page] = details.page;
-    if (details.section !== undefined && details.section !== "") fm[names.section] = details.section;
-    if (entry.anchor.created !== "") fm[names.created] = entry.anchor.created;
-    fm[names.anchor] = encodeAnchorProperty(entry.anchor);
-  };
-}
-
-export async function createHighlightNote(
-  app: App,
-  book: TFile,
-  entry: Entry,
-  details: NoteDetails,
-  settings: HighlightSettings,
-): Promise<TFile> {
+/**
+ * Exports a book-note highlight as a note of its own: the quote, then a
+ * link back to it. The note's name is the quote's opening words. Returns the
+ * new note.
+ */
+export async function exportHighlightNote(app: App, book: TFile, entry: Entry, settings: HighlightSettings): Promise<TFile> {
   const folder = highlightFolder(book, settings);
   const words = entry.exact.split(/\s+/).slice(0, NAME_WORDS).join(" ");
   const name = words === "" ? `${book.basename} ${entry.id}` : safeFileName(words);
   await ensureFolder(app, folder);
-  const file = await app.vault.create(availablePath(app, joinPath(folder, `${name}.md`)), noteBody(app, entry, settings));
-  await app.fileManager.processFrontMatter(file, writeProperties(app, book, file, entry, details, settings));
+  const path = availablePath(app, joinPath(folder, `${name}.md`));
+  const hint = entry.anchor.hint;
+  const label = hint?.kind === "pdf" ? `${book.basename}, p. ${hint.page}` : book.basename;
+  const link = app.fileManager.generateMarkdownLink(book, path, `#^${entry.id}`, label);
+  const file = await app.vault.create(path, `${entry.exact === "" ? "" : `${entry.exact}\n\n`}${link}\n`);
+  const names = settings.properties;
+  await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+    fm[names.book] = `[[${app.metadataCache.fileToLinktext(book, file.path, true)}]]`;
+    fm[names.type] = entry.type;
+    if (hint?.kind === "pdf") fm[names.page] = hint.page;
+    fm[names.created] = entry.anchor.created !== "" ? entry.anchor.created : new Date().toISOString();
+  });
   return file;
 }
 
-/**
- * Rewrites a highlight note's body (quote, link, comment) and its type and
- * anchor properties, leaving any other properties alone. A note in the old
- * shape is brought up to date on the way.
- */
-export async function updateHighlightNote(app: App, item: NoteEntry, entry: Entry, settings: HighlightSettings): Promise<void> {
-  await app.vault.process(item.file, (text) => {
-    const head = text.slice(0, text.length - bodyOf(text).length);
-    return head + noteBody(app, entry, settings);
-  });
-  const names = settings.properties;
-  await app.fileManager.processFrontMatter(item.file, (fm: Record<string, unknown>) => {
-    fm[names.type] = entry.type;
-    fm[names.anchor] = encodeAnchorProperty(entry.anchor);
-    if (fm[names.created] === undefined && entry.anchor.created !== "") fm[names.created] = entry.anchor.created;
-  });
-}
-
-/** A property for Bases' `note.x` shorthand, or null when the name needs quoting. */
-function dotted(name: string): string | null {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? `note.${name}` : null;
-}
-
-/** The `.base` file every book note embeds, written once and then left to the reader to adjust. */
-export function highlightsBaseSource(settings: HighlightSettings): string {
-  const names = settings.properties;
-  const quoted = (expression: string): string => `'${expression.replace(/'/g, "''")}'`;
-  const order = ["file.name", dotted(names.type), dotted(names.page), dotted(names.section)].filter(
-    (value): value is string => value !== null,
-  );
-  const orderYaml = order.map((value) => `      - ${value}`).join("\n");
-  const groupBy = dotted(names.book);
-  return [
-    "filters:",
-    "  and:",
-    `    - ${quoted(`file.hasProperty(${JSON.stringify(names.anchor)})`)}`,
-    "views:",
-    "  - type: table",
-    `    name: ${THIS_BOOK_VIEW}`,
-    "    filters:",
-    "      and:",
-    `        - ${quoted(`note[${JSON.stringify(names.book)}] == this`)}`,
-    "    order:",
-    orderYaml,
-    "  - type: table",
-    "    name: All highlights",
-    ...(groupBy === null ? [] : ["    groupBy:", `      property: ${groupBy}`, "      direction: ASC"]),
-    "    order:",
-    orderYaml,
-    "",
-  ].join("\n");
-}
-
-/** The highlights base, created in the highlight folder when it is not there yet. */
-export async function ensureHighlightsBase(app: App, settings: HighlightSettings): Promise<TFile> {
-  const path = joinPath(settings.folder, HIGHLIGHTS_BASE_NAME);
-  const existing = app.vault.getAbstractFileByPath(path);
-  if (existing && "extension" in existing) return existing as TFile;
-  await ensureFolder(app, settings.folder);
-  return app.vault.create(path, highlightsBaseSource(settings));
-}
-
+/** The embedded highlights view 0.4.0-beta.1 added to book notes. */
 const EMBED_RE = /\n*(?:## Highlights\n)?!\[\[[^\]\n]*Highlights\.base#This book\]\]\n?/g;
 
-/** Whether the book note already embeds the highlights base. */
-function hasEmbed(text: string): boolean {
-  return /!\[\[[^\]\n]*Highlights\.base#This book\]\]/.test(text);
-}
-
-/** Embeds the book's highlights view at the end of its note, once. */
-export async function ensureEmbed(app: App, book: TFile, settings: HighlightSettings): Promise<void> {
-  const base = await ensureHighlightsBase(app, settings);
-  const link = app.metadataCache.fileToLinktext(base, book.path, false);
-  await app.vault.process(book, (text) => {
-    if (hasEmbed(text)) return text;
-    const before = text.replace(/\s+$/, "");
-    return `${before}${before === "" ? "" : "\n\n"}## Highlights\n![[${link}#${THIS_BOOK_VIEW}]]\n`;
-  });
-}
-
-/** `text` without the embedded highlights view, and the heading this plugin put above it. */
+/** `text` without the 0.4.0-beta.1 embedded highlights view and the heading above it. */
 export function withoutEmbed(text: string): string {
-  if (!hasEmbed(text)) return text;
-  const stripped = text.replace(EMBED_RE, "\n");
-  return stripped.replace(/\s+$/, "") === "" ? "" : `${stripped.replace(/\s+$/, "")}\n`;
+  if (!/!\[\[[^\]\n]*Highlights\.base#This book\]\]/.test(text)) return text;
+  const stripped = text.replace(EMBED_RE, "\n").replace(/\s+$/, "");
+  return stripped === "" ? "" : `${stripped}\n`;
 }

@@ -1,7 +1,7 @@
 import type { BasesAllOptions, WorkspaceLeaf } from "obsidian";
 import { FuzzySuggestModal, Modal, Notice, Plugin, Setting, TFile } from "obsidian";
 import { findBookForEntry, highlightOfNote } from "./annotations/links";
-import { moveToBookNote, moveToNotes, renameTypeInBook } from "./annotations/store";
+import { renameTypeInBook } from "./annotations/store";
 import { isBookNote } from "./core/book-note";
 import { ReaderEvents } from "./core/reader-events";
 import { RESERVED_ENTRY_TYPE } from "./core/types";
@@ -16,7 +16,7 @@ import { activeReaderFor, revealReader } from "./sidebar/active-reader";
 import { HIGHLIGHTS_VIEW_TYPE, HighlightsView } from "./sidebar/highlights-view";
 import { OUTLINE_VIEW_TYPE, OutlineView } from "./sidebar/outline-view";
 import { EReaderSettingTab, type SettingsHost } from "./settings/settings-tab";
-import { type HighlightMode, type Settings, DEFAULT_SETTINGS, SETTINGS_VERSION, mergeSettings } from "./settings/settings-model";
+import { type Settings, DEFAULT_SETTINGS, SETTINGS_VERSION, mergeSettings } from "./settings/settings-model";
 
 /**
  * How long a new file in the inbox must sit unchanged before it is imported.
@@ -250,7 +250,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
 
     this.addCommand({
       id: "open-highlight-in-book",
-      name: "Open this highlight in the book",
+      name: "Open this note's highlight in the book",
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
         const found = file ? highlightOfNote(this.app, file, this.settings.highlights) : null;
@@ -258,16 +258,6 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
         if (!checking) void this.openHighlight(found.book.path, found.id);
         return true;
       },
-    });
-    this.addCommand({
-      id: "move-highlights-to-notes",
-      name: "Move all highlights into highlight notes",
-      callback: () => void this.moveHighlights("notes"),
-    });
-    this.addCommand({
-      id: "move-highlights-to-book-notes",
-      name: "Move all highlights into book notes",
-      callback: () => void this.moveHighlights("book-note"),
     });
     this.addCommand({
       id: "rename-highlight-type",
@@ -469,31 +459,6 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       .filter((file) => isBookNote(this.app.metadataCache.getFileCache(file)?.frontmatter, marker, markerValue));
   }
 
-  /** Moves every book's highlights to where `mode` keeps them, one book at a time. */
-  async moveHighlights(mode: HighlightMode): Promise<void> {
-    let moved = 0;
-    const failed: string[] = [];
-    for (const book of this.bookNotes()) {
-      try {
-        moved += mode === "notes" ? await moveToNotes(this.app, book, this.settings) : await moveToBookNote(this.app, book, this.settings);
-      } catch (error) {
-        console.error(`[e-reader] could not move the highlights of ${book.path}`, error);
-        failed.push(book.basename);
-      }
-    }
-    const where = mode === "notes" ? "highlight notes" : "book notes";
-    const lines = [moved === 0 ? `No highlights needed moving into ${where}.` : `Moved ${moved} highlight${moved === 1 ? "" : "s"} into ${where}.`];
-    if (failed.length > 0) {
-      lines.push(`Left ${failed.length === 1 ? `“${failed[0]}”` : `${failed.length} books`} as they were; the developer console has the details.`);
-    }
-    new Notice(lines.join("\n"), failed.length > 0 ? 10000 : 5000);
-  }
-
-  /** Called from the settings tab when the highlight mode changes. */
-  offerToMoveHighlights(mode: HighlightMode): void {
-    new MoveHighlightsModal(this, mode, () => void this.moveHighlights(mode)).open();
-  }
-
   /** Asks for a new name for highlight type `from`, then renames it in settings and in every book. */
   renameHighlightType(from: string, onDone: () => void): void {
     new RenameTypeModal(this, from, (to) => {
@@ -690,47 +655,6 @@ class InboxPdfModal extends Modal {
   }
 }
 
-/** Asks whether to move existing highlights after the highlight mode changes. */
-class MoveHighlightsModal extends Modal {
-  constructor(
-    plugin: EReaderPlugin,
-    private readonly mode: HighlightMode,
-    private readonly onMove: () => void,
-  ) {
-    super(plugin.app);
-  }
-
-  override onOpen(): void {
-    const toNotes = this.mode === "notes";
-    this.setTitle(toNotes ? "Move existing highlights into notes?" : "Move existing highlights into book notes?");
-    this.contentEl.createEl("p", {
-      text: toNotes
-        ? "New highlights will each get a note of their own. Highlights already in book notes can move too, so every book keeps them in one place."
-        : "New highlights will be written into the book note. Highlight notes can move back into their book notes too, and are deleted once they have.",
-      cls: "setting-item-description",
-    });
-    this.contentEl.createEl("p", {
-      text: "Either way, highlights stay readable wherever they are. You can also do this later from the command palette.",
-      cls: "setting-item-description",
-    });
-    new Setting(this.contentEl)
-      .addButton((button) => button.setButtonText("Leave them").onClick(() => this.close()))
-      .addButton((button) =>
-        button
-          .setButtonText("Move them")
-          .setCta()
-          .onClick(() => {
-            this.close();
-            this.onMove();
-          }),
-      );
-  }
-
-  override onClose(): void {
-    this.contentEl.empty();
-  }
-}
-
 /** Picks one of the configured highlight types. */
 class HighlightTypeSuggest extends FuzzySuggestModal<string> {
   constructor(
@@ -767,7 +691,7 @@ class RenameTypeModal extends Modal {
   override onOpen(): void {
     this.setTitle(`Rename “${this.from}”`);
     this.contentEl.createEl("p", {
-      text: "Every highlight of this type is renamed too, in book notes and highlight notes alike.",
+      text: "Every highlight of this type is renamed too, in every book note and on exported highlight notes.",
       cls: "setting-item-description",
     });
     let value = this.from;

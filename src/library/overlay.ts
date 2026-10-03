@@ -25,11 +25,9 @@
 import type { BasesPropertyId } from "obsidian";
 import type { ReadState } from "../core/types";
 
-export type ProgressDisplay = "bar" | "percent";
-
 export type ReadStateOverlay = { kind: "none" } | { kind: "read-state"; state: ReadState };
 
-export type ProgressOverlay = { kind: "none" } | { kind: "progress"; percent: number; display: ProgressDisplay };
+export type ProgressOverlay = { kind: "none" } | { kind: "progress"; percent: number };
 
 const NONE_OVERLAY = { kind: "none" } as const;
 
@@ -78,12 +76,8 @@ export function decideReadStateOverlay(propertyId: BasesPropertyId | null, raw: 
   return { kind: "read-state", state };
 }
 
-export function decideProgressOverlay(
-  propertyId: BasesPropertyId | null,
-  raw: unknown,
-  display: ProgressDisplay,
-): ProgressOverlay {
+export function decideProgressOverlay(propertyId: BasesPropertyId | null, raw: unknown): ProgressOverlay {
   const percent = readPercent(propertyId, raw);
   if (percent === null) return NONE_OVERLAY;
-  return { kind: "progress", percent, display };
+  return { kind: "progress", percent };
 }

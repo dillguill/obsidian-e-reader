@@ -24,16 +24,27 @@ title, author, language, cover and more are read from the file itself, and
 Open Library can fill in what the file does not say (ISBN, page count,
 subjects, a cover). The note goes to your book notes folder (`Library` by
 default) and the file to wherever Obsidian puts attachments, or a folder you
-choose. A book already in the library is never imported twice, and a failed
-import leaves nothing behind.
+choose. A book already in the library is never imported twice: the same
+ISBN, or the same title (subtitle aside) by the same author, or by anyone when
+the existing note has no author. A failed import leaves nothing behind.
+**Find duplicate books** lists books that are in the library more than once
+and merges each into the note you keep, moving highlights, properties and
+text and trashing the rest.
 
 **Wishlist and read later.** "Add a book to the wishlist" searches Open
-Library and saves a book note with its details and cover but no file. In the
+Library, then lets you pick a cover from the book's editions (or an image in
+your vault) and tick which details become properties; either step can be
+skipped. It saves a book note with those but no file. A card's menu also has
+**Change cover…**, which can send the replaced image to the trash, and
+**Update details…**, which looks the book up again and writes only what you
+tick. In the
 library it shows faded and labelled *Wishlist*; opening it offers **Add
 file…**, and importing the book later (by drop, inbox or command) fills that
-same note instead of making a second one. **Read later** in a card's menu
-ticks a `read_later` property and puts a bookmark on the cover; filter a
-Bases view on it for a reading queue.
+same note instead of making a second one. **Read later** and **Add to
+wishlist** in a card's menu add a status to the note: a `read-later` or
+`wishlist` tag by default, or values in a list property you choose in
+settings. Read later puts a bookmark on the cover; filter a Bases view on the
+status for a reading queue. Reading progress is tracked separately.
 
 **Reader.** EPUB and PDF, both remembering where you were, with a toolbar
 shaped like Obsidian's own PDF viewer: zoom or text size, a display menu, and

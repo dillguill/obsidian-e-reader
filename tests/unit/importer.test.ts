@@ -126,6 +126,7 @@ describe("BookImporter", () => {
       const fm = app.metadataCache.getFileCache(note)?.frontmatter;
       expect(fm).toMatchObject({ type: "book", title: "Piranesi", author: ["Susanna Clarke"] });
       expect(fm?.["attachments"]).toBeUndefined();
+      expect(fm?.["tags"]).toEqual(["wishlist"]);
       const again = await importer.addToWishlist({ title: "Piranesi", authors: ["Susanna Clarke"], subjects: [] });
       expect(again.status).toBe("duplicate");
     });
@@ -143,6 +144,8 @@ describe("BookImporter", () => {
         attachments: ["[[Emma.epub]]"],
         cover: "[[Emma cover.jpg]]",
       });
+      // The book has arrived, so it is no longer on the wishlist.
+      expect(fm?.["tags"]).toBeUndefined();
       expect(app.vault.getAbstractFileByPath("Library/files/Emma.epub")).not.toBeNull();
     });
 
@@ -167,4 +170,40 @@ describe("BookImporter", () => {
       expect(fm?.["attachments"]).toEqual(["[[Dune.epub]]"]);
     });
   });
+
+  describe("changing a cover and details", () => {
+    it("saves a new cover and trashes the old one when nothing else uses it", async () => {
+      const { app, importer } = setup();
+      await importer.import({ kind: "external", name: "dune.epub", data: await epub("Dune", "Frank Herbert") });
+      const note = app.vault.getAbstractFileByPath("Library/Dune.md") as TFile;
+      await importer.setCover(note, { data: new Uint8Array([1, 2]).buffer, extension: "png" }, true);
+      expect(app.metadataCache.getFileCache(note)?.frontmatter?.["cover"]).toBe("[[Dune cover.png]]");
+      expect(app.vault.getAbstractFileByPath("Library/files/Dune cover.png")).not.toBeNull();
+      expect(app.vault.getAbstractFileByPath("Library/files/Dune cover.jpg")).toBeNull();
+    });
+
+    it("keeps the old cover when asked to, and can point at an image already in the vault", async () => {
+      const { app, importer } = setup();
+      await importer.import({ kind: "external", name: "dune.epub", data: await epub("Dune", "Frank Herbert") });
+      const note = app.vault.getAbstractFileByPath("Library/Dune.md") as TFile;
+      const image = await app.vault.createBinary("Art/dune.webp", new Uint8Array([3]).buffer);
+      await importer.setCover(note, image, false);
+      expect(app.metadataCache.getFileCache(note)?.frontmatter?.["cover"]).toBe("[[dune.webp]]");
+      expect(app.vault.getAbstractFileByPath("Library/files/Dune cover.jpg")).not.toBeNull();
+    });
+
+    it("overwrites only the chosen details", async () => {
+      const { app, importer } = setup();
+      await importer.addToWishlist({ title: "Dune", authors: ["F. Herbert"], subjects: [], publisher: "Ace" });
+      const note = app.vault.getAbstractFileByPath("Library/Dune.md") as TFile;
+      await importer.setDetails(note, { title: "Dune (Deluxe)", authors: ["Frank Herbert"], subjects: [], pages: 412 });
+      expect(app.metadataCache.getFileCache(note)?.frontmatter).toMatchObject({
+        title: "Dune",
+        author: ["Frank Herbert"],
+        publisher: "Ace",
+        pages: 412,
+      });
+    });
+  });
 });
+

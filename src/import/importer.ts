@@ -7,14 +7,16 @@
 // the vault as it found it — no half-written note pointing at nothing, no
 // file moved with no note to show for it.
 
-import type { App, TFile } from "obsidian";
+import type { App } from "obsidian";
+import { TFile } from "obsidian";
 import { resolveBookAttachment } from "../core/attachment";
 import { isBookNote } from "../core/book-note";
+import { applyStatus } from "../core/status";
 import type { Settings } from "../settings/settings-model";
 import { readEpubMetadata } from "./epub-metadata";
-import { type BookMetadata, fillGaps } from "./metadata";
+import { type BookCover, type BookMetadata, fillGaps } from "./metadata";
 import { lookUpOpenLibrary } from "./open-library";
-import { buildFrontmatter, duplicateKeys, joinPath, safeFileName } from "./plan";
+import { type BookIdentity, bookIdentity, buildFrontmatter, joinPath, safeFileName, sameBook } from "./plan";
 
 export const IMPORTABLE_EXTENSIONS: ReadonlySet<string> = new Set(["epub", "pdf"]);
 
@@ -120,11 +122,15 @@ export class BookImporter {
    * Saves a book you do not have yet: a note with its details and cover but
    * no file. Refused, like an import, when the book is already a note.
    */
-  addToWishlist(meta: BookMetadata): Promise<ImportResult> {
+  addToWishlist(meta: BookMetadata, coverFile: TFile | null = null): Promise<ImportResult> {
     return this.enqueue(async () => {
       const existing = this.findDuplicate(meta, null);
       if (existing) return { status: "duplicate", existing, title: meta.title };
-      const note = await this.write(null, meta);
+      const note = await this.write(null, meta, coverFile);
+      const { status } = this.getSettings();
+      await this.app.fileManager.processFrontMatter(note, (fm: Record<string, unknown>) => {
+        applyStatus(fm, status, status.wishlist, true);
+      });
       return { status: "imported", note, title: meta.title };
     });
   }
@@ -207,12 +213,69 @@ export class BookImporter {
         const current = fm[settings.properties.attachments];
         const list = Array.isArray(current) ? current : isEmpty(current) ? [] : [current];
         fm[settings.properties.attachments] = [...list, link(bookFile)];
+        // The book is here now, so it is no longer one you are waiting for.
+        applyStatus(fm, settings.status, settings.status.wishlist, false);
       });
       return { status: "attached", file: bookFile };
     } catch (error) {
       await rollBack(undo);
       throw error;
     }
+  }
+
+  /** The image a book note's cover property links to, if it is a file in the vault. */
+  coverFileOf(note: TFile): TFile | null {
+    const property = this.getSettings().properties.cover;
+    const link = this.app.metadataCache
+      .getFileCache(note)
+      ?.frontmatterLinks?.find((item) => item.key === property || item.key.startsWith(`${property}.`));
+    return link ? this.app.metadataCache.getFirstLinkpathDest(link.link, note.path) : null;
+  }
+
+  /**
+   * Gives a book note a new cover, a saved image or one already in the
+   * vault, or with null none. With `removeOld`, the image it replaces goes to
+   * the trash (the vault's own delete setting) unless another note links it.
+   */
+  setCover(note: TFile, cover: BookCover | TFile | null, removeOld: boolean): Promise<void> {
+    return this.enqueue(async () => {
+      const property = this.getSettings().properties.cover;
+      if (property.trim() === "") return;
+      const old = this.coverFileOf(note);
+      const undo: (() => Promise<unknown>)[] = [];
+      const file = cover === null || cover instanceof TFile ? cover : await this.writeCover(cover, note.basename, note.path, undo);
+      try {
+        await this.app.fileManager.processFrontMatter(note, (fm: Record<string, unknown>) => {
+          if (file === null) delete fm[property];
+          else fm[property] = `[[${this.app.metadataCache.fileToLinktext(file, note.path, false)}]]`;
+        });
+      } catch (error) {
+        await rollBack(undo);
+        throw error;
+      }
+      if (removeOld && old && old !== file && !this.linkedElsewhere(old, note)) await this.app.fileManager.trashFile(old);
+    });
+  }
+
+  /** Writes the chosen details over what the note says. The title and everything else stay as they are. */
+  setDetails(note: TFile, meta: BookMetadata): Promise<void> {
+    const settings = this.getSettings();
+    const details = buildFrontmatter({ ...meta, cover: undefined }, settings.properties, { book: null, cover: null });
+    return this.enqueue(() =>
+      this.app.fileManager.processFrontMatter(note, (fm: Record<string, unknown>) => {
+        for (const [key, value] of Object.entries(details)) {
+          if (key === settings.properties.marker || key === "title") continue;
+          fm[key] = value;
+        }
+      }),
+    );
+  }
+
+  /** Whether a note other than `except` links to `file`. */
+  private linkedElsewhere(file: TFile, except: TFile): boolean {
+    return Object.entries(this.app.metadataCache.resolvedLinks).some(
+      ([source, targets]) => source !== except.path && (targets[file.path] ?? 0) > 0,
+    );
   }
 
   /** The book note that already links `file`, if any. */
@@ -245,36 +308,50 @@ export class BookImporter {
     return paths;
   }
 
-  /** A book note that is this book already: the same ISBN, the same title and author, or one that already links this file. */
+  /** A book note that is this book already (plan.ts `sameBook`), or one that already links this file. */
   findDuplicate(meta: Pick<BookMetadata, "title" | "authors" | "isbn">, file: TFile | null): TFile | null {
-    const { marker, markerValue, attachments } = this.getSettings().properties;
-    const wanted = new Set(duplicateKeys(meta));
-    for (const note of this.app.vault.getMarkdownFiles()) {
-      const cache = this.app.metadataCache.getFileCache(note);
-      const fm = cache?.frontmatter;
-      if (!fm || !isBookNote(fm, marker, markerValue)) continue;
+    const { attachments } = this.getSettings().properties;
+    const wanted = bookIdentity(meta);
+    for (const note of this.bookNotes()) {
       if (file) {
-        for (const link of cache?.frontmatterLinks ?? []) {
+        for (const link of this.app.metadataCache.getFileCache(note)?.frontmatterLinks ?? []) {
           if (link.key !== attachments && !link.key.startsWith(`${attachments}.`)) continue;
           if (this.app.metadataCache.getFirstLinkpathDest(link.link, note.path)?.path === file.path) return note;
         }
       }
-      const title = typeof fm["title"] === "string" ? fm["title"] : note.basename;
-      const author = fm["author"];
-      const firstAuthor = Array.isArray(author) ? author[0] : author;
-      const isbn = fm["isbn"];
-      const keys = duplicateKeys({
-        title,
-        authors: typeof firstAuthor === "string" ? [firstAuthor.replace(/^\[\[|\]\]$/g, "")] : [],
-        isbn: typeof isbn === "string" || typeof isbn === "number" ? String(isbn) : undefined,
-      });
-      if (keys.some((key) => wanted.has(key))) return note;
+      if (sameBook(wanted, this.identityOf(note))) return note;
     }
     return null;
   }
 
+  /** Every book note in the vault. */
+  bookNotes(): TFile[] {
+    const { marker, markerValue } = this.getSettings().properties;
+    return this.app.vault
+      .getMarkdownFiles()
+      .filter((note) => isBookNote(this.app.metadataCache.getFileCache(note)?.frontmatter, marker, markerValue));
+  }
+
+  /** What the duplicate check knows about a book note, from its title, first author and ISBN. */
+  identityOf(note: TFile): BookIdentity {
+    const fm = this.app.metadataCache.getFileCache(note)?.frontmatter ?? {};
+    const title = typeof fm["title"] === "string" && fm["title"].trim() !== "" ? fm["title"] : note.basename;
+    const author: unknown = fm["author"] ?? fm["authors"];
+    const firstAuthor: unknown = Array.isArray(author) ? author[0] : author;
+    const isbn: unknown = fm["isbn"];
+    return bookIdentity({
+      title,
+      authors: typeof firstAuthor === "string" ? [firstAuthor] : [],
+      isbn: typeof isbn === "string" || typeof isbn === "number" ? String(isbn) : undefined,
+    });
+  }
+
   /** Writes a new book note, with its file when there is one and a cover when there is one. */
-  private async write(book: { source: ImportSource; extension: string } | null, meta: BookMetadata): Promise<TFile> {
+  private async write(
+    book: { source: ImportSource; extension: string } | null,
+    meta: BookMetadata,
+    existingCover: TFile | null = null,
+  ): Promise<TFile> {
     const { vault, fileManager } = this.app;
     const settings = this.getSettings();
     const name = safeFileName(meta.title);
@@ -283,7 +360,7 @@ export class BookImporter {
 
     try {
       const bookFile = book ? await this.placeBookFile(book, name, notePath, undo) : null;
-      const coverFile = meta.cover ? await this.writeCover(meta.cover, name, notePath, undo) : null;
+      const coverFile = existingCover ?? (meta.cover ? await this.writeCover(meta.cover, name, notePath, undo) : null);
 
       await this.ensureFolder(parentOf(notePath), undo);
       const note = await vault.create(notePath, "");

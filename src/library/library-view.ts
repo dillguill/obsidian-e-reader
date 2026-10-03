@@ -13,6 +13,7 @@ import type { Settings } from "../settings/settings-model";
 import { READER_VIEW_TYPE, type ReaderViewState } from "../reader/reader-view";
 import { type CardState, renderCard } from "./card";
 import { resolveBookAttachment } from "../core/attachment";
+import { applyStatus, hasStatus, statusProperty } from "../core/status";
 import { type OpenBookModifiers, decideOpenTarget } from "./open-book";
 import { type LibraryViewConfig, readLibraryViewConfig } from "./view-config";
 
@@ -45,6 +46,7 @@ export class LibraryView extends BasesView {
     private readonly getSettings: () => Settings,
     private readonly importBook: (source: ImportSource) => Promise<ImportResult | null>,
     private readonly attachFile: (note: TFile) => Promise<boolean>,
+    private readonly bookActions: { changeCover: (note: TFile) => void; updateDetails: (note: TFile) => void },
   ) {
     super(controller);
     this.containerEl = containerEl;
@@ -239,11 +241,13 @@ export class LibraryView extends BasesView {
   }
 
   private cardState(note: TFile): CardState {
-    const { attachments, readLater } = this.getSettings().properties;
+    const settings = this.getSettings();
     const frontmatter = this.app.metadataCache.getFileCache(note)?.frontmatter;
+    const statuses: unknown = frontmatter?.[statusProperty(settings.status)];
     return {
-      hasFile: resolveBookAttachment(this.app, note, attachments) !== null,
-      readLater: frontmatter?.[readLater] === true,
+      hasFile: resolveBookAttachment(this.app, note, settings.properties.attachments) !== null,
+      readLater: hasStatus(statuses, settings.status.readLater),
+      onWishlist: hasStatus(statuses, settings.status.wishlist),
     };
   }
 
@@ -283,7 +287,27 @@ export class LibraryView extends BasesView {
       item
         .setTitle(state.readLater ? "Remove from read later" : "Read later")
         .setIcon(state.readLater ? "bookmark-minus" : "bookmark-plus")
-        .onClick(() => void this.setReadLater(entry.file, !state.readLater)),
+        .onClick(() => void this.setStatus(entry.file, "readLater", !state.readLater)),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle(state.onWishlist ? "Remove from wishlist" : "Add to wishlist")
+        .setIcon(state.onWishlist ? "heart-off" : "heart")
+        .onClick(() => void this.setStatus(entry.file, "wishlist", !state.onWishlist)),
+    );
+
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("Change cover…")
+        .setIcon("image")
+        .onClick(() => this.bookActions.changeCover(entry.file)),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Update details…")
+        .setIcon("info")
+        .onClick(() => this.bookActions.updateDetails(entry.file)),
     );
 
     // Only a property on the note itself can be written; a formula or a file
@@ -306,12 +330,11 @@ export class LibraryView extends BasesView {
     return menu;
   }
 
-  /** Marks a book to read later, or with `false` removes the property rather than leaving it unticked. */
-  private async setReadLater(note: TFile, on: boolean): Promise<void> {
-    const { readLater } = this.getSettings().properties;
+  /** Adds or removes one status in the book's status list, leaving its other entries alone. */
+  private async setStatus(note: TFile, which: "readLater" | "wishlist", on: boolean): Promise<void> {
+    const { status } = this.getSettings();
     await this.app.fileManager.processFrontMatter(note, (frontmatter: Record<string, unknown>) => {
-      if (on) frontmatter[readLater] = true;
-      else delete frontmatter[readLater];
+      applyStatus(frontmatter, status, status[which], on);
     });
   }
 

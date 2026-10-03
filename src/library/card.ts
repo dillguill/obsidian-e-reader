@@ -4,8 +4,8 @@
 // The overlays only appear when they say something. An unread book is a
 // clean cover; a book in progress gets a fade along the bottom carrying its
 // percentage and a thin bar; a finished one gets a small check. A book marked
-// to read later gets a bookmark, and a wishlist book (a note with no file
-// yet) is faded and labelled, so it is never mistaken for one you can open.
+// to read later gets a bookmark, and a wishlist book is labelled. One with no
+// file yet is also faded, so it is never mistaken for one you can open.
 import type { App, BasesEntry, BasesPropertyId, BasesViewConfig } from "obsidian";
 import { setIcon } from "obsidian";
 import { decideProgressOverlay, decideReadStateOverlay } from "./overlay";
@@ -32,6 +32,8 @@ export interface CardState {
   /** False for a wishlist book: a note whose attachments link no file yet. */
   hasFile: boolean;
   readLater: boolean;
+  /** The note's status list says wishlist. A note with no file is shown as one either way. */
+  onWishlist: boolean;
 }
 
 export function renderCard(
@@ -81,10 +83,8 @@ export function renderCard(
     const mark = cover.createDiv({ cls: "ereader-badge is-read-later", attr: { "aria-label": "Read later", title: "Read later" } });
     setIcon(mark, "bookmark");
   }
-  if (!state.hasFile) {
-    cover.createDiv({ cls: "ereader-wishlist-label", text: "Wishlist" });
-    return finishCard(card, entry, basesConfig);
-  }
+  if (!state.hasFile || state.onWishlist) cover.createDiv({ cls: "ereader-wishlist-label", text: "Wishlist" });
+  if (!state.hasFile) return finishCard(card, entry, basesConfig);
 
   const progressRaw = raw(entry, cfg.progressProperty);
   const readState = decideReadStateOverlay(cfg.progressProperty, progressRaw);

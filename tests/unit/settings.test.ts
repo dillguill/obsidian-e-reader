@@ -78,7 +78,6 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       progress: DEFAULT_SETTINGS.properties.progress,
       lastRead: DEFAULT_SETTINGS.properties.lastRead,
       furthestRead: DEFAULT_SETTINGS.properties.furthestRead,
-      readLater: DEFAULT_SETTINGS.properties.readLater,
       bookmarks: DEFAULT_SETTINGS.properties.bookmarks,
     });
   });
@@ -150,13 +149,13 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         progress: "percent",
         lastRead: "last-position",
         furthestRead: "furthest-position",
-        readLater: "queued",
         bookmarks: "marks",
       },
       annotationTypes: [
         { name: "idea", color: "#111111" },
         { name: "question", color: "#222222" },
       ],
+      status: { useTags: false, property: "shelves", readLater: "Next up", wishlist: "Want" },
       readers: { epub: "plugin", pdf: "default" },
       panes: { outline: false, highlights: true, hideNativeOutline: true },
       import: { notesFolder: "Books", filesFolder: "Books/files", inboxFolder: "Inbox", lookUpMetadata: false, ignoredPdfs: ["Inbox/receipt.pdf"] },
@@ -379,5 +378,37 @@ describe("pdf fit mode", () => {
   it("drops the highlight placement settings earlier betas had", () => {
     const { highlights } = mergeSettings({ highlights: { format: "note", mode: "notes", style: "quote", pageLinks: false } });
     expect(highlights).toEqual(DEFAULT_SETTINGS.highlights);
+  });
+});
+
+describe("status settings", () => {
+  it("keeps statuses in tags by default", () => {
+    expect(DEFAULT_SETTINGS.status).toMatchObject({ useTags: true, readLater: "read-later", wishlist: "wishlist" });
+  });
+
+  it("writes tag values without # or spaces", () => {
+    const merged = mergeSettings({ version: SETTINGS_VERSION, status: { useTags: true, readLater: "#read later" } });
+    expect(merged.status.readLater).toBe("read-later");
+  });
+
+  it("asks for the read later checkbox to be migrated when upgrading from version 2", () => {
+    expect(mergeSettings({ version: 2, properties: {} }).pendingReadLaterMigration).toBe("read_later");
+    expect(mergeSettings({ version: 2, properties: { readLater: "queued" } }).pendingReadLaterMigration).toBe("queued");
+  });
+
+  it("asks for no migration on a fresh install or once it has run", () => {
+    expect(mergeSettings(undefined).pendingReadLaterMigration).toBeUndefined();
+    expect(mergeSettings({ version: SETTINGS_VERSION }).pendingReadLaterMigration).toBeUndefined();
+  });
+
+  it("asks for wishlist books to be tagged when upgrading from before version 4", () => {
+    expect(mergeSettings({ version: 3 }).pendingWishlistMigration).toBe(true);
+    expect(mergeSettings({ version: SETTINGS_VERSION }).pendingWishlistMigration).toBeUndefined();
+    expect(mergeSettings(undefined).pendingWishlistMigration).toBeUndefined();
+  });
+
+  it("keeps a migration still in progress", () => {
+    const merged = mergeSettings({ version: SETTINGS_VERSION, pendingReadLaterMigration: "queued" });
+    expect(merged.pendingReadLaterMigration).toBe("queued");
   });
 });

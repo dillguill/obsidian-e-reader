@@ -1,14 +1,20 @@
 import type { BasesAllOptions, WorkspaceLeaf } from "obsidian";
 import { FuzzySuggestModal, Modal, Notice, Plugin, Setting, TFile } from "obsidian";
 import { findBookForEntry, highlightOfNote } from "./annotations/links";
-import { renameTypeInBook } from "./annotations/store";
+import { mergeBookInto, renameTypeInBook } from "./annotations/store";
+import { resolveBookAttachment } from "./core/attachment";
 import { isBookNote } from "./core/book-note";
+import { applyStatus, hasStatus, statusProperty } from "./core/status";
 import { ReaderEvents } from "./core/reader-events";
 import { RESERVED_ENTRY_TYPE } from "./core/types";
 import { BookImporter, IMPORTABLE_EXTENSIONS, type ImportResult, type ImportSource } from "./import/importer";
 import { type WishlistPick, chooseBookFile, searchForWishlist } from "./import/modals";
-import { fetchCover } from "./import/open-library";
-import { isInFolder } from "./import/plan";
+import { readEpubImages, readEpubMetadata } from "./import/epub-metadata";
+import type { BookCover } from "./import/metadata";
+import { coverChoices, coverImageUrl, fetchCover, findBook } from "./import/open-library";
+import { type CoverOption, type DetailOption, pickCover, pickDetails } from "./import/review-modals";
+import { detailRows, groupDuplicates, isInFolder, keepDetails } from "./import/plan";
+import { DuplicatesModal } from "./library/duplicates-modal";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
 import { readPdfMetadata } from "./reader/pdf/adapter";
 import { READER_VIEW_TYPE, ReaderView } from "./reader/reader-view";
@@ -160,6 +166,10 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
             () => this.settings,
             (source) => this.importBook(source),
             (note) => this.attachFile(note),
+            {
+              changeCover: (note) => void this.changeCover(note),
+              updateDetails: (note) => this.updateDetails(note),
+            },
           ),
         options: () => libraryViewOptions(this.settings),
       });
@@ -280,6 +290,12 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     );
 
     this.addCommand({
+      id: "find-duplicate-books",
+      name: "Find duplicate books",
+      callback: () => this.findDuplicates(),
+    });
+
+    this.addCommand({
       id: "add-to-wishlist",
       name: "Add a book to the wishlist",
       callback: () => searchForWishlist(this.app, (pick) => void this.addToWishlist(pick)),
@@ -324,14 +340,65 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       this.registerEvent(this.app.vault.on("create", (file) => this.onInboxCandidate(file)));
       this.registerEvent(this.app.vault.on("modify", (file) => this.onInboxCandidate(file)));
       this.scanInbox();
+      void this.migrateReadLater().then(() => this.migrateWishlist());
     });
+  }
+
+  /**
+   * Moves read later from the checkbox it used to be into the status list,
+   * once. The marker stays saved until every note is done, so a vault closed
+   * partway through finishes the next time it opens.
+   */
+  private async migrateReadLater(): Promise<void> {
+    const legacy = this.settings.pendingReadLaterMigration;
+    if (legacy === undefined) return;
+    const { status } = this.settings;
+    let moved = 0;
+    for (const note of this.bookNotes()) {
+      if (this.app.metadataCache.getFileCache(note)?.frontmatter?.[legacy] === undefined) continue;
+      await this.app.fileManager.processFrontMatter(note, (frontmatter: Record<string, unknown>) => {
+        const wasOn = frontmatter[legacy] === true;
+        delete frontmatter[legacy];
+        if (wasOn) {
+          applyStatus(frontmatter, status, status.readLater, true);
+          moved++;
+        }
+      });
+    }
+    delete this.settings.pendingReadLaterMigration;
+    await this.saveSettings();
+    if (moved > 0) {
+      const where = status.useTags ? "tags" : `“${status.property}”`;
+      new Notice(`E-Reader: read later is now a status in ${where}. Moved ${moved} ${moved === 1 ? "book" : "books"}.`, 8000);
+    }
+  }
+
+  /** Gives the wishlist status, once, to book notes that were wishlist books before it existed: those with no file. */
+  private async migrateWishlist(): Promise<void> {
+    if (!this.settings.pendingWishlistMigration) return;
+    const { status, properties } = this.settings;
+    for (const note of this.bookNotes()) {
+      if (resolveBookAttachment(this.app, note, properties.attachments) !== null) continue;
+      if (hasStatus(this.app.metadataCache.getFileCache(note)?.frontmatter?.[statusProperty(status)], status.wishlist)) continue;
+      await this.app.fileManager.processFrontMatter(note, (frontmatter: Record<string, unknown>) => {
+        applyStatus(frontmatter, status, status.wishlist, true);
+      });
+    }
+    delete this.settings.pendingWishlistMigration;
+    await this.saveSettings();
   }
 
   /** Imports whatever is already sitting in the inbox. Called at startup and when the inbox setting changes. */
   scanInbox(): void {
     const inbox = this.settings.import.inboxFolder;
     if (inbox === "") return;
-    for (const file of this.app.vault.getFiles()) this.onInboxCandidate(file);
+    // A book's own file can live in the inbox, when the inbox is also where
+    // book files are kept. Those are the library, not new arrivals, and
+    // reading them all again at every start can take a phone down.
+    const attached = this.importer.attachedPaths();
+    for (const file of this.app.vault.getFiles()) {
+      if (!attached.has(file.path)) this.onInboxCandidate(file);
+    }
   }
 
   /** Schedules an inbox file for import once it has stopped changing. */
@@ -339,6 +406,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     if (!(file instanceof TFile) || !IMPORTABLE_EXTENSIONS.has(file.extension)) return;
     if (!isInFolder(file.path, this.settings.import.inboxFolder) || this.importer.wrote(file.path)) return;
     if (this.inboxSkipped.has(file.path)) return;
+    if (file.extension === "pdf" && this.settings.import.ignoredPdfs.includes(file.path)) return;
     const pending = this.inboxTimers.get(file.path);
     if (pending !== undefined) window.clearTimeout(pending);
     const timer = window.setTimeout(() => {
@@ -362,7 +430,10 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     if (this.settledTimer !== null) window.clearTimeout(this.settledTimer);
     this.settledTimer = window.setTimeout(() => {
       this.settledTimer = null;
-      const files = [...this.settled.values()].filter((f) => this.app.vault.getAbstractFileByPath(f.path) === f);
+      const attached = this.importer.attachedPaths();
+      const files = [...this.settled.values()].filter(
+        (f) => this.app.vault.getAbstractFileByPath(f.path) === f && !attached.has(f.path),
+      );
       this.settled.clear();
       for (const f of files) this.inboxSkipped.add(f.path);
       const epubs = files.filter((f) => f.extension === "epub");
@@ -451,6 +522,48 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     if (id) await reader.goToEntry(id);
   }
 
+  /** Lists the books in the library more than once, to merge each into one note. */
+  private findDuplicates(): void {
+    const { attachments } = this.settings.properties;
+    const books = this.importer.bookNotes().map((note) => ({
+      note,
+      hasFile: resolveBookAttachment(this.app, note, attachments) !== null,
+    }));
+    const groups = groupDuplicates(books, (book) => this.importer.identityOf(book.note));
+    new DuplicatesModal(this.app, groups, async (keep, others) => {
+      try {
+        for (const [index, other] of others.entries()) {
+          // The next merge locates highlights from the metadata cache, which
+          // catches up with the last write a moment after it lands.
+          if (index > 0) await this.cacheCaughtUp(keep);
+          await mergeBookInto(this.app, other, keep, this.settings);
+        }
+        new Notice(`Merged into “${keep.basename}”. The other ${others.length === 1 ? "note is" : "notes are"} in the trash.`);
+        return true;
+      } catch (error) {
+        console.error("[e-reader] could not merge duplicate books", error);
+        new Notice(`Could not merge into “${keep.basename}”: ${String(error)}`, 10000);
+        return false;
+      }
+    }).open();
+  }
+
+  /** Resolves once the metadata cache has re-read `file`, or after two seconds if it already had. */
+  private cacheCaughtUp(file: TFile): Promise<void> {
+    return new Promise((resolve) => {
+      const ref = this.app.metadataCache.on("changed", (changed) => {
+        if (changed.path !== file.path) return;
+        finish();
+      });
+      const timer = window.setTimeout(() => finish(), 2000);
+      const finish = (): void => {
+        window.clearTimeout(timer);
+        this.app.metadataCache.offref(ref);
+        resolve();
+      };
+    });
+  }
+
   /** Every book note in the vault. */
   private bookNotes(): TFile[] {
     const { marker, markerValue } = this.settings.properties;
@@ -490,19 +603,118 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
   }
 
   /** Saves a book you do not have yet, with its cover when Open Library has one. */
+  /** Adds a book from an Open Library search, after asking which cover and which details to keep. */
   async addToWishlist(pick: WishlistPick): Promise<void> {
+    const { title } = pick.meta;
+    const covers = coverChoices(pick.coverId, pick.workKey).then((ids) => ids.map(remoteCover));
+    const coverPick = await pickCover(this.app, covers, { title, skipLabel: "No cover", oldCover: null });
+    if (coverPick === null) return;
+    const rows = detailRows(pick.meta);
+    const chosen = rows.length === 0 ? new Set<string>() : await pickDetails(this.app, rows, { title, confirmLabel: "Add to wishlist" });
+    if (chosen === null) return;
+    const { choice } = coverPick;
+    const meta = keepDetails({ ...pick.meta, cover: choice.kind === "image" ? choice.cover : undefined }, chosen);
     try {
-      const cover = await fetchCover(pick.coverUrl);
-      const result = await this.importer.addToWishlist(cover ? { ...pick.meta, cover } : pick.meta);
+      const result = await this.importer.addToWishlist(meta, choice.kind === "vault" ? choice.file : null);
       if (result.status === "imported") new Notice(`Added “${result.title}” to your wishlist.`);
       else if (result.status === "duplicate") {
         new Notice(`“${result.title}” is already in your library, as ${result.existing.basename}. Nothing was changed.`, 8000);
       }
     } catch (error) {
       console.error("[e-reader] could not add to the wishlist", error);
-      new Notice(`Could not add “${pick.meta.title}”: ${String(error)}. Nothing was changed.`, 10000);
+      new Notice(`Could not add “${title}”: ${String(error)}. Nothing was changed.`, 10000);
     }
   }
+
+  /** Offers the book file's own cover and Open Library's, and saves the one chosen. */
+  private async changeCover(note: TFile): Promise<void> {
+    const identity = this.noteMetadata(note);
+    const urls: string[] = [];
+    const options = (async (): Promise<CoverOption[]> => {
+      const found: CoverOption[] = [];
+      const file = resolveBookAttachment(this.app, note, this.settings.properties.attachments);
+      const offer = (cover: BookCover, label: string): void => {
+        const url = URL.createObjectURL(new Blob([cover.data]));
+        urls.push(url);
+        found.push({ src: url, label, load: async () => cover });
+      };
+      try {
+        if (file?.extension === "epub") {
+          const data = await this.app.vault.readBinary(file);
+          const { cover } = await readEpubMetadata(data, note.basename);
+          if (cover) offer(cover, "The book's own cover");
+          for (const image of await readEpubImages(data)) offer(image, "A picture inside the book");
+        } else if (file?.extension === "pdf") {
+          const { cover } = await readPdfMetadata(await this.app.vault.readBinary(file));
+          if (cover) offer({ data: cover, extension: "jpg" }, "The first page");
+        }
+      } catch (error) {
+        console.debug("[e-reader] could not read covers from the book file", error);
+      }
+      const match = await findBook(identity);
+      const ids = await coverChoices(match?.coverId ?? null, match?.workKey ?? null);
+      return [...found, ...ids.map(remoteCover)];
+    })();
+    const pick = await pickCover(this.app, options, {
+      title: identity.title,
+      skipLabel: "Remove cover",
+      oldCover: this.importer.coverFileOf(note),
+    });
+    for (const url of urls) URL.revokeObjectURL(url);
+    if (pick === null) return;
+    const { choice } = pick;
+    try {
+      await this.importer.setCover(note, choice.kind === "image" ? choice.cover : choice.kind === "vault" ? choice.file : null, pick.removeOld);
+    } catch (error) {
+      console.error("[e-reader] could not change the cover", error);
+      new Notice(`Could not change the cover: ${String(error)}`, 10000);
+    }
+  }
+
+  /** Searches Open Library for the book, then writes the details chosen over what the note says. */
+  private updateDetails(note: TFile): void {
+    const identity = this.noteMetadata(note);
+    const query = [identity.title, identity.authors[0]].filter((part) => part).join(" ");
+    searchForWishlist(
+      this.app,
+      (pick) => {
+        void (async () => {
+          const frontmatter = this.app.metadataCache.getFileCache(note)?.frontmatter ?? {};
+          const rows: DetailOption[] = [];
+          for (const row of detailRows(pick.meta)) {
+            const now: unknown = frontmatter[row.property];
+            const current = Array.isArray(now) ? now.join(", ") : now === undefined || now === null || now === "" ? undefined : String(now);
+            if (current === row.display) continue;
+            rows.push(current === undefined ? row : { ...row, current });
+          }
+          const chosen = await pickDetails(this.app, rows, { title: identity.title, confirmLabel: "Update" });
+          if (chosen === null || chosen.size === 0) return;
+          try {
+            await this.importer.setDetails(note, keepDetails(pick.meta, chosen));
+          } catch (error) {
+            console.error("[e-reader] could not update details", error);
+            new Notice(`Could not update the details: ${String(error)}`, 10000);
+          }
+        })();
+      },
+      query,
+    );
+  }
+
+  /** The title, first author and ISBN a book note gives, for looking it up. */
+  private noteMetadata(note: TFile): { title: string; authors: string[]; isbn?: string } {
+    const fm = this.app.metadataCache.getFileCache(note)?.frontmatter ?? {};
+    const title = typeof fm["title"] === "string" && fm["title"].trim() !== "" ? fm["title"] : note.basename;
+    const author: unknown = fm["author"];
+    const first: unknown = Array.isArray(author) ? author[0] : author;
+    const isbn: unknown = fm["isbn"];
+    return {
+      title,
+      authors: typeof first === "string" ? [first.replace(/^\[\[|\]\]$/g, "")] : [],
+      ...(typeof isbn === "string" || typeof isbn === "number" ? { isbn: String(isbn) } : {}),
+    };
+  }
+
 
   /** Asks for a book's file and attaches it. Resolves true once the book has its file. */
   async attachFile(note: TFile): Promise<boolean> {
@@ -593,6 +805,13 @@ class ImportSuggestModal extends FuzzySuggestModal<TFile> {
   }
 }
 
+/** An Open Library cover to choose from: a thumbnail shown, the large image saved. */
+function remoteCover(id: number): CoverOption {
+  return { src: coverImageUrl(id, "M"), label: "Open Library cover", load: () => fetchCover(coverImageUrl(id, "L")) };
+}
+
+const PDF_PAGE_SIZE = 50;
+
 /** Asks which of the PDFs that arrived in the inbox are books. */
 class InboxPdfModal extends Modal {
   private readonly chosen = new Set<TFile>();
@@ -610,47 +829,60 @@ class InboxPdfModal extends Modal {
     const { contentEl } = this;
     this.setTitle(this.files.length === 1 ? "Import this PDF as a book?" : `Import these ${this.files.length} PDFs as books?`);
     contentEl.createEl("p", {
-      text: "PDFs in your inbox are only imported when you say so. Tick the ones that are books.",
+      text:
+        "PDFs in your inbox are only imported when you say so. Tick the ones that are books; " +
+        "the rest are not asked about again. Add one later with “Import as book” in its file menu.",
       cls: "setting-item-description",
     });
-    for (const file of this.files) {
-      new Setting(contentEl)
-        .setName(file.basename)
-        .setDesc(file.parent?.path ?? "")
-        .addToggle((toggle) =>
-          toggle.setValue(false).onChange((on) => {
-            if (on) this.chosen.add(file);
-            else this.chosen.delete(file);
-          }),
-        );
-    }
-    new Setting(contentEl)
-      .addButton((button) =>
-        button.setButtonText("Never ask about the others").onClick(() => {
-          this.finish(
-            [...this.chosen],
-            this.files.filter((file) => !this.chosen.has(file)),
-          );
+    const list = contentEl.createDiv();
+    const footer = contentEl.createDiv();
+    // Hundreds of rows at once can take a phone down, so they come a page at a time.
+    let shown = 0;
+    const more = new Setting(footer).addButton((button) =>
+      button.setButtonText("Show more").onClick(() => showPage()),
+    );
+    const showPage = (): void => {
+      const end = Math.min(this.files.length, shown + PDF_PAGE_SIZE);
+      for (; shown < end; shown++) {
+        const file = this.files[shown];
+        if (file) this.renderRow(list, file);
+      }
+      more.settingEl.toggle(shown < this.files.length);
+      more.setName(shown < this.files.length ? `Showing ${shown} of ${this.files.length}` : "");
+    };
+    showPage();
+    new Setting(footer).addButton((button) =>
+      button
+        .setButtonText("Import")
+        .setCta()
+        .onClick(() => this.finish()),
+    );
+  }
+
+  private renderRow(list: HTMLElement, file: TFile): void {
+    new Setting(list)
+      .setName(file.basename)
+      .setDesc(file.parent?.path ?? "")
+      .addToggle((toggle) =>
+        toggle.setValue(false).onChange((on) => {
+          if (on) this.chosen.add(file);
+          else this.chosen.delete(file);
         }),
-      )
-      .addButton((button) =>
-        button
-          .setButtonText("Import")
-          .setCta()
-          .onClick(() => this.finish([...this.chosen], [])),
       );
   }
 
   override onClose(): void {
     this.contentEl.empty();
-    // Closed without a choice: nothing is imported, and these are asked
-    // about again the next time Obsidian starts.
-    if (!this.settled) this.onDone([], []);
+    // Closing counts as an answer too: whatever is ticked is imported and
+    // the rest are not asked about again, so the same list cannot come
+    // back at every start.
+    if (!this.settled) this.finish();
   }
 
-  private finish(chosen: TFile[], ignored: TFile[]): void {
+  private finish(): void {
+    if (this.settled) return;
     this.settled = true;
-    this.onDone(chosen, ignored);
+    this.onDone([...this.chosen], this.files.filter((file) => !this.chosen.has(file)));
     this.close();
   }
 }

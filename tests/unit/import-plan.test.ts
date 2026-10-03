@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { coverExtension, fillGaps } from "../../src/import/metadata";
 import { matchFromSearch, querySearchUrl, resultsFromSearch, searchUrl } from "../../src/import/open-library";
-import { buildFrontmatter, duplicateKeys, isInFolder, joinPath, normalizeForMatch, safeFileName } from "../../src/import/plan";
+import { bookIdentity, buildFrontmatter, isInFolder, joinPath, normalizeForMatch, normalizeIsbn, safeFileName, sameBook, groupDuplicates, detailRows, keepDetails } from "../../src/import/plan";
 
 const NAMES = { marker: "type", markerValue: "book", cover: "cover", attachments: "attachments" };
 
@@ -28,11 +28,39 @@ describe("duplicate matching", () => {
     expect(normalizeForMatch("The Café: A Story!")).toBe(normalizeForMatch("cafe a story"));
   });
 
-  it("keys on ISBN and on title with first author", () => {
-    expect(duplicateKeys({ title: "Dune", authors: ["Frank Herbert"], isbn: "9780441172719" })).toEqual([
-      "isbn:9780441172719",
-      "book:dune|frank herbert",
-    ]);
+  const id = (title: string, author?: string, isbn?: string) =>
+    bookIdentity({ title, authors: author ? [author] : [], isbn });
+
+  it("matches one ISBN however it is written", () => {
+    expect(normalizeIsbn("0-441-17271-7")).toBe("9780441172719");
+    expect(normalizeIsbn("978-0-441-17271-9")).toBe("9780441172719");
+    expect(sameBook(id("Dune", "", "0441172717"), id("Something else", "", "9780441172719"))).toBe(true);
+  });
+
+  it("matches a title with or without its subtitle, and an author in either order", () => {
+    expect(sameBook(id("Dune: Deluxe Edition", "Frank Herbert"), id("Dune", "Herbert, Frank"))).toBe(true);
+    expect(sameBook(id("Emma (Penguin Classics)", "J. Austen"), id("Emma", "Jane Austen"))).toBe(true);
+  });
+
+  it("matches a note with no author by title alone", () => {
+    expect(sameBook(id("Dune"), id("Dune", "Frank Herbert", "9780441172719"))).toBe(true);
+  });
+
+  it("groups the books that appear more than once", () => {
+    const books = [
+      { name: "a", id: id("Dune", "Frank Herbert") },
+      { name: "b", id: id("Dune: Deluxe", "") },
+      { name: "c", id: id("Emma", "Jane Austen", "0441172717") },
+      { name: "d", id: id("Other", "", "9780441172719") },
+      { name: "e", id: id("Piranesi", "Susanna Clarke") },
+    ];
+    const groups = groupDuplicates(books, (book) => book.id).map((group) => group.map((book) => book.name).sort());
+    expect(groups.sort()).toEqual([["a", "b"], ["c", "d"]]);
+  });
+
+  it("does not match a different author or title", () => {
+    expect(sameBook(id("Emma", "Jane Austen"), id("Emma", "Someone Else"))).toBe(false);
+    expect(sameBook(id("Dune", "Frank Herbert"), id("Dune Messiah", "Frank Herbert"))).toBe(false);
   });
 });
 
@@ -170,5 +198,22 @@ describe("wishlist search", () => {
     expect(results[0]?.meta).toMatchObject({ authors: ["Frank Herbert"], published: "1965" });
     expect(results[0]?.coverUrl).toContain("/b/id/7-L.jpg");
     expect(results[1]?.meta.authors).toEqual([]);
+  });
+});
+
+describe("choosing details", () => {
+  const meta = { title: "Dune", authors: ["Frank Herbert"], subjects: ["Science fiction"], isbn: "9780441172719", pages: 412 };
+
+  it("lists the details there are, under the properties a note uses", () => {
+    expect(detailRows(meta).map((row) => [row.property, row.display])).toEqual([
+      ["author", "Frank Herbert"],
+      ["isbn", "9780441172719"],
+      ["pages", "412"],
+      ["topics", "Science fiction"],
+    ]);
+  });
+
+  it("keeps only the chosen details, and always the title", () => {
+    expect(keepDetails(meta, new Set(["isbn"]))).toEqual({ title: "Dune", authors: [], subjects: [], isbn: "9780441172719" });
   });
 });

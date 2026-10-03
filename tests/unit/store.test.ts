@@ -9,6 +9,7 @@ import {
   fillSections,
   foldHighlightNotes,
   listEntries,
+  mergeBookInto,
   migrateBookmarks,
   removeEntry,
   renameTypeInBook,
@@ -213,5 +214,32 @@ describe("renaming a type", () => {
     expect((await listEntries(app, book, SETTINGS)).entries.map((item) => item.type).sort()).toEqual(["insight", "question"]);
     expect(await app.vault.read(book)).toContain("[!insight]");
     expect(app.metadataCache.getFileCache(note)?.frontmatter?.["highlight"]).toBe("insight");
+  });
+});
+
+describe("merging duplicate books", () => {
+  it("moves highlights, fills missing properties, joins lists, keeps text and trashes the other note", async () => {
+    const app = new App();
+    const keep = await app.vault.create("Library/Dune.md", "---\ntype: book\nauthor:\n  - Frank Herbert\ntags:\n  - sci-fi\n---\n\nMine.\n");
+    const other = await app.vault.create(
+      "Old/Dune (old).md",
+      "---\ntype: book\nisbn: \"9780441172719\"\ntags:\n  - read-later\n---\n\nOld thoughts.\n",
+    );
+    const moved = await addEntry(app, other, draft, SETTINGS, NOW, random);
+    await addEntry(app, keep, { ...draft, exact: "fear is the mind-killer" }, SETTINGS, NOW, random);
+
+    await mergeBookInto(app, other, keep, SETTINGS);
+
+    const { entries } = await listEntries(app, keep, SETTINGS);
+    expect(entries.map((entry) => entry.exact).sort()).toEqual(["fear is the mind-killer", "the spice must flow"]);
+    expect(entries.some((entry) => entry.id === moved.id)).toBe(true);
+    const fm = app.metadataCache.getFileCache(keep)?.frontmatter;
+    expect(String(fm?.["isbn"])).toBe("9780441172719");
+    expect(fm).toMatchObject({ author: ["Frank Herbert"], tags: ["sci-fi", "read-later"] });
+    const text = await app.vault.read(keep);
+    expect(text).toContain("Mine.");
+    expect(text).toContain("## From Dune (old)\n\nOld thoughts.");
+    expect(text.match(/%%e-reader:begin%%/g)).toHaveLength(1);
+    expect(app.vault.getAbstractFileByPath("Old/Dune (old).md")).toBeNull();
   });
 });

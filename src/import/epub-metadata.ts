@@ -111,3 +111,29 @@ export async function readEpubMetadata(data: ArrayBuffer, fallbackTitle: string)
   const { cover: _cover, title, ...rest } = opf;
   return { ...rest, title: title ?? fallbackTitle, cover };
 }
+
+/** Smaller than this is an icon or an ornament, not a picture that could be a cover. */
+const MIN_IMAGE_BYTES = 8 * 1024;
+const MAX_IMAGES = 12;
+
+/**
+ * The pictures inside an EPUB, largest first, for a book whose cover is not
+ * declared or not the one wanted. The declared cover is left out; the
+ * caller offers it on its own.
+ */
+export async function readEpubImages(data: ArrayBuffer): Promise<BookCover[]> {
+  const zip = await JSZip.loadAsync(data);
+  const container = await zip.file("META-INF/container.xml")?.async("string");
+  const opfPath = container ? opfPathFromContainer(container) : null;
+  const opfXml = opfPath ? await zip.file(opfPath)?.async("string") : undefined;
+  const declared = opfPath && opfXml ? parseOpf(opfXml, opfPath).cover?.path : undefined;
+  const images: BookCover[] = [];
+  for (const entry of Object.values(zip.files)) {
+    if (entry.dir || entry.name === declared) continue;
+    const extension = coverExtension(undefined, entry.name);
+    if (!extension) continue;
+    const bytes = await entry.async("arraybuffer");
+    if (bytes.byteLength >= MIN_IMAGE_BYTES) images.push({ data: bytes, extension });
+  }
+  return images.sort((a, b) => b.data.byteLength - a.data.byteLength).slice(0, MAX_IMAGES);
+}

@@ -54,6 +54,7 @@ export class EReaderSettingTab extends PluginSettingTab {
     this.addImportSection(containerEl);
     this.addPropertiesSection(containerEl);
     this.addAnnotationTypesSection(containerEl);
+    this.addHighlightFormatSection(containerEl);
   }
 
   /**
@@ -224,6 +225,78 @@ export class EReaderSettingTab extends PluginSettingTab {
           this.save();
         }),
       );
+  }
+
+  // ----------------------------------------------------- highlight format
+
+  private addHighlightFormatSection(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName("Highlight format").setHeading();
+    const settings = this.host.settings.highlights;
+
+    new Setting(containerEl)
+      .setName("Write highlights as")
+      .setDesc(
+        "Callout and quote go into the book note. Note gives each highlight a note of its own, with properties, " +
+          "and lists links to them in the book note. Highlights already written keep their format.",
+      )
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions({ callout: "Callout", quote: "Quote", note: "Note" })
+          .setValue(settings.format)
+          .onChange((value) => {
+            settings.format = value === "quote" || value === "note" ? value : "callout";
+            this.save();
+            // The note-only settings below only apply to one choice.
+            this.display();
+          }),
+      );
+    if (settings.format !== "note") return;
+
+    new Setting(containerEl)
+      .setName("Highlight notes folder")
+      .setDesc("Where highlight notes are created. Empty puts them at the root of the vault.")
+      .addText((text) => {
+        text
+          .setPlaceholder("Highlights")
+          .setValue(settings.folder)
+          .onChange((value) => {
+            settings.folder = value.trim().replace(/^\/+|\/+$/g, "");
+            this.save();
+          });
+        new FolderSuggest(this.app, text.inputEl);
+      });
+    new Setting(containerEl)
+      .setName("A subfolder per book")
+      .setDesc("Put each book's highlight notes in a folder named after the book.")
+      .addToggle((toggle) =>
+        toggle.setValue(settings.subfolderPerBook).onChange((value) => {
+          settings.subfolderPerBook = value;
+          this.save();
+        }),
+      );
+
+    const names = settings.properties;
+    const rows: { key: keyof typeof names; name: string; desc: string }[] = [
+      { key: "book", name: "Book property", desc: "Link to the book note. This is how a highlight note is tied to its book." },
+      { key: "type", name: "Type property", desc: "The highlight's type, such as idea or question." },
+      { key: "page", name: "Page property", desc: "The page the highlight is on, where the book has pages." },
+      { key: "section", name: "Section property", desc: "The chapter or section, from the book's table of contents." },
+      { key: "created", name: "Created property", desc: "When the highlight was made." },
+    ];
+    for (const row of rows) {
+      new Setting(containerEl)
+        .setName(row.name)
+        .setDesc(row.desc)
+        .addText((text) =>
+          text
+            .setPlaceholder(DEFAULT_SETTINGS.highlights.properties[row.key])
+            .setValue(names[row.key])
+            .onChange((value) => {
+              names[row.key] = value.trim() === "" ? DEFAULT_SETTINGS.highlights.properties[row.key] : value.trim();
+              this.save();
+            }),
+        );
+    }
   }
 
   // ---------------------------------------------------------- properties

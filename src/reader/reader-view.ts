@@ -15,6 +15,8 @@
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { FileView, Menu, Notice, Platform, Scope, TFile, setIcon } from "obsidian";
 import { addEntry, listEntries, removeEntry, setEntryType } from "../annotations/store";
+import { linksToBook } from "../annotations/highlight-notes";
+import { activeRowIndex, rowsFromOutline } from "../sidebar/outline-model";
 import type { Entry } from "../annotations/entry";
 import type { ReaderEvents } from "../core/reader-events";
 import { describeAttachmentLookup, resolveBookAttachment, resolveBookAttachmentPath } from "../core/attachment";
@@ -164,7 +166,12 @@ export class ReaderView extends FileView {
     // highlights pane — arrives here the same way the sidebar sees it.
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
-        if (file === this.bookNote()) void this.refreshEntries();
+        const book = this.bookNote();
+        if (!book) return;
+        // A highlight note of this book counts too: its entries are this book's.
+        if (file === book || linksToBook(this.app, file, book, this.getSettings().highlights.properties.book)) {
+          void this.refreshEntries();
+        }
       }),
     );
     // An EPUB renders inside iframes that inherit none of the vault's CSS, so
@@ -263,7 +270,16 @@ export class ReaderView extends FileView {
     open.addEventListener("click", () => void this.leaf.openFile(note, { state: { mode: "source" } }));
   }
 
-  private async loadBook(file: TFile): Promise<void> {
+  /** Resolves once the book being opened has loaded (or failed to), for callers that need it open. */
+  private loading: Promise<void> = Promise.resolve();
+
+  private loadBook(file: TFile): Promise<void> {
+    const load = this.loadBookNow(file);
+    this.loading = load.catch(() => undefined);
+    return load;
+  }
+
+  private async loadBookNow(file: TFile): Promise<void> {
     const root = this.contentRoot;
     if (!root) return;
     const token = ++this.loadToken;
@@ -414,6 +430,20 @@ export class ReaderView extends FileView {
   private announcePosition(): void {
     if (!this.file) return;
     this.events.emitPosition(this.file.path, this.currentLocator());
+  }
+
+  /**
+   * Moves to one of this book's entries, for the links highlights carry. The
+   * book may still be opening, so this waits for it to finish loading first.
+   */
+  async goToEntry(id: string): Promise<void> {
+    await this.loading;
+    const note = this.bookNote();
+    if (!note) return;
+    const { entries } = await listEntries(this.app, note, this.getSettings().highlights);
+    const hint = entries.find((entry) => entry.id === id)?.anchor.hint;
+    if (hint) await this.goToLocator(hint);
+    else new Notice("E-Reader: that highlight is no longer in this book's notes.");
   }
 
   /** Scrolls this reader to `locator`. Used by the sidebar panes. */
@@ -620,7 +650,7 @@ export class ReaderView extends FileView {
     }
     let entries: Entry[] = [];
     try {
-      entries = (await listEntries(this.app, note)).entries;
+      entries = (await listEntries(this.app, note, this.getSettings().highlights)).entries;
     } catch (error) {
       console.error("[e-reader] failed to read the book note's entries", error);
       return;
@@ -841,7 +871,7 @@ export class ReaderView extends FileView {
 
   private async changeEntryType(note: TFile, entry: Entry, type: string): Promise<void> {
     try {
-      await setEntryType(this.app, note, entry.id, type);
+      await setEntryType(this.app, note, entry.id, type, this.getSettings().highlights);
     } catch (error) {
       console.error("[e-reader] failed to change an entry's type", error);
       new Notice("E-Reader: could not change that highlight — see the console.");
@@ -850,7 +880,7 @@ export class ReaderView extends FileView {
 
   private async deleteEntry(note: TFile, entry: Entry): Promise<void> {
     try {
-      await removeEntry(this.app, note, entry.id);
+      await removeEntry(this.app, note, entry.id, this.getSettings().highlights);
     } catch (error) {
       console.error("[e-reader] failed to remove an entry", error);
       new Notice("E-Reader: could not remove that entry — see the console.");
@@ -874,17 +904,33 @@ export class ReaderView extends FileView {
       new Notice("E-Reader: highlight saved. Turn on “Show saved highlights” in the display menu to see it in the book.");
     }
     try {
-      await addEntry(this.app, note, {
-        type,
-        exact: selection?.exact ?? "",
-        prefix: selection?.prefix ?? "",
-        suffix: selection?.suffix ?? "",
-        ...(hint === undefined ? {} : { hint }),
-      });
+      const page = hint ? (this.engine?.pageNumberFor(hint) ?? undefined) : undefined;
+      const section = hint ? await this.sectionTitle(hint) : undefined;
+      await addEntry(
+        this.app,
+        note,
+        {
+          type,
+          exact: selection?.exact ?? "",
+          prefix: selection?.prefix ?? "",
+          suffix: selection?.suffix ?? "",
+          ...(hint === undefined ? {} : { hint }),
+          ...(page === undefined ? {} : { page }),
+          ...(section === undefined ? {} : { section }),
+        },
+        this.getSettings().highlights,
+      );
     } catch (error) {
       console.error("[e-reader] failed to write an entry", error);
       new Notice("E-Reader: could not save that highlight — see the console.");
     }
+  }
+
+  /** The table-of-contents entry `locator` falls under, for a highlight note's section property. */
+  private async sectionTitle(locator: Locator): Promise<string | undefined> {
+    const rows = rowsFromOutline(await this.outline());
+    const row = rows[activeRowIndex(rows, locator)];
+    return row?.label.trim() || undefined;
   }
 
   private readStoredLocator(bookNote: TFile, property: string): Locator | null {

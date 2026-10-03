@@ -14,6 +14,8 @@ import type { TFile, WorkspaceLeaf } from "obsidian";
 import { Component, ItemView, Menu, Notice, setIcon } from "obsidian";
 import type { Entry, MalformedEntry } from "../annotations/entry";
 import { listEntries, removeEntry, setEntryComment } from "../annotations/store";
+import { linksToBook } from "../annotations/highlight-notes";
+import type { Settings } from "../settings/settings-model";
 import { compareLocators } from "../core/locator";
 import { activeReaderFor, revealReader } from "./active-reader";
 
@@ -46,7 +48,10 @@ export class HighlightsView extends ItemView {
   /** Child component scoping one render pass's DOM listeners, replaced on the next render. */
   private renderScope: Component | null = null;
 
-  constructor(leaf: WorkspaceLeaf) {
+  constructor(
+    leaf: WorkspaceLeaf,
+    private readonly getSettings: () => Settings,
+  ) {
     super(leaf);
     this.icon = "highlighter";
     this.navigation = false;
@@ -71,7 +76,9 @@ export class HighlightsView extends ItemView {
     // note, or written by the reader, arrives here the same way.
     this.registerEvent(
       this.app.metadataCache.on("changed", (file) => {
-        if (file === this.file) void this.render();
+        const book = this.file;
+        if (!book) return;
+        if (file === book || linksToBook(this.app, file, book, this.getSettings().highlights.properties.book)) void this.render();
       }),
     );
     this.app.workspace.onLayoutReady(() => {
@@ -98,7 +105,7 @@ export class HighlightsView extends ItemView {
       return;
     }
 
-    const { entries, malformed } = await listEntries(this.app, file);
+    const { entries, malformed } = await listEntries(this.app, file, this.getSettings().highlights);
     if (this.file !== file) return; // the active file changed while we read
 
     this.renderFilter(scope, container, entries);
@@ -165,7 +172,7 @@ export class HighlightsView extends ItemView {
     scope.registerDomEvent(commentEl, "blur", () => {
       const next = (commentEl.textContent ?? "").trim();
       if (next === entry.comment) return;
-      void setEntryComment(this.app, file, entry.id, next).catch((error: unknown) => {
+      void setEntryComment(this.app, file, entry.id, next, this.getSettings().highlights).catch((error: unknown) => {
         console.error("[e-reader] failed to save a comment", error);
         new Notice("E-Reader: could not save that note — see the console.");
       });
@@ -228,7 +235,7 @@ export class HighlightsView extends ItemView {
         .setTitle("Delete")
         .setIcon("trash")
         .onClick(() => {
-          void removeEntry(this.app, file, entry.id).catch((error: unknown) => {
+          void removeEntry(this.app, file, entry.id, this.getSettings().highlights).catch((error: unknown) => {
             console.error("[e-reader] failed to delete an entry", error);
             new Notice("E-Reader: could not delete that entry — see the console.");
           });

@@ -70,6 +70,33 @@ export interface PaneSettings {
   hideNativeOutline: boolean;
 }
 
+/**
+ * How a highlight is written (src/annotations/store.ts). `callout` and
+ * `quote` write it into the book note; `note` gives each highlight a note of
+ * its own and lists links to them in the book note. Highlights already
+ * written keep their format when this changes, and all three are read.
+ */
+export type HighlightFormat = "callout" | "quote" | "note";
+
+/** The properties a highlight note carries, by the names the reader chose. */
+export interface HighlightNoteProperties {
+  /** Link to the book note. This is what ties a highlight note to its book. */
+  book: string;
+  type: string;
+  page: string;
+  section: string;
+  created: string;
+}
+
+export interface HighlightSettings {
+  format: HighlightFormat;
+  /** Where highlight notes go. Empty means the vault root. */
+  folder: string;
+  /** Put each book's highlight notes in a subfolder named after the book. */
+  subfolderPerBook: boolean;
+  properties: HighlightNoteProperties;
+}
+
 /** Where an imported book's note and files go (see src/import/importer.ts). */
 export interface ImportSettings {
   /** Folder new book notes are created in. Empty means the vault root. */
@@ -155,6 +182,7 @@ export interface Settings {
   readers: ReaderChoices;
   panes: PaneSettings;
   import: ImportSettings;
+  highlights: HighlightSettings;
   reader: ReaderPreferences;
 }
 
@@ -197,6 +225,12 @@ export const DEFAULT_SETTINGS: Settings = {
   readers: { epub: "plugin", pdf: "plugin" },
   panes: { outline: true, highlights: true, hideNativeOutline: false },
   import: { notesFolder: "Library", filesFolder: "", inboxFolder: "", lookUpMetadata: true, ignoredPdfs: [] },
+  highlights: {
+    format: "callout",
+    folder: "Highlights",
+    subfolderPerBook: true,
+    properties: { book: "book", type: "highlight", page: "page", section: "section", created: "created" },
+  },
   reader: {
     pdfScale: 1,
     pdfFit: "width",
@@ -318,6 +352,26 @@ function mergeImport(saved: Record<string, unknown>): ImportSettings {
   };
 }
 
+const HIGHLIGHT_FORMATS: readonly HighlightFormat[] = ["callout", "quote", "note"];
+
+function mergeHighlights(saved: Record<string, unknown>): HighlightSettings {
+  const from = group(saved, "highlights");
+  const defaults = DEFAULT_SETTINGS.highlights;
+  const format = HIGHLIGHT_FORMATS.find((value) => value === from["format"]) ?? defaults.format;
+  const savedProperties = isRecord(from["properties"]) ? from["properties"] : {};
+  const properties = { ...defaults.properties };
+  for (const key of Object.keys(properties) as (keyof HighlightNoteProperties)[]) {
+    const value = savedProperties[key];
+    if (typeof value === "string" && value.trim() !== "") properties[key] = value.trim();
+  }
+  return {
+    format,
+    folder: mergeFolder(from["folder"], defaults.folder),
+    subfolderPerBook: mergeBoolean(from["subfolderPerBook"], defaults.subfolderPerBook),
+    properties,
+  };
+}
+
 /** A saved scale is clamped rather than rejected — a stale value is still a usable one. */
 function mergeScale(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? clampScale(value) : fallback;
@@ -357,6 +411,7 @@ export function mergeSettings(saved: unknown): Settings {
     // The OPDS catalog was dropped; its old address is not carried forward.
     catalog: _catalog,
     import: _import,
+    highlights: _highlights,
     reader: _reader,
     ...rest
   } = savedObject;
@@ -369,6 +424,7 @@ export function mergeSettings(saved: unknown): Settings {
     readers: mergeReaders(savedObject),
     panes: mergePanes(savedObject),
     import: mergeImport(savedObject),
+    highlights: mergeHighlights(savedObject),
     reader: mergeReaderPreferences(savedObject, annotationTypes),
   };
 }

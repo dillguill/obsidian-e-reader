@@ -8,6 +8,7 @@ import { isInFolder } from "./import/plan";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
 import { readPdfMetadata } from "./reader/pdf/adapter";
 import { READER_VIEW_TYPE, ReaderView } from "./reader/reader-view";
+import { activeReaderFor, revealReader } from "./sidebar/active-reader";
 import { HIGHLIGHTS_VIEW_TYPE, HighlightsView } from "./sidebar/highlights-view";
 import { OUTLINE_VIEW_TYPE, OutlineView } from "./sidebar/outline-view";
 import { EReaderSettingTab, type SettingsHost } from "./settings/settings-tab";
@@ -124,7 +125,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     // Both panes are registered whatever the settings say: `registerView` has
     // no public counterpart to undo it, so the toggles gate the commands and
     // detach open leaves instead (see applyPaneSettings).
-    this.registerView(HIGHLIGHTS_VIEW_TYPE, (leaf) => new HighlightsView(leaf));
+    this.registerView(HIGHLIGHTS_VIEW_TYPE, (leaf) => new HighlightsView(leaf, () => this.settings));
     this.registerView(OUTLINE_VIEW_TYPE, (leaf) => new OutlineView(leaf, this.readerEvents));
 
     // Obsidian does not index unknown extensions, so .epub files are invisible
@@ -236,6 +237,11 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       name: "Import a book from the vault",
       callback: () => new ImportSuggestModal(this, (file) => void this.importBook({ kind: "vault", file })).open(),
     });
+
+    // The links each highlight carries (annotations/highlight-notes.ts,
+    // jumpLink): obsidian://e-reader?file=<book note>&id=<entry> opens the
+    // book in the reader at that highlight.
+    this.registerObsidianProtocolHandler("e-reader", (params) => void this.openHighlight(params["file"], params["id"]));
 
     this.addCommand({
       id: "add-to-wishlist",
@@ -384,6 +390,24 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       new Notice(`Could not import ${name}: ${String(error)}. Nothing was changed.`, 10000);
       return null;
     }
+  }
+
+  /** Opens a book note in the reader, reusing a tab already showing it, and moves to one of its highlights. */
+  private async openHighlight(path: string | undefined, id: string | undefined): Promise<void> {
+    const note = path ? this.app.vault.getAbstractFileByPath(path) : null;
+    if (!(note instanceof TFile)) {
+      new Notice("E-Reader: that book's note could not be found.");
+      return;
+    }
+    let reader = activeReaderFor(this.app, note);
+    if (!reader) {
+      const leaf = this.app.workspace.getLeaf(true);
+      await leaf.setViewState({ type: READER_VIEW_TYPE, state: { file: note.path }, active: true });
+      reader = leaf.view instanceof ReaderView ? leaf.view : null;
+    }
+    if (!reader) return;
+    revealReader(this.app, reader);
+    if (id) await reader.goToEntry(id);
   }
 
   /** Saves a book you do not have yet, with its cover when Open Library has one. */

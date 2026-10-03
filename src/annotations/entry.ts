@@ -8,6 +8,12 @@
 // the quote by hand edits the anchor. The `%%…%%` comment carries only the
 // surrounding metadata.
 //
+// The "quote" format is the same without the callout: a plain `> quote`, with
+// the type carried in the anchor JSON instead. Either form may carry a link
+// that opens the reader at the highlight (`[p. 35](obsidian://e-reader?…)`):
+// in the callout's title (after the type's name), or on its own quoted line. The link is derived, so
+// it is skipped when parsing and rewritten when serialising.
+//
 // Entries written before 0.3.7 used `> [!quote] <type>` with the quote
 // wrapped in `==…==`. Those still parse, and the whole region is rewritten
 // in the new form the next time any entry in that note changes.
@@ -27,6 +33,26 @@ export interface Entry {
   /** The reader's own commentary beneath the quote. Empty when there is none. */
   comment: string;
   anchor: AnchorRecord;
+  /** How the entry is written. Absent means a callout. Kept per entry so changing the setting never rewrites old ones. */
+  format?: EntryFormat;
+}
+
+/**
+ * Where an entry lives and in what shape. `callout` and `quote` are written
+ * into the book note's region; `note` entries are notes of their own
+ * (highlight-notes.ts) that the region only links to.
+ */
+export type EntryFormat = "callout" | "quote" | "note";
+
+/** A reader link (`[label](obsidian://e-reader?…)`), which is derived and never part of the quote. */
+const JUMP_LINK_RE = /^\[[^\]]*\]\(obsidian:\/\/e-reader\?[^)]*\)$/;
+
+function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+export function isJumpLink(text: string): boolean {
+  return JUMP_LINK_RE.test(text.trim());
 }
 
 export interface MalformedEntry {
@@ -58,10 +84,12 @@ export function newEntryId(random: () => number = Math.random): string {
 
 interface AnchorJson {
   id: string;
+  /** Only in the quote form, which has no callout to carry it. */
+  type?: string;
   prefix?: string;
   suffix?: string;
   hint?: string;
-  created: string;
+  created?: string;
 }
 
 /**
@@ -70,8 +98,10 @@ interface AnchorJson {
  * Obsidian comment that wraps this JSON. The escape is plain JSON and parses
  * straight back to `%`.
  */
-function encodeAnchorJson(anchor: AnchorRecord): string {
-  const json: AnchorJson = { id: anchor.id, created: anchor.created };
+function encodeAnchorJson(anchor: AnchorRecord, type?: string): string {
+  const json: AnchorJson = { id: anchor.id };
+  if (type !== undefined) json.type = type;
+  json.created = anchor.created;
   if (anchor.prefix !== undefined && anchor.prefix !== "") json.prefix = anchor.prefix;
   if (anchor.suffix !== undefined && anchor.suffix !== "") json.suffix = anchor.suffix;
   if (anchor.hint !== undefined) json.hint = serializeLocator(anchor.hint);
@@ -88,10 +118,18 @@ function quoteLines(text: string): string[] {
  * specifies that form for structured blocks (quotes, callouts, lists,
  * tables), unlike simple paragraphs where the identifier ends the line.
  */
-export function serializeEntry(entry: Entry): string {
-  const lines: string[] = [`> [!${entry.type}]`];
-  if (entry.exact !== "") lines.push(...quoteLines(entry.exact));
-  lines.push(`> %%${encodeAnchorJson(entry.anchor)}%%`);
+export function serializeEntry(entry: Entry, jumpLink: string | null = null): string {
+  const lines: string[] = [];
+  if (entry.format === "quote") {
+    if (entry.exact !== "") lines.push(...quoteLines(entry.exact));
+    if (jumpLink !== null) lines.push(`> ${jumpLink}`);
+    lines.push(`> %%${encodeAnchorJson(entry.anchor, entry.type)}%%`);
+  } else {
+    // With a link in the title Obsidian no longer shows the type there, so the title names it again.
+    lines.push(jumpLink === null ? `> [!${entry.type}]` : `> [!${entry.type}] ${capitalise(entry.type)} · ${jumpLink}`);
+    if (entry.exact !== "") lines.push(...quoteLines(entry.exact));
+    lines.push(`> %%${encodeAnchorJson(entry.anchor)}%%`);
+  }
   if (entry.comment !== "") {
     lines.push(">");
     lines.push(...quoteLines(entry.comment));
@@ -104,7 +142,7 @@ function stripQuoteMarker(line: string): string {
   return withoutMarker.startsWith(" ") ? withoutMarker.slice(1) : withoutMarker;
 }
 
-function parseAnchor(json: string, fallbackId: string | null): AnchorRecord | string {
+function parseAnchor(json: string, fallbackId: string | null): { anchor: AnchorRecord; type?: string } | string {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -129,7 +167,7 @@ function parseAnchor(json: string, fallbackId: string | null): AnchorRecord | st
     // so the entry stays usable and simply re-anchors by search instead.
     if (hint !== null) anchor.hint = hint;
   }
-  return anchor;
+  return typeof record["type"] === "string" && record["type"].trim() !== "" ? { anchor, type: record["type"].trim() } : { anchor };
 }
 
 /**
@@ -144,20 +182,26 @@ export function parseEntry(raw: string, blockId: string | null = null): ParsedEn
   if (lines.length === 0 || !/^\s*>/.test(lines[0] as string)) return malformed("not a blockquote");
 
   const inner = lines.map(stripQuoteMarker);
+  // A callout header makes it the callout form; anything else is the quote
+  // form, whose first line is already part of the quote.
   const calloutMatch = (inner[0] as string).trim().match(CALLOUT_RE);
-  if (!calloutMatch) return malformed("first line is not a callout header");
-  const calloutType = (calloutMatch[1] ?? "").trim();
-  const title = (calloutMatch[2] ?? "").trim();
-  // The old form put the type in the title of a `quote` callout. A `quote`
-  // callout with no title is the new form for a type named "quote".
-  const type = calloutType.toLowerCase() === LEGACY_CALLOUT && title !== "" ? title : calloutType;
-  if (type === "") return malformed("callout carries no entry type");
+  let calloutTypeName: string | null = null;
+  if (calloutMatch) {
+    const calloutType = (calloutMatch[1] ?? "").trim();
+    const title = (calloutMatch[2] ?? "").trim();
+    // The old form put the type in the title of a `quote` callout. A `quote`
+    // callout with no title, or only a reader link there, is the new form
+    // for a type named "quote".
+    const legacy = calloutType.toLowerCase() === LEGACY_CALLOUT && title !== "" && !title.includes("](obsidian://e-reader?");
+    calloutTypeName = legacy ? title : calloutType;
+    if (calloutTypeName === "") return malformed("callout carries no entry type");
+  }
 
   const quote: string[] = [];
   let anchorJson: string | null = null;
   let commentStart = inner.length;
 
-  for (let i = 1; i < inner.length; i++) {
+  for (let i = calloutMatch ? 1 : 0; i < inner.length; i++) {
     const line = (inner[i] as string).trim();
     if (line === "") continue;
     const commentMatch = line.match(/^%%(.*)%%$/);
@@ -166,6 +210,7 @@ export function parseEntry(raw: string, blockId: string | null = null): ParsedEn
       commentStart = i + 1;
       break;
     }
+    if (isJumpLink(line)) continue;
     quote.push(line);
   }
 
@@ -177,9 +222,12 @@ export function parseEntry(raw: string, blockId: string | null = null): ParsedEn
   }
 
   if (anchorJson === null) return malformed("entry has no anchor record");
-  const anchor = parseAnchor(anchorJson, blockId);
-  if (typeof anchor === "string") return malformed(anchor);
+  const parsedAnchor = parseAnchor(anchorJson, blockId);
+  if (typeof parsedAnchor === "string") return malformed(parsedAnchor);
+  const { anchor } = parsedAnchor;
   if (blockId !== null && blockId !== anchor.id) return malformed("block identifier does not match the anchor id");
+  const type = calloutTypeName ?? parsedAnchor.type;
+  if (type === undefined) return malformed("quote carries no entry type");
 
   const comment = inner
     .slice(commentStart)
@@ -187,5 +235,7 @@ export function parseEntry(raw: string, blockId: string | null = null): ParsedEn
     .replace(/^\n+/, "")
     .replace(/\s+$/, "");
 
-  return { ok: true, entry: { id: anchor.id, type, exact, comment, anchor } };
+  const entry: Entry = { id: anchor.id, type, exact, comment, anchor };
+  if (calloutMatch === null) entry.format = "quote";
+  return { ok: true, entry };
 }

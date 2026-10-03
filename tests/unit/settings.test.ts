@@ -155,7 +155,7 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       ],
       readers: { epub: "plugin", pdf: "default" },
       panes: { outline: false, highlights: true, hideNativeOutline: true },
-      import: { notesFolder: "Books", filesFolder: "Books/files", inboxFolder: "Inbox", lookUpMetadata: false },
+      import: { notesFolder: "Books", filesFolder: "Books/files", inboxFolder: "Inbox", lookUpMetadata: false, ignoredPdfs: ["Inbox/receipt.pdf"] },
       reader: {
         pdfScale: 1.25,
         pdfFit: "none",
@@ -206,6 +206,7 @@ describe("import settings", () => {
       filesFolder: "",
       inboxFolder: "",
       lookUpMetadata: true,
+      ignoredPdfs: [],
     });
   });
 
@@ -215,6 +216,7 @@ describe("import settings", () => {
       filesFolder: "",
       inboxFolder: "",
       lookUpMetadata: true,
+      ignoredPdfs: [],
     });
   });
 

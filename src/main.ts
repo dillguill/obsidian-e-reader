@@ -1,5 +1,5 @@
 import type { BasesAllOptions, WorkspaceLeaf } from "obsidian";
-import { FuzzySuggestModal, Notice, Plugin, TFile } from "obsidian";
+import { FuzzySuggestModal, Modal, Notice, Plugin, Setting, TFile } from "obsidian";
 import { ReaderEvents } from "./core/reader-events";
 import { BookImporter, IMPORTABLE_EXTENSIONS, type ImportResult, type ImportSource } from "./import/importer";
 import { isInFolder } from "./import/plan";
@@ -83,8 +83,11 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
   private readonly importer = new BookImporter(this.app, () => this.settings, readPdfMetadata);
   /** Inbox files waiting to settle, by path. */
   private readonly inboxTimers = new Map<string, number>();
-  /** Inbox files already reported as duplicates this session, so a rescan does not report them again. */
+  /** Inbox files already reported or declined this session, so a rescan does not raise them again. */
   private readonly inboxSkipped = new Set<string>();
+  /** Inbox files that have settled, gathered so files arriving together are handled together. */
+  private readonly settled = new Map<string, TFile>();
+  private settledTimer: number | null = null;
 
   override async onload(): Promise<void> {
     try {
@@ -285,12 +288,70 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       this.inboxTimers.delete(file.path);
       // It may have been moved or deleted while settling.
       if (this.app.vault.getAbstractFileByPath(file.path) !== file) return;
-      void this.importBook({ kind: "vault", file }).then((result) => {
-        if (result?.status === "duplicate") this.inboxSkipped.add(file.path);
-      });
+      this.queueSettled(file);
     }, INBOX_SETTLE_MS);
     this.inboxTimers.set(file.path, timer);
     this.registerInterval(timer);
+  }
+
+  /**
+   * Gathers settled inbox files, then imports the EPUBs and asks about the
+   * PDFs. An EPUB is a book; a PDF is as likely to be a paper or a receipt,
+   * so nothing happens to one until the reader says so.
+   */
+  private queueSettled(file: TFile): void {
+    if (file.extension === "pdf" && this.settings.import.ignoredPdfs.includes(file.path)) return;
+    this.settled.set(file.path, file);
+    if (this.settledTimer !== null) window.clearTimeout(this.settledTimer);
+    this.settledTimer = window.setTimeout(() => {
+      this.settledTimer = null;
+      const files = [...this.settled.values()].filter((f) => this.app.vault.getAbstractFileByPath(f.path) === f);
+      this.settled.clear();
+      for (const f of files) this.inboxSkipped.add(f.path);
+      const epubs = files.filter((f) => f.extension === "epub");
+      const pdfs = files.filter((f) => f.extension === "pdf");
+      if (epubs.length > 0) void this.importInbox(epubs);
+      if (pdfs.length === 0) return;
+      new InboxPdfModal(this, pdfs, (chosen, ignored) => {
+        if (ignored.length > 0) {
+          this.settings.import.ignoredPdfs.push(...ignored.map((f) => f.path));
+          void this.saveSettings();
+        }
+        if (chosen.length > 0) void this.importInbox(chosen);
+      }).open();
+    }, INBOX_SETTLE_MS);
+    this.registerInterval(this.settledTimer);
+  }
+
+  /** Imports a batch from the inbox and reports it in one notice rather than one per file. */
+  private async importInbox(files: TFile[]): Promise<void> {
+    const imported: string[] = [];
+    const duplicates: string[] = [];
+    const failed: string[] = [];
+    for (const file of files) {
+      try {
+        const result = await this.importer.import({ kind: "vault", file });
+        if (result.status === "imported") imported.push(result.title);
+        else if (result.status === "duplicate") {
+          duplicates.push(result.title);
+          this.inboxSkipped.add(file.path);
+        }
+      } catch (error) {
+        console.error(`[e-reader] could not import ${file.path}`, error);
+        failed.push(file.name);
+        this.inboxSkipped.add(file.path);
+      }
+    }
+    const lines: string[] = [];
+    if (imported.length === 1) lines.push(`Imported “${imported[0]}”.`);
+    else if (imported.length > 1) lines.push(`Imported ${imported.length} books.`);
+    if (duplicates.length > 0) {
+      lines.push(`${duplicates.length === 1 ? `“${duplicates[0]}” is` : `${duplicates.length} books are`} already in your library.`);
+    }
+    if (failed.length > 0) {
+      lines.push(`Could not import ${failed.length === 1 ? failed[0] : `${failed.length} files`}; the developer console has the details.`);
+    }
+    if (lines.length > 0) new Notice(lines.join("\n"), failed.length > 0 ? 10000 : 5000);
   }
 
   /** Runs an import and reports how it went. */
@@ -372,5 +433,67 @@ class ImportSuggestModal extends FuzzySuggestModal<TFile> {
 
   onChooseItem(file: TFile): void {
     this.onChoose(file);
+  }
+}
+
+/** Asks which of the PDFs that arrived in the inbox are books. */
+class InboxPdfModal extends Modal {
+  private readonly chosen = new Set<TFile>();
+  private settled = false;
+
+  constructor(
+    plugin: EReaderPlugin,
+    private readonly files: TFile[],
+    private readonly onDone: (chosen: TFile[], ignored: TFile[]) => void,
+  ) {
+    super(plugin.app);
+  }
+
+  override onOpen(): void {
+    const { contentEl } = this;
+    this.setTitle(this.files.length === 1 ? "Import this PDF as a book?" : `Import these ${this.files.length} PDFs as books?`);
+    contentEl.createEl("p", {
+      text: "PDFs in your inbox are only imported when you say so. Tick the ones that are books.",
+      cls: "setting-item-description",
+    });
+    for (const file of this.files) {
+      new Setting(contentEl)
+        .setName(file.basename)
+        .setDesc(file.parent?.path ?? "")
+        .addToggle((toggle) =>
+          toggle.setValue(false).onChange((on) => {
+            if (on) this.chosen.add(file);
+            else this.chosen.delete(file);
+          }),
+        );
+    }
+    new Setting(contentEl)
+      .addButton((button) =>
+        button.setButtonText("Never ask about the others").onClick(() => {
+          this.finish(
+            [...this.chosen],
+            this.files.filter((file) => !this.chosen.has(file)),
+          );
+        }),
+      )
+      .addButton((button) =>
+        button
+          .setButtonText("Import")
+          .setCta()
+          .onClick(() => this.finish([...this.chosen], [])),
+      );
+  }
+
+  override onClose(): void {
+    this.contentEl.empty();
+    // Closed without a choice: nothing is imported, and these are asked
+    // about again the next time Obsidian starts.
+    if (!this.settled) this.onDone([], []);
+  }
+
+  private finish(chosen: TFile[], ignored: TFile[]): void {
+    this.settled = true;
+    this.onDone(chosen, ignored);
+    this.close();
   }
 }

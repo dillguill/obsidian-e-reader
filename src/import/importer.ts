@@ -243,8 +243,15 @@ export class BookImporter {
     for (let i = 1; i <= parts.length; i++) {
       const path = parts.slice(0, i).join("/");
       if (this.app.vault.getAbstractFileByPath(path)) continue;
-      const created = await this.app.vault.createFolder(path);
-      undo.push(() => this.app.vault.delete(created, true));
+      try {
+        const created = await this.app.vault.createFolder(path);
+        undo.push(() => this.app.vault.delete(created, true));
+      } catch (error) {
+        // The vault index can miss a folder the disk has — one differing
+        // only in case on a case-insensitive filesystem, say. It exists, so
+        // carry on into it.
+        if (!(await this.app.vault.adapter.exists(path))) throw error;
+      }
     }
   }
 }

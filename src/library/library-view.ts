@@ -46,6 +46,7 @@ export class LibraryView extends BasesView {
     private readonly getSettings: () => Settings,
     private readonly importBook: (source: ImportSource) => Promise<ImportResult | null>,
     private readonly attachFile: (note: TFile) => Promise<boolean>,
+    private readonly bookActions: { changeCover: (note: TFile) => void; updateDetails: (note: TFile) => void },
   ) {
     super(controller);
     this.containerEl = containerEl;
@@ -293,6 +294,20 @@ export class LibraryView extends BasesView {
         .setTitle(state.onWishlist ? "Remove from wishlist" : "Add to wishlist")
         .setIcon(state.onWishlist ? "heart-off" : "heart")
         .onClick(() => void this.setStatus(entry.file, "wishlist", !state.onWishlist)),
+    );
+
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("Change cover…")
+        .setIcon("image")
+        .onClick(() => this.bookActions.changeCover(entry.file)),
+    );
+    menu.addItem((item) =>
+      item
+        .setTitle("Update details…")
+        .setIcon("info")
+        .onClick(() => this.bookActions.updateDetails(entry.file)),
     );
 
     // Only a property on the note itself can be written; a formula or a file

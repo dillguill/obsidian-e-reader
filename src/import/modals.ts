@@ -82,10 +82,11 @@ class BookFileModal extends FuzzySuggestModal<FileChoice> {
 type WishlistChoice = { kind: "result"; result: OpenLibraryResult } | { kind: "manual"; title: string };
 
 /** What was chosen to add: an Open Library match, or just a typed title when the book is not there. */
-export type WishlistPick = { meta: BookMetadata; coverUrl: string | null };
+export type WishlistPick = { meta: BookMetadata; coverUrl: string | null; coverId: number | null; workKey: string | null };
 
-export function searchForWishlist(app: App, onPick: (pick: WishlistPick) => void): void {
-  new WishlistSearchModal(app, onPick).open();
+/** Searches Open Library for a book. `query` starts the search already typed in. */
+export function searchForWishlist(app: App, onPick: (pick: WishlistPick) => void, query = ""): void {
+  new WishlistSearchModal(app, onPick, query).open();
 }
 
 class WishlistSearchModal extends SuggestModal<WishlistChoice> {
@@ -94,10 +95,18 @@ class WishlistSearchModal extends SuggestModal<WishlistChoice> {
   constructor(
     app: App,
     private readonly onPick: (pick: WishlistPick) => void,
+    private readonly query: string,
   ) {
     super(app);
     this.setPlaceholder("Search Open Library by title, author or ISBN");
     this.emptyStateText = "Type a title, author or ISBN.";
+  }
+
+  override onOpen(): void {
+    super.onOpen();
+    if (this.query === "") return;
+    this.inputEl.value = this.query;
+    this.inputEl.dispatchEvent(new Event("input"));
   }
 
   async getSuggestions(query: string): Promise<WishlistChoice[]> {
@@ -130,7 +139,9 @@ class WishlistSearchModal extends SuggestModal<WishlistChoice> {
   }
 
   onChooseSuggestion(choice: WishlistChoice): void {
-    if (choice.kind === "manual") this.onPick({ meta: { title: choice.title, authors: [], subjects: [] }, coverUrl: null });
+    if (choice.kind === "manual") {
+      this.onPick({ meta: { title: choice.title, authors: [], subjects: [] }, coverUrl: null, coverId: null, workKey: null });
+    }
     else this.onPick(choice.result);
   }
 }

@@ -9,8 +9,10 @@ import { ReaderEvents } from "./core/reader-events";
 import { RESERVED_ENTRY_TYPE } from "./core/types";
 import { BookImporter, IMPORTABLE_EXTENSIONS, type ImportResult, type ImportSource } from "./import/importer";
 import { type WishlistPick, chooseBookFile, searchForWishlist } from "./import/modals";
-import { fetchCover } from "./import/open-library";
-import { groupDuplicates, isInFolder } from "./import/plan";
+import { readEpubMetadata } from "./import/epub-metadata";
+import { coverChoices, coverImageUrl, fetchCover, findBook } from "./import/open-library";
+import { type CoverOption, type DetailOption, pickCover, pickDetails } from "./import/review-modals";
+import { detailRows, groupDuplicates, isInFolder, keepDetails } from "./import/plan";
 import { DuplicatesModal } from "./library/duplicates-modal";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
 import { readPdfMetadata } from "./reader/pdf/adapter";
@@ -163,6 +165,10 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
             () => this.settings,
             (source) => this.importBook(source),
             (note) => this.attachFile(note),
+            {
+              changeCover: (note) => void this.changeCover(note),
+              updateDetails: (note) => this.updateDetails(note),
+            },
           ),
         options: () => libraryViewOptions(this.settings),
       });
@@ -580,19 +586,112 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
   }
 
   /** Saves a book you do not have yet, with its cover when Open Library has one. */
+  /** Adds a book from an Open Library search, after asking which cover and which details to keep. */
   async addToWishlist(pick: WishlistPick): Promise<void> {
+    const { title } = pick.meta;
+    const covers = coverChoices(pick.coverId, pick.workKey).then((ids) => ids.map(remoteCover));
+    const coverPick = await pickCover(this.app, covers, { title, skipLabel: "No cover", oldCover: null });
+    if (coverPick === null) return;
+    const rows = detailRows(pick.meta);
+    const chosen = rows.length === 0 ? new Set<string>() : await pickDetails(this.app, rows, { title, confirmLabel: "Add to wishlist" });
+    if (chosen === null) return;
+    const { choice } = coverPick;
+    const meta = keepDetails({ ...pick.meta, cover: choice.kind === "image" ? choice.cover : undefined }, chosen);
     try {
-      const cover = await fetchCover(pick.coverUrl);
-      const result = await this.importer.addToWishlist(cover ? { ...pick.meta, cover } : pick.meta);
+      const result = await this.importer.addToWishlist(meta, choice.kind === "vault" ? choice.file : null);
       if (result.status === "imported") new Notice(`Added “${result.title}” to your wishlist.`);
       else if (result.status === "duplicate") {
         new Notice(`“${result.title}” is already in your library, as ${result.existing.basename}. Nothing was changed.`, 8000);
       }
     } catch (error) {
       console.error("[e-reader] could not add to the wishlist", error);
-      new Notice(`Could not add “${pick.meta.title}”: ${String(error)}. Nothing was changed.`, 10000);
+      new Notice(`Could not add “${title}”: ${String(error)}. Nothing was changed.`, 10000);
     }
   }
+
+  /** Offers the book file's own cover and Open Library's, and saves the one chosen. */
+  private async changeCover(note: TFile): Promise<void> {
+    const identity = this.noteMetadata(note);
+    const urls: string[] = [];
+    const options = (async (): Promise<CoverOption[]> => {
+      const found: CoverOption[] = [];
+      const file = resolveBookAttachment(this.app, note, this.settings.properties.attachments);
+      if (file?.extension === "epub") {
+        try {
+          const { cover } = await readEpubMetadata(await this.app.vault.readBinary(file), note.basename);
+          if (cover) {
+            const url = URL.createObjectURL(new Blob([cover.data]));
+            urls.push(url);
+            found.push({ src: url, label: "The cover inside the book", load: async () => cover });
+          }
+        } catch (error) {
+          console.debug("[e-reader] could not read the book's own cover", error);
+        }
+      }
+      const match = await findBook(identity);
+      const ids = await coverChoices(match?.coverId ?? null, match?.workKey ?? null);
+      return [...found, ...ids.map(remoteCover)];
+    })();
+    const pick = await pickCover(this.app, options, {
+      title: identity.title,
+      skipLabel: "Remove cover",
+      oldCover: this.importer.coverFileOf(note),
+    });
+    for (const url of urls) URL.revokeObjectURL(url);
+    if (pick === null) return;
+    const { choice } = pick;
+    try {
+      await this.importer.setCover(note, choice.kind === "image" ? choice.cover : choice.kind === "vault" ? choice.file : null, pick.removeOld);
+    } catch (error) {
+      console.error("[e-reader] could not change the cover", error);
+      new Notice(`Could not change the cover: ${String(error)}`, 10000);
+    }
+  }
+
+  /** Searches Open Library for the book, then writes the details chosen over what the note says. */
+  private updateDetails(note: TFile): void {
+    const identity = this.noteMetadata(note);
+    const query = [identity.title, identity.authors[0]].filter((part) => part).join(" ");
+    searchForWishlist(
+      this.app,
+      (pick) => {
+        void (async () => {
+          const frontmatter = this.app.metadataCache.getFileCache(note)?.frontmatter ?? {};
+          const rows: DetailOption[] = [];
+          for (const row of detailRows(pick.meta)) {
+            const now: unknown = frontmatter[row.property];
+            const current = Array.isArray(now) ? now.join(", ") : now === undefined || now === null || now === "" ? undefined : String(now);
+            if (current === row.display) continue;
+            rows.push(current === undefined ? row : { ...row, current });
+          }
+          const chosen = await pickDetails(this.app, rows, { title: identity.title, confirmLabel: "Update" });
+          if (chosen === null || chosen.size === 0) return;
+          try {
+            await this.importer.setDetails(note, keepDetails(pick.meta, chosen));
+          } catch (error) {
+            console.error("[e-reader] could not update details", error);
+            new Notice(`Could not update the details: ${String(error)}`, 10000);
+          }
+        })();
+      },
+      query,
+    );
+  }
+
+  /** The title, first author and ISBN a book note gives, for looking it up. */
+  private noteMetadata(note: TFile): { title: string; authors: string[]; isbn?: string } {
+    const fm = this.app.metadataCache.getFileCache(note)?.frontmatter ?? {};
+    const title = typeof fm["title"] === "string" && fm["title"].trim() !== "" ? fm["title"] : note.basename;
+    const author: unknown = fm["author"];
+    const first: unknown = Array.isArray(author) ? author[0] : author;
+    const isbn: unknown = fm["isbn"];
+    return {
+      title,
+      authors: typeof first === "string" ? [first.replace(/^\[\[|\]\]$/g, "")] : [],
+      ...(typeof isbn === "string" || typeof isbn === "number" ? { isbn: String(isbn) } : {}),
+    };
+  }
+
 
   /** Asks for a book's file and attaches it. Resolves true once the book has its file. */
   async attachFile(note: TFile): Promise<boolean> {
@@ -681,6 +780,11 @@ class ImportSuggestModal extends FuzzySuggestModal<TFile> {
   onChooseItem(file: TFile): void {
     this.onChoose(file);
   }
+}
+
+/** An Open Library cover to choose from: a thumbnail shown, the large image saved. */
+function remoteCover(id: number): CoverOption {
+  return { src: coverImageUrl(id, "M"), label: "Open Library cover", load: () => fetchCover(coverImageUrl(id, "L")) };
 }
 
 /** Asks which of the PDFs that arrived in the inbox are books. */

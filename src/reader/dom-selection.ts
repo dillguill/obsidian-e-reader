@@ -14,36 +14,29 @@ export interface SelectionSnapshot {
   suffix: string;
 }
 
-/**
- * The character offset of (`node`, `offset`) within `root`'s text content,
- * counting only text nodes in document order. Returns null when `node` is
- * not inside `root` — a selection that started in another document.
- */
-function offsetWithin(root: Node, node: Node, offset: number): number | null {
-  if (!root.contains(node)) return null;
-  const walker = root.ownerDocument?.createTreeWalker(root, NodeFilter.SHOW_TEXT) ?? null;
-  if (walker === null) return null;
-  let total = 0;
-  let current = walker.nextNode();
-  while (current !== null) {
-    if (current === node) return total + offset;
-    total += current.textContent?.length ?? 0;
-    current = walker.nextNode();
-  }
-  // A range endpoint can sit on an element rather than a text node; treating
-  // it as "everything walked so far" is the closest honest answer.
-  return total;
-}
-
 export function snapshotFromRange(root: HTMLElement, range: Range): SelectionSnapshot | null {
-  const exact = normalizeQuote(range.toString());
+  // Built from the same chunks the painter searches, not `range.toString()`:
+  // that skips `<br>`, and pdf.js ends every text-layer line with one, so a
+  // quote spanning two lines would come out with the words run together.
+  const chunks = chunksFromRoot(root);
+  let text = "";
+  let start: number | null = null;
+  let end: number | null = null;
+  for (const chunk of chunks) {
+    if (range.intersectsNode(chunk.node)) {
+      const from = chunk.node === range.startContainer ? range.startOffset : 0;
+      const to = chunk.node === range.endContainer ? range.endOffset : chunk.text.length;
+      if (to > from) {
+        if (start === null) start = text.length + from;
+        end = text.length + to;
+      }
+    }
+    text += chunk.text;
+  }
+  if (start === null || end === null) return null;
+
+  const exact = normalizeQuote(text.slice(start, end));
   if (exact === "") return null;
-
-  const text = root.textContent ?? "";
-  const start = offsetWithin(root, range.startContainer, range.startOffset);
-  const end = offsetWithin(root, range.endContainer, range.endOffset);
-  if (start === null || end === null) return { exact, prefix: "", suffix: "" };
-
   const context = contextAround(text, start, end);
   return { exact, prefix: normalizeQuote(context.prefix), suffix: normalizeQuote(context.suffix) };
 }
@@ -59,22 +52,30 @@ export function activeRange(selection: Selection | null): Range | null {
 // ------------------------------------------------------------------ painting
 //
 // The reverse of the above: given a saved quote, find the Range it occupies
-// in a rendered subtree, so a highlight can be drawn over it. `offsetWithin`
+// in a rendered subtree, so a highlight can be drawn over it. snapshotFromRange
 // walks the DOM to produce an offset; these walk an offset back to the DOM.
 
-/** A rendered subtree's text nodes, in document order, paired with their text. */
+/**
+ * A rendered subtree's text, in document order: each text node with its own
+ * text, and each `<br>` as a line break so the words either side of it stay
+ * apart once whitespace is normalised.
+ */
 export interface DomTextChunk {
   text: string;
-  node: Text;
+  node: Text | HTMLBRElement;
 }
 
 export function chunksFromRoot(root: Node): DomTextChunk[] {
   const chunks: DomTextChunk[] = [];
-  const walker = root.ownerDocument?.createTreeWalker(root, NodeFilter.SHOW_TEXT) ?? null;
+  const walker = root.ownerDocument?.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT) ?? null;
   if (walker === null) return chunks;
   let current = walker.nextNode();
   while (current !== null) {
-    chunks.push({ text: current.textContent ?? "", node: current as Text });
+    if (current.nodeType === Node.TEXT_NODE) {
+      chunks.push({ text: current.textContent ?? "", node: current as Text });
+    } else if (current.nodeName === "BR") {
+      chunks.push({ text: "\n", node: current as HTMLBRElement });
+    }
     current = walker.nextNode();
   }
   return chunks;
@@ -91,6 +92,10 @@ export function searchableText(root: Node): SearchableText {
   return { index: buildTextIndex(chunks), chunks };
 }
 
+function nodeLength(node: Text | HTMLBRElement): number {
+  return node.nodeType === Node.TEXT_NODE ? (node as Text).length : 0;
+}
+
 /** Turns a pair of offsets into {@link TextIndex.text} back into a live Range. */
 export function rangeFromOffsets(source: SearchableText, start: number, end: number): Range | null {
   const from = source.index.locate(start);
@@ -102,8 +107,10 @@ export function rangeFromOffsets(source: SearchableText, start: number, end: num
   const range = startNode.ownerDocument?.createRange();
   if (!range) return null;
   try {
-    range.setStart(startNode, Math.min(from.offset, startNode.length));
-    range.setEnd(endNode, Math.min(to.offset, endNode.length));
+    // A quote is trimmed, so its ends always fall in text nodes; a `<br>`
+    // only ever supplies the whitespace between them.
+    range.setStart(startNode, Math.min(from.offset, nodeLength(startNode)));
+    range.setEnd(endNode, Math.min(to.offset, nodeLength(endNode)));
   } catch (error) {
     // Offsets are computed from a snapshot of the tree; a re-render between
     // building the index and using it invalidates them rather than throwing

@@ -23,6 +23,7 @@
 import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
+import { mergeHighlightBoxes } from "../highlight-rects";
 import type {
   DisplayOption,
   EngineSelection,
@@ -692,8 +693,7 @@ export class PdfEngine implements ReaderEngine {
       if (highlight.suffix !== undefined) context.suffix = highlight.suffix;
       const range = rangeForQuote(source, highlight.exact, context);
       if (!range) continue;
-      for (const rect of Array.from(range.getClientRects())) {
-        if (rect.width <= 0 || rect.height <= 0) continue;
+      for (const rect of mergeHighlightBoxes(Array.from(range.getClientRects()))) {
         const box = layerEl.createDiv({ cls: "ereader-hl" });
         // The reader hit-tests these by rect on right-click, so each box has
         // to say which entry it belongs to. epub.js's overlay does the same
@@ -706,8 +706,8 @@ export class PdfEngine implements ReaderEngine {
         box.style.background = highlight.color;
         box.style.left = `${rect.left - pageRect.left}px`;
         box.style.top = `${rect.top - pageRect.top}px`;
-        box.style.width = `${rect.width}px`;
-        box.style.height = `${rect.height}px`;
+        box.style.width = `${rect.right - rect.left}px`;
+        box.style.height = `${rect.bottom - rect.top}px`;
       }
     }
   }

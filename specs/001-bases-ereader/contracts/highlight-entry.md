@@ -20,8 +20,8 @@ Whatever the reader has written about this book stays here, untouched.
 ## Highlights
 %%e-reader:begin%%
 
-> [!quote] idea
-> ==the spice must flow==
+> [!idea]
+> the spice must flow
 > %%{"id":"h-a1b2c3","prefix":"He said that ","suffix":" and then left.","hint":"epubcfi(/6/4!/4/2/2[ch01]/2/1:0)","created":"2026-08-20T10:04:00Z"}%%
 >
 > Worth comparing to the guild's monopoly argument.
@@ -34,8 +34,10 @@ Whatever the reader has written about this book stays here, untouched.
 ## Rules
 
 1. Everything outside the `begin`/`end` markers is the reader's and MUST NOT be modified.
-2. One blockquote per entry. The callout's label carries the entry `type`; `bookmark` is reserved.
-3. `==exact==` is the authoritative anchor **and** the displayed quote. One copy only.
+2. One callout per entry. The callout's type carries the entry `type` (`> [!idea]`) and its title is left
+   empty; `bookmark` is reserved. The pre-0.3.7 form, `> [!quote] <type>` with the quote in `==…==`,
+   still parses.
+3. The quote line(s) before the comment are the authoritative anchor **and** the displayed quote. One copy only.
 4. The `%%…%%` comment holds the anchor record as JSON. It is hidden in reading view.
 5. The block reference `^id` sits on its **own line, separated from the blockquote by a blank line**.
    Obsidian's linking documentation specifies this form for structured blocks — quotations, callouts,
@@ -56,7 +58,7 @@ Whatever the reader has written about this book stays here, untouched.
 }
 ```
 
-`exact` is deliberately absent — it lives in the visible `==…==` so that editing the quote by hand
+`exact` is deliberately absent — it lives in the visible quote line so that editing the quote by hand
 edits the anchor, keeping one source of truth.
 
 ## Resolution order

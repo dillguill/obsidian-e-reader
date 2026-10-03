@@ -101,6 +101,35 @@ describe("entry", () => {
     expect(parsed.ok && parsed.entry.exact).toBe("");
   });
 
+  it("uses the entry type as the callout type, with the quote unmarked", () => {
+    const lines = serializeEntry(entry).split("\n");
+    expect(lines[0]).toBe(`> [!${entry.type}]`);
+    expect(lines[1]).toBe(`> ${entry.exact}`);
+  });
+
+  it("still reads entries written in the old quote-callout form", () => {
+    const raw = '> [!quote] idea\n> ==old quote==\n> %%{"id":"h-0ld001","created":"2026-01-01T00:00:00.000Z"}%%';
+    const parsed = parseEntry(raw, "h-0ld001");
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.entry.type).toBe("idea");
+      expect(parsed.entry.exact).toBe("old quote");
+    }
+  });
+
+  it("reads a title-less quote callout as the type named quote", () => {
+    const quoted: Entry = { ...entry, type: "quote" };
+    const parsed = parseEntry(serializeEntry(quoted).split("\n\n^")[0] as string, quoted.id);
+    expect(parsed.ok && parsed.entry.type).toBe("quote");
+  });
+
+  it("reads a type name with spaces and a quote wrapped across lines", () => {
+    const raw = '> [!to do]\n> first half\n> second half\n> %%{"id":"h-5bace0","created":"2026-01-01T00:00:00.000Z"}%%';
+    const parsed = parseEntry(raw, "h-5bace0");
+    expect(parsed.ok && parsed.entry.type).toBe("to do");
+    expect(parsed.ok && parsed.entry.exact).toBe("first half second half");
+  });
+
   it("reports a malformed entry with its text intact instead of rewriting it", () => {
     const raw = "> [!quote] idea\n> ==orphaned quote==";
     const parsed = parseEntry(raw, "h-broken");

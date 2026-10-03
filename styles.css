@@ -231,6 +231,19 @@
   background-color: var(--background-modifier-border);
 }
 
+/* Docked along the bottom of the reader on a touchscreen, where the
+   platform's own selection menu owns the space beside the selection. */
+.ereader-popup.is-docked {
+  left: 50%;
+  top: auto;
+  bottom: calc(var(--size-4-4) + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  max-width: calc(100% - 2 * var(--size-4-4));
+  overflow-x: auto;
+  padding: var(--size-4-2) var(--size-4-3);
+  box-shadow: var(--shadow-l);
+}
+
 /* A fingertip needs a bigger target than a pointer. */
 .is-mobile .ereader-popup__swatch {
   width: 32px;

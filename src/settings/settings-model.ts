@@ -1,6 +1,6 @@
 // Plugin settings: reader-configurable frontmatter property names (FR-006),
 // the annotation type set (FR-020a), which reader handles each format, which
-// sidebar panes are on, the catalog address, and the reader preferences that
+// sidebar panes are on, where imported books go, and the reader preferences that
 // have to survive closing a book. Property names default to kebab-case,
 // matching the frontmatter keys the plugin itself writes. See
 // specs/001-bases-ereader/data-model.md for the property-by-property
@@ -68,9 +68,19 @@ export interface PaneSettings {
   hideNativeOutline: boolean;
 }
 
-export interface CatalogSettings {
-  /** Address of the OPDS 1.2 catalog to search. Empty when none is configured. */
-  url: string;
+/** Where an imported book's note and files go (see src/import/importer.ts). */
+export interface ImportSettings {
+  /** Folder new book notes are created in. Empty means the vault root. */
+  notesFolder: string;
+  /**
+   * Folder the book file and its cover are moved to. Empty follows Obsidian's
+   * own "Default location for new attachments", relative to the new note.
+   */
+  filesFolder: string;
+  /** Folder watched for new EPUBs and PDFs to import. Empty turns watching off. */
+  inboxFolder: string;
+  /** Fill fields the file does not carry from Open Library. */
+  lookUpMetadata: boolean;
 }
 
 /** Toolbar state that persists across closing and reopening a book. */
@@ -136,7 +146,7 @@ export interface Settings {
   annotationTypes: AnnotationType[];
   readers: ReaderChoices;
   panes: PaneSettings;
-  catalog: CatalogSettings;
+  import: ImportSettings;
   reader: ReaderPreferences;
 }
 
@@ -177,7 +187,7 @@ export const DEFAULT_SETTINGS: Settings = {
   ],
   readers: { epub: "plugin", pdf: "plugin" },
   panes: { outline: true, highlights: true, hideNativeOutline: false },
-  catalog: { url: "" },
+  import: { notesFolder: "Library", filesFolder: "", inboxFolder: "", lookUpMetadata: true },
   reader: {
     pdfScale: 1,
     pdfFit: "width",
@@ -280,9 +290,20 @@ function mergePanes(saved: Record<string, unknown>): PaneSettings {
   };
 }
 
-function mergeCatalog(saved: Record<string, unknown>): CatalogSettings {
-  const from = group(saved, "catalog");
-  return { url: mergeString(from["url"], DEFAULT_SETTINGS.catalog.url) };
+/** A folder path as typed, without the slashes a reader might add at either end. */
+function mergeFolder(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value.trim().replace(/^\/+|\/+$/g, "") : fallback;
+}
+
+function mergeImport(saved: Record<string, unknown>): ImportSettings {
+  const from = group(saved, "import");
+  const defaults = DEFAULT_SETTINGS.import;
+  return {
+    notesFolder: mergeFolder(from["notesFolder"], defaults.notesFolder),
+    filesFolder: mergeFolder(from["filesFolder"], defaults.filesFolder),
+    inboxFolder: mergeFolder(from["inboxFolder"], defaults.inboxFolder),
+    lookUpMetadata: mergeBoolean(from["lookUpMetadata"], defaults.lookUpMetadata),
+  };
 }
 
 /** A saved scale is clamped rather than rejected — a stale value is still a usable one. */
@@ -321,7 +342,9 @@ export function mergeSettings(saved: unknown): Settings {
     annotationTypes: _annotationTypes,
     readers: _readers,
     panes: _panes,
+    // The OPDS catalog was dropped; its old address is not carried forward.
     catalog: _catalog,
+    import: _import,
     reader: _reader,
     ...rest
   } = savedObject;
@@ -333,7 +356,7 @@ export function mergeSettings(saved: unknown): Settings {
     annotationTypes,
     readers: mergeReaders(savedObject),
     panes: mergePanes(savedObject),
-    catalog: mergeCatalog(savedObject),
+    import: mergeImport(savedObject),
     reader: mergeReaderPreferences(savedObject, annotationTypes),
   };
 }

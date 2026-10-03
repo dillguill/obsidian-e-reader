@@ -78,6 +78,7 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       progress: DEFAULT_SETTINGS.properties.progress,
       lastRead: DEFAULT_SETTINGS.properties.lastRead,
       furthestRead: DEFAULT_SETTINGS.properties.furthestRead,
+      readLater: DEFAULT_SETTINGS.properties.readLater,
     });
   });
 
@@ -148,6 +149,7 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         progress: "percent",
         lastRead: "last-position",
         furthestRead: "furthest-position",
+        readLater: "queued",
       },
       annotationTypes: [
         { name: "idea", color: "#111111" },

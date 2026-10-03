@@ -8,6 +8,7 @@
 // file moved with no note to show for it.
 
 import type { App, TFile } from "obsidian";
+import { resolveBookAttachment } from "../core/attachment";
 import { isBookNote } from "../core/book-note";
 import type { Settings } from "../settings/settings-model";
 import { readEpubMetadata } from "./epub-metadata";
@@ -23,6 +24,12 @@ export type ImportSource = { kind: "vault"; file: TFile } | { kind: "external"; 
 export type ImportResult =
   | { status: "imported"; note: TFile; title: string }
   | { status: "duplicate"; existing: TFile; title: string }
+  | { status: "unsupported" };
+
+export type AttachResult =
+  | { status: "attached"; file: TFile }
+  /** The file is already some book's; attaching it again would make two books share it. */
+  | { status: "in-use"; existing: TFile }
   | { status: "unsupported" };
 
 function extensionOf(name: string): string {
@@ -73,6 +80,21 @@ async function readMetadata(
   };
 }
 
+function isEmpty(value: unknown): boolean {
+  return value === undefined || value === null || (typeof value === "string" && value.trim() === "") || (Array.isArray(value) && value.length === 0);
+}
+
+/** Undoes a failed write's steps, newest first, carrying on past any that fail. */
+async function rollBack(undo: (() => Promise<unknown>)[]): Promise<void> {
+  for (const step of [...undo].reverse()) {
+    try {
+      await step();
+    } catch (undoError) {
+      console.error("[e-reader] could not undo part of a failed import", undoError);
+    }
+  }
+}
+
 export class BookImporter {
   /** One import at a time, so two arriving together cannot both pass the duplicate check. */
   private queue: Promise<unknown> = Promise.resolve();
@@ -91,7 +113,34 @@ export class BookImporter {
   }
 
   import(source: ImportSource): Promise<ImportResult> {
-    const run = this.queue.then(() => this.run(source));
+    return this.enqueue(() => this.run(source));
+  }
+
+  /**
+   * Saves a book you do not have yet: a note with its details and cover but
+   * no file. Refused, like an import, when the book is already a note.
+   */
+  addToWishlist(meta: BookMetadata): Promise<ImportResult> {
+    return this.enqueue(async () => {
+      const existing = this.findDuplicate(meta, null);
+      if (existing) return { status: "duplicate", existing, title: meta.title };
+      const note = await this.write(null, meta);
+      return { status: "imported", note, title: meta.title };
+    });
+  }
+
+  /**
+   * Gives an existing book note its file — a wishlist book arriving. The file
+   * is moved (or copied in) and named after the note, linked from its
+   * attachments, and anything the note does not already say is filled from
+   * what the file says about itself. Nothing the note already has is changed.
+   */
+  attach(note: TFile, source: ImportSource): Promise<AttachResult> {
+    return this.enqueue(() => this.runAttach(note, source));
+  }
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task);
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -110,10 +159,74 @@ export class BookImporter {
     }
 
     const existing = this.findDuplicate(meta, source.kind === "vault" ? source.file : null);
-    if (existing) return { status: "duplicate", existing, title: meta.title };
+    if (existing) {
+      // The wishlist book this file is, arriving: it joins that note rather
+      // than being refused as a second copy.
+      if (resolveBookAttachment(this.app, existing, settings.properties.attachments) === null) {
+        const attached = await this.runAttach(existing, source);
+        if (attached.status === "attached") return { status: "imported", note: existing, title: meta.title };
+      }
+      return { status: "duplicate", existing, title: meta.title };
+    }
 
-    const note = await this.write(source, extension, data, meta);
+    const note = await this.write({ source, extension }, meta);
     return { status: "imported", note, title: meta.title };
+  }
+
+  private async runAttach(note: TFile, source: ImportSource): Promise<AttachResult> {
+    const name = source.kind === "vault" ? source.file.name : source.name;
+    const extension = extensionOf(name);
+    if (!IMPORTABLE_EXTENSIONS.has(extension)) return { status: "unsupported" };
+    if (source.kind === "vault") {
+      const owner = this.ownerOf(source.file);
+      if (owner && owner !== note) return { status: "in-use", existing: owner };
+    }
+
+    const { vault, fileManager } = this.app;
+    const settings = this.getSettings();
+    const data = source.kind === "vault" ? await vault.readBinary(source.file) : source.data;
+    // Read only to fill what the note lacks, so a lookup is not worth its wait.
+    const meta = await readMetadata(extension, data, note.basename, this.readPdf);
+    const existing = this.app.metadataCache.getFileCache(note)?.frontmatter ?? {};
+    const undo: (() => Promise<unknown>)[] = [];
+
+    try {
+      const bookFile = await this.placeBookFile({ source, extension }, note.basename, note.path, undo);
+      let coverFile: TFile | null = null;
+      const coverName = settings.properties.cover;
+      if (meta.cover && coverName.trim() !== "" && isEmpty(existing[coverName])) {
+        coverFile = await this.writeCover(meta.cover, note.basename, note.path, undo);
+      }
+      const link = (file: TFile): string => `[[${this.app.metadataCache.fileToLinktext(file, note.path, false)}]]`;
+      const filled = buildFrontmatter(meta, settings.properties, { book: null, cover: coverFile ? link(coverFile) : null });
+      await fileManager.processFrontMatter(note, (fm: Record<string, unknown>) => {
+        for (const [key, value] of Object.entries(filled)) {
+          if (key === settings.properties.marker || key === "title") continue;
+          if (isEmpty(fm[key])) fm[key] = value;
+        }
+        const current = fm[settings.properties.attachments];
+        const list = Array.isArray(current) ? current : isEmpty(current) ? [] : [current];
+        fm[settings.properties.attachments] = [...list, link(bookFile)];
+      });
+      return { status: "attached", file: bookFile };
+    } catch (error) {
+      await rollBack(undo);
+      throw error;
+    }
+  }
+
+  /** The book note that already links `file`, if any. */
+  private ownerOf(file: TFile): TFile | null {
+    const { marker, markerValue, attachments } = this.getSettings().properties;
+    for (const note of this.app.vault.getMarkdownFiles()) {
+      const cache = this.app.metadataCache.getFileCache(note);
+      if (!cache?.frontmatter || !isBookNote(cache.frontmatter, marker, markerValue)) continue;
+      for (const link of cache.frontmatterLinks ?? []) {
+        if (link.key !== attachments && !link.key.startsWith(`${attachments}.`)) continue;
+        if (this.app.metadataCache.getFirstLinkpathDest(link.link, note.path)?.path === file.path) return note;
+      }
+    }
+    return null;
   }
 
   /** Every file some book note already links in its attachments. */
@@ -160,7 +273,8 @@ export class BookImporter {
     return null;
   }
 
-  private async write(source: ImportSource, extension: string, data: ArrayBuffer, meta: BookMetadata): Promise<TFile> {
+  /** Writes a new book note, with its file when there is one and a cover when there is one. */
+  private async write(book: { source: ImportSource; extension: string } | null, meta: BookMetadata): Promise<TFile> {
     const { vault, fileManager } = this.app;
     const settings = this.getSettings();
     const name = safeFileName(meta.title);
@@ -168,57 +282,65 @@ export class BookImporter {
     const undo: (() => Promise<unknown>)[] = [];
 
     try {
-      // The book file.
-      let bookFile: TFile;
-      const bookPath = await this.filePath(`${name}.${extension}`, notePath);
-      if (source.kind === "vault") {
-        bookFile = source.file;
-        const from = bookFile.path;
-        if (parentOf(from) !== parentOf(bookPath) || basenameOf(from) !== name) {
-          await this.ensureFolder(parentOf(bookPath), undo);
-          this.written.add(bookPath);
-          await fileManager.renameFile(bookFile, bookPath);
-          undo.push(() => fileManager.renameFile(bookFile, from));
-        }
-      } else {
-        await this.ensureFolder(parentOf(bookPath), undo);
-        this.written.add(bookPath);
-        bookFile = await vault.createBinary(bookPath, data);
-        undo.push(() => vault.delete(bookFile));
-      }
+      const bookFile = book ? await this.placeBookFile(book, name, notePath, undo) : null;
+      const coverFile = meta.cover ? await this.writeCover(meta.cover, name, notePath, undo) : null;
 
-      // The cover.
-      let coverFile: TFile | null = null;
-      if (meta.cover) {
-        const coverPath = await this.filePath(`${name} cover.${meta.cover.extension}`, notePath);
-        await this.ensureFolder(parentOf(coverPath), undo);
-        this.written.add(coverPath);
-        const created = await vault.createBinary(coverPath, meta.cover.data);
-        coverFile = created;
-        undo.push(() => vault.delete(created));
-      }
-
-      // The note.
       await this.ensureFolder(parentOf(notePath), undo);
       const note = await vault.create(notePath, "");
       undo.push(() => vault.delete(note));
       const link = (file: TFile): string => `[[${this.app.metadataCache.fileToLinktext(file, notePath, false)}]]`;
       const frontmatter = buildFrontmatter(meta, settings.properties, {
-        book: link(bookFile),
+        book: bookFile ? link(bookFile) : null,
         cover: coverFile ? link(coverFile) : null,
       });
       await fileManager.processFrontMatter(note, (fm: Record<string, unknown>) => Object.assign(fm, frontmatter));
       return note;
     } catch (error) {
-      for (const step of undo.reverse()) {
-        try {
-          await step();
-        } catch (undoError) {
-          console.error("[e-reader] could not undo part of a failed import", undoError);
-        }
-      }
+      await rollBack(undo);
       throw error;
     }
+  }
+
+  /** Moves a vault file, or writes a dropped one, to where book files go, named `name`. */
+  private async placeBookFile(
+    book: { source: ImportSource; extension: string },
+    name: string,
+    notePath: string,
+    undo: (() => Promise<unknown>)[],
+  ): Promise<TFile> {
+    const { vault, fileManager } = this.app;
+    const bookPath = await this.filePath(`${name}.${book.extension}`, notePath);
+    const source = book.source;
+    if (source.kind === "vault") {
+      const bookFile = source.file;
+      const from = bookFile.path;
+      if (parentOf(from) !== parentOf(bookPath) || basenameOf(from) !== basenameOf(bookPath)) {
+        await this.ensureFolder(parentOf(bookPath), undo);
+        this.written.add(bookPath);
+        await fileManager.renameFile(bookFile, bookPath);
+        undo.push(() => fileManager.renameFile(bookFile, from));
+      }
+      return bookFile;
+    }
+    await this.ensureFolder(parentOf(bookPath), undo);
+    this.written.add(bookPath);
+    const created = await vault.createBinary(bookPath, source.data);
+    undo.push(() => vault.delete(created));
+    return created;
+  }
+
+  private async writeCover(
+    cover: NonNullable<BookMetadata["cover"]>,
+    name: string,
+    notePath: string,
+    undo: (() => Promise<unknown>)[],
+  ): Promise<TFile> {
+    const coverPath = await this.filePath(`${name} cover.${cover.extension}`, notePath);
+    await this.ensureFolder(parentOf(coverPath), undo);
+    this.written.add(coverPath);
+    const created = await this.app.vault.createBinary(coverPath, cover.data);
+    undo.push(() => this.app.vault.delete(created));
+    return created;
   }
 
   /** Where a book file or cover goes: the configured folder, or Obsidian's attachment location for the note. */

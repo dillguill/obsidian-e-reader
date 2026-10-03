@@ -89,6 +89,7 @@ export class ReaderView extends FileView {
     private readonly getSettings: () => Settings,
     private readonly saveSettings: () => void,
     private readonly events: ReaderEvents,
+    private readonly attachFile: (note: TFile) => Promise<boolean>,
   ) {
     super(leaf);
     this.navigation = true;
@@ -243,6 +244,25 @@ export class ReaderView extends FileView {
     this.contentRoot?.querySelector(".ereader-reader__empty")?.remove();
   }
 
+  private renderNoFile(root: HTMLElement, note: TFile): void {
+    const box = root.createDiv({ cls: "ereader-reader__empty ereader-reader__no-file" });
+    setIcon(box.createDiv({ cls: "ereader-reader__no-file-icon" }), "book-dashed");
+    box.createDiv({ cls: "ereader-reader__no-file-title", text: "No file yet" });
+    box.createDiv({
+      cls: "ereader-reader__no-file-detail",
+      text: "This book is on your wishlist. Add its EPUB or PDF to start reading; the note keeps everything it already has.",
+    });
+    const actions = box.createDiv({ cls: "ereader-reader__no-file-actions" });
+    const add = actions.createEl("button", { cls: "mod-cta", text: "Add file…" });
+    add.addEventListener("click", () => {
+      void this.attachFile(note).then((attached) => {
+        if (attached && this.file === note) void this.loadBook(note);
+      });
+    });
+    const open = actions.createEl("button", { text: "Open note" });
+    open.addEventListener("click", () => void this.leaf.openFile(note, { state: { mode: "source" } }));
+  }
+
   private async loadBook(file: TFile): Promise<void> {
     const root = this.contentRoot;
     if (!root) return;
@@ -265,9 +285,11 @@ export class ReaderView extends FileView {
         : { path: file.path, extension: file.extension, name: file.name };
 
     if (!attachment) {
-      // Nothing to read: fall back to the note itself rather than a dead end.
-      console.debug("[e-reader] no attachment; opening the note\n" + (await describeAttachmentLookup(this.app, file)));
-      await this.leaf.openFile(file);
+      // A wishlist book: a note with no file yet. Say so, and offer the way
+      // forward, rather than leaving an empty pane.
+      console.debug("[e-reader] no attachment\n" + (await describeAttachmentLookup(this.app, file)));
+      if (token !== this.loadToken) return;
+      this.renderNoFile(root, file);
       return;
     }
 

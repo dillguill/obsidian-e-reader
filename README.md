@@ -27,6 +27,14 @@ default) and the file to wherever Obsidian puts attachments, or a folder you
 choose. A book already in the library is never imported twice, and a failed
 import leaves nothing behind.
 
+**Wishlist and read later.** "Add a book to the wishlist" searches Open
+Library and saves a book note with its details and cover but no file. In the
+library it shows faded and labelled *Wishlist*; opening it offers **Add
+file…**, and importing the book later (by drop, inbox or command) fills that
+same note instead of making a second one. **Read later** in a card's menu
+ticks a `read_later` property and puts a bookmark on the cover; filter a
+Bases view on it for a reading queue.
+
 **Reader.** EPUB and PDF, both remembering where you were, with a toolbar
 shaped like Obsidian's own PDF viewer: zoom or text size, a display menu, and
 a page box you can type into. PDFs offer fit-to-width, fit-to-height, two-page

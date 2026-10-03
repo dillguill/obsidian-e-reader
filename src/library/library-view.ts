@@ -5,13 +5,14 @@
 // the book note's path. The only write is the card menu's "Mark as finished"
 // or "Mark as unread", which the reader asks for by name.
 
-import type { BasesEntry, BasesPropertyId, QueryController } from "obsidian";
+import type { BasesEntry, BasesPropertyId, QueryController, TFile } from "obsidian";
 import { BasesView, Component, Menu, setIcon } from "obsidian";
 import type { ImportResult, ImportSource } from "../import/importer";
 import { IMPORTABLE_EXTENSIONS } from "../import/importer";
 import type { Settings } from "../settings/settings-model";
 import { READER_VIEW_TYPE, type ReaderViewState } from "../reader/reader-view";
-import { renderCard } from "./card";
+import { type CardState, renderCard } from "./card";
+import { resolveBookAttachment } from "../core/attachment";
 import { type OpenBookModifiers, decideOpenTarget } from "./open-book";
 import { type LibraryViewConfig, readLibraryViewConfig } from "./view-config";
 
@@ -43,6 +44,7 @@ export class LibraryView extends BasesView {
     containerEl: HTMLElement,
     private readonly getSettings: () => Settings,
     private readonly importBook: (source: ImportSource) => Promise<ImportResult | null>,
+    private readonly attachFile: (note: TFile) => Promise<boolean>,
   ) {
     super(controller);
     this.containerEl = containerEl;
@@ -181,7 +183,7 @@ export class LibraryView extends BasesView {
     entry: BasesEntry,
     libConfig: LibraryViewConfig,
   ): void {
-    const card = renderCard(this.app, entry, this.config, libConfig);
+    const card = renderCard(this.app, entry, this.config, libConfig, this.cardState(entry.file));
     gridEl.appendChild(card);
 
     // A long press opens the menu on a touchscreen. The click that follows
@@ -236,8 +238,27 @@ export class LibraryView extends BasesView {
     });
   }
 
+  private cardState(note: TFile): CardState {
+    const { attachments, readLater } = this.getSettings().properties;
+    const frontmatter = this.app.metadataCache.getFileCache(note)?.frontmatter;
+    return {
+      hasFile: resolveBookAttachment(this.app, note, attachments) !== null,
+      readLater: frontmatter?.[readLater] === true,
+    };
+  }
+
   private cardMenu(entry: BasesEntry, progressProperty: BasesPropertyId | null): Menu {
     const menu = new Menu();
+    const state = this.cardState(entry.file);
+    if (!state.hasFile) {
+      menu.addItem((item) =>
+        item
+          .setTitle("Add file…")
+          .setIcon("file-up")
+          .onClick(() => void this.attachFile(entry.file)),
+      );
+      menu.addSeparator();
+    }
     menu.addItem((item) =>
       item
         .setTitle("Open")
@@ -257,11 +278,18 @@ export class LibraryView extends BasesView {
         .onClick(() => void this.app.workspace.getLeaf(false).openFile(entry.file)),
     );
 
+    menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle(state.readLater ? "Remove from read later" : "Read later")
+        .setIcon(state.readLater ? "bookmark-minus" : "bookmark-plus")
+        .onClick(() => void this.setReadLater(entry.file, !state.readLater)),
+    );
+
     // Only a property on the note itself can be written; a formula or a file
     // property bound in the `.base` is read-only.
     const name = progressProperty?.startsWith("note.") ? progressProperty.slice("note.".length) : null;
     if (name !== null) {
-      menu.addSeparator();
       menu.addItem((item) =>
         item
           .setTitle("Mark as finished")
@@ -276,6 +304,15 @@ export class LibraryView extends BasesView {
       );
     }
     return menu;
+  }
+
+  /** Marks a book to read later, or with `false` removes the property rather than leaving it unticked. */
+  private async setReadLater(note: TFile, on: boolean): Promise<void> {
+    const { readLater } = this.getSettings().properties;
+    await this.app.fileManager.processFrontMatter(note, (frontmatter: Record<string, unknown>) => {
+      if (on) frontmatter[readLater] = true;
+      else delete frontmatter[readLater];
+    });
   }
 
   /**

@@ -775,3 +775,42 @@
   display: block;
   color: var(--text-muted);
 }
+
+/* Choosing a cover: thumbnails in a grid that wraps to the modal's width. */
+.ereader-cover-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.ereader-cover-grid__status {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+}
+
+.ereader-cover-grid__option {
+  height: auto;
+  padding: 0;
+  aspect-ratio: 2 / 3;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--background-modifier-border);
+  cursor: pointer;
+}
+
+.ereader-cover-grid__option img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ereader-cover-grid__option.is-loading {
+  opacity: 0.5;
+}
+
+.ereader-detail-current {
+  margin-top: 4px;
+  color: var(--text-faint);
+}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { coverExtension, fillGaps } from "../../src/import/metadata";
 import { matchFromSearch, querySearchUrl, resultsFromSearch, searchUrl } from "../../src/import/open-library";
-import { bookIdentity, buildFrontmatter, isInFolder, joinPath, normalizeForMatch, normalizeIsbn, safeFileName, sameBook, groupDuplicates } from "../../src/import/plan";
+import { bookIdentity, buildFrontmatter, isInFolder, joinPath, normalizeForMatch, normalizeIsbn, safeFileName, sameBook, groupDuplicates, detailRows, keepDetails } from "../../src/import/plan";
 
 const NAMES = { marker: "type", markerValue: "book", cover: "cover", attachments: "attachments" };
 
@@ -198,5 +198,22 @@ describe("wishlist search", () => {
     expect(results[0]?.meta).toMatchObject({ authors: ["Frank Herbert"], published: "1965" });
     expect(results[0]?.coverUrl).toContain("/b/id/7-L.jpg");
     expect(results[1]?.meta.authors).toEqual([]);
+  });
+});
+
+describe("choosing details", () => {
+  const meta = { title: "Dune", authors: ["Frank Herbert"], subjects: ["Science fiction"], isbn: "9780441172719", pages: 412 };
+
+  it("lists the details there are, under the properties a note uses", () => {
+    expect(detailRows(meta).map((row) => [row.property, row.display])).toEqual([
+      ["author", "Frank Herbert"],
+      ["isbn", "9780441172719"],
+      ["pages", "412"],
+      ["topics", "Science fiction"],
+    ]);
+  });
+
+  it("keeps only the chosen details, and always the title", () => {
+    expect(keepDetails(meta, new Set(["isbn"]))).toEqual({ title: "Dune", authors: [], subjects: [], isbn: "9780441172719" });
   });
 });

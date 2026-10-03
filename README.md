@@ -32,7 +32,12 @@ and merges each into the note you keep, moving highlights, properties and
 text and trashing the rest.
 
 **Wishlist and read later.** "Add a book to the wishlist" searches Open
-Library and saves a book note with its details and cover but no file. In the
+Library, then lets you pick a cover from the book's editions (or an image in
+your vault) and tick which details become properties; either step can be
+skipped. It saves a book note with those but no file. A card's menu also has
+**Change cover…**, which can send the replaced image to the trash, and
+**Update details…**, which looks the book up again and writes only what you
+tick. In the
 library it shows faded and labelled *Wishlist*; opening it offers **Add
 file…**, and importing the book later (by drop, inbox or command) fills that
 same note instead of making a second one. **Read later** and **Add to

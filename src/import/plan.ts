@@ -168,3 +168,54 @@ export function groupDuplicates<T>(items: readonly T[], identity: (item: T) => B
   });
   return [...groups.values()].filter((group) => group.length > 1);
 }
+
+/** One detail a lookup can add to a note, under the property buildFrontmatter writes it to. */
+export interface DetailRow {
+  property: string;
+  label: string;
+  value: string | number | string[];
+  /** How the value reads in a list, cut short when long. */
+  display: string;
+}
+
+const MAX_DETAIL_DISPLAY = 160;
+
+function shown(value: string | number | string[]): string {
+  const text = Array.isArray(value) ? value.join(", ") : String(value);
+  return text.length > MAX_DETAIL_DISPLAY ? `${text.slice(0, MAX_DETAIL_DISPLAY - 1).trimEnd()}…` : text;
+}
+
+/** The details `meta` carries beyond its title, in the order a note lists them. */
+export function detailRows(meta: BookMetadata): DetailRow[] {
+  const rows: DetailRow[] = [];
+  const add = (property: string, label: string, value: string | number | string[] | undefined): void => {
+    if (value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) return;
+    rows.push({ property, label, value, display: shown(value) });
+  };
+  add("author", "Author", meta.authors);
+  add("published", "Published", meta.published);
+  add("publisher", "Publisher", meta.publisher);
+  add("language", "Language", meta.language);
+  add("isbn", "ISBN", meta.isbn);
+  add("pages", "Pages", meta.pages);
+  add("topics", "Topics", meta.subjects);
+  add("description", "Description", meta.description);
+  return rows;
+}
+
+/** `meta` keeping only the details whose property is in `keep`. */
+export function keepDetails(meta: BookMetadata, keep: ReadonlySet<string>): BookMetadata {
+  const has = (property: string): boolean => keep.has(property);
+  return {
+    title: meta.title,
+    authors: has("author") ? meta.authors : [],
+    subjects: has("topics") ? meta.subjects : [],
+    ...(has("published") && meta.published !== undefined ? { published: meta.published } : {}),
+    ...(has("publisher") && meta.publisher !== undefined ? { publisher: meta.publisher } : {}),
+    ...(has("language") && meta.language !== undefined ? { language: meta.language } : {}),
+    ...(has("isbn") && meta.isbn !== undefined ? { isbn: meta.isbn } : {}),
+    ...(has("pages") && meta.pages !== undefined ? { pages: meta.pages } : {}),
+    ...(has("description") && meta.description !== undefined ? { description: meta.description } : {}),
+    ...(meta.cover !== undefined ? { cover: meta.cover } : {}),
+  };
+}

@@ -251,9 +251,9 @@ export class EReaderSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Template")
       .setDesc(
-        "A note to use as the exported note's body. Placeholders: {{highlight}} (the quote with its source line), " +
+        "A note to use as the exported note's body. Placeholders: {{highlight}} (the quote with its source and note links), " +
           "{{quote}}, {{comment}}, {{link}} (link to the highlight in the book note), {{source}}, {{book}}, " +
-          "{{chapter}}, {{page}}, {{type}}, {{created}}. Empty uses {{highlight}}, {{comment}}, {{link}}.",
+          "{{chapter}}, {{page}}, {{type}}, {{created}}. Empty uses {{highlight}} then {{comment}}.",
       )
       .addText((text) => {
         text

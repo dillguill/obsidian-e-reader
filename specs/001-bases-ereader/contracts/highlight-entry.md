@@ -107,8 +107,9 @@ anchor. Resolves CHK011.
 ## Exported highlight notes (0.4.0)
 
 The book note is the only store. "Export as note" writes a new note named `Book – p. 35 – opening words`.
-Its body is a template (a note chosen in settings, or by default `{{highlight}}`, `{{comment}}`, `{{link}}`):
-the quote with its source line, the comment, then `[[Book#^id|Link to note]]`. It gets `book`, `highlight`,
+Its body is a template (a note chosen in settings, or by default `{{highlight}}` then `{{comment}}`): the
+quote whose last line is `– [Book, Chapter, p. 35](obsidian://…) · [[Book#^id|Link to note]]`, then the
+comment. It gets `book`, `highlight`,
 `chapter`, `page` and `created` properties (names configurable). The plugin never reads an exported note
 back as an entry.
 

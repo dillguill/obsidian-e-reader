@@ -82,11 +82,11 @@ describe("entry store", () => {
 });
 
 describe("copying and exporting a highlight", () => {
-  it("copies it as a quote or a callout, with the comment after it and a separate link to the note", async () => {
+  it("copies it as a quote or a callout, with the note link beside the source and the comment after", async () => {
     const { app, book } = await setup();
     const entry = await addEntry(app, book, { ...draft, comment: "Worth comparing." }, SETTINGS, NOW, random);
-    const source = `> ${SOURCE}${entry.id})`;
-    const tail = `Worth comparing.\n\n[[Dune#^${entry.id}|Link to note]]`;
+    const source = `> ${SOURCE}${entry.id}) · [[Dune#^${entry.id}|Link to note]]`;
+    const tail = "Worth comparing.";
     expect(entryCopy(app, book, entry, false)).toBe(`> the spice must flow\n${source}\n\n${tail}`);
     expect(entryCopy(app, book, entry, true)).toBe(`> [!idea]\n> the spice must flow\n${source}\n\n${tail}`);
     expect(entryLink(app, book, entry)).toBe(`[[Dune#^${entry.id}]]`);
@@ -114,7 +114,7 @@ describe("copying and exporting a highlight", () => {
     });
     const text = await app.vault.read(note);
     expect(text.replace(/^---\n[\s\S]*?\n---\n/, "")).toBe(
-      `> the spice must flow\n> ${SOURCE}${entry.id})\n\n[[Dune#^${entry.id}|Link to note]]\n`,
+      `> the spice must flow\n> ${SOURCE}${entry.id}) · [[Dune#^${entry.id}|Link to note]]\n`,
     );
 
     // The export is not a second copy: the book note still lists it once.

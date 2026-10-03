@@ -242,6 +242,61 @@ export async function renameTypeInBook(app: App, note: TFile, from: string, to: 
   return count;
 }
 
+/**
+ * Moves everything `from` holds into `into`, for two notes that turned out to
+ * be one book: its highlights join `into`'s, frontmatter `into` lacks is
+ * filled in and lists are joined, anything else written in it is appended
+ * under a heading naming it, and exported highlight notes are pointed at
+ * `into`. `from` then goes to the trash, the way the vault is set to delete.
+ */
+export async function mergeBookInto(app: App, from: TFile, into: TFile, settings: Settings): Promise<void> {
+  await foldHighlightNotes(app, from, settings);
+  const source = await regionEntries(app, from);
+  const existing = new Set((await regionEntries(app, into)).entries.map((entry) => entry.id));
+  const added = source.entries.filter((entry) => !existing.has(entry.id));
+  if (added.length > 0) await rewriteRegion(app, into, settings, (located) => located, { added });
+
+  const { marker } = settings.properties;
+  const fromFrontmatter = { ...(app.metadataCache.getFileCache(from)?.frontmatter ?? {}) } as Record<string, unknown>;
+  await app.fileManager.processFrontMatter(into, (fm: Record<string, unknown>) => {
+    for (const [key, value] of Object.entries(fromFrontmatter)) {
+      if (key === marker || key === "position") continue;
+      fm[key] = mergedValue(fm[key], value);
+    }
+  });
+
+  const text = await app.vault.read(from);
+  const leftover = [
+    removeRegion(text.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "")).trim(),
+    ...source.malformed.map((item) => item.raw.trim()),
+  ].filter((part) => part !== "");
+  if (leftover.length > 0) {
+    await app.vault.process(into, (current) => `${current.replace(/\s+$/, "")}\n\n## From ${from.basename}\n\n${leftover.join("\n\n")}\n`);
+  }
+
+  const bookProperty = settings.highlights.properties.book;
+  for (const file of exportedNotes(app, from, settings)) {
+    await app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+      fm[bookProperty] = `[[${app.metadataCache.fileToLinktext(into, file.path, true)}]]`;
+    });
+  }
+  await app.fileManager.trashFile(from);
+}
+
+function isBlank(value: unknown): boolean {
+  return value === null || value === undefined || (typeof value === "string" && value.trim() === "") || (Array.isArray(value) && value.length === 0);
+}
+
+/** `into`'s value, or `from`'s where `into` has none; two lists are joined without repeats. */
+function mergedValue(into: unknown, from: unknown): unknown {
+  if (isBlank(into)) return from;
+  if (Array.isArray(into) && Array.isArray(from)) {
+    const seen = new Set(into.map((item) => JSON.stringify(item)));
+    return [...into, ...from.filter((item) => !seen.has(JSON.stringify(item)))];
+  }
+  return into;
+}
+
 /** Notes whose book property links to `note`: exported highlight notes, among others. */
 function exportedNotes(app: App, note: TFile, settings: Settings): TFile[] {
   const found: TFile[] = [];

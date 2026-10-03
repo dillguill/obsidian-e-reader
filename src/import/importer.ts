@@ -15,7 +15,7 @@ import type { Settings } from "../settings/settings-model";
 import { readEpubMetadata } from "./epub-metadata";
 import { type BookMetadata, fillGaps } from "./metadata";
 import { lookUpOpenLibrary } from "./open-library";
-import { buildFrontmatter, duplicateKeys, joinPath, safeFileName } from "./plan";
+import { type BookIdentity, bookIdentity, buildFrontmatter, joinPath, safeFileName, sameBook } from "./plan";
 
 export const IMPORTABLE_EXTENSIONS: ReadonlySet<string> = new Set(["epub", "pdf"]);
 
@@ -252,32 +252,42 @@ export class BookImporter {
     return paths;
   }
 
-  /** A book note that is this book already: the same ISBN, the same title and author, or one that already links this file. */
+  /** A book note that is this book already (plan.ts `sameBook`), or one that already links this file. */
   findDuplicate(meta: Pick<BookMetadata, "title" | "authors" | "isbn">, file: TFile | null): TFile | null {
-    const { marker, markerValue, attachments } = this.getSettings().properties;
-    const wanted = new Set(duplicateKeys(meta));
-    for (const note of this.app.vault.getMarkdownFiles()) {
-      const cache = this.app.metadataCache.getFileCache(note);
-      const fm = cache?.frontmatter;
-      if (!fm || !isBookNote(fm, marker, markerValue)) continue;
+    const { attachments } = this.getSettings().properties;
+    const wanted = bookIdentity(meta);
+    for (const note of this.bookNotes()) {
       if (file) {
-        for (const link of cache?.frontmatterLinks ?? []) {
+        for (const link of this.app.metadataCache.getFileCache(note)?.frontmatterLinks ?? []) {
           if (link.key !== attachments && !link.key.startsWith(`${attachments}.`)) continue;
           if (this.app.metadataCache.getFirstLinkpathDest(link.link, note.path)?.path === file.path) return note;
         }
       }
-      const title = typeof fm["title"] === "string" ? fm["title"] : note.basename;
-      const author = fm["author"];
-      const firstAuthor = Array.isArray(author) ? author[0] : author;
-      const isbn = fm["isbn"];
-      const keys = duplicateKeys({
-        title,
-        authors: typeof firstAuthor === "string" ? [firstAuthor.replace(/^\[\[|\]\]$/g, "")] : [],
-        isbn: typeof isbn === "string" || typeof isbn === "number" ? String(isbn) : undefined,
-      });
-      if (keys.some((key) => wanted.has(key))) return note;
+      if (sameBook(wanted, this.identityOf(note))) return note;
     }
     return null;
+  }
+
+  /** Every book note in the vault. */
+  bookNotes(): TFile[] {
+    const { marker, markerValue } = this.getSettings().properties;
+    return this.app.vault
+      .getMarkdownFiles()
+      .filter((note) => isBookNote(this.app.metadataCache.getFileCache(note)?.frontmatter, marker, markerValue));
+  }
+
+  /** What the duplicate check knows about a book note, from its title, first author and ISBN. */
+  identityOf(note: TFile): BookIdentity {
+    const fm = this.app.metadataCache.getFileCache(note)?.frontmatter ?? {};
+    const title = typeof fm["title"] === "string" && fm["title"].trim() !== "" ? fm["title"] : note.basename;
+    const author: unknown = fm["author"] ?? fm["authors"];
+    const firstAuthor: unknown = Array.isArray(author) ? author[0] : author;
+    const isbn: unknown = fm["isbn"];
+    return bookIdentity({
+      title,
+      authors: typeof firstAuthor === "string" ? [firstAuthor] : [],
+      isbn: typeof isbn === "string" || typeof isbn === "number" ? String(isbn) : undefined,
+    });
   }
 
   /** Writes a new book note, with its file when there is one and a cover when there is one. */

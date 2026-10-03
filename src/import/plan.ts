@@ -33,13 +33,56 @@ export function normalizeForMatch(text: string): string {
     .replace(/^(the|a|an) /, "");
 }
 
-/** Identity for the duplicate check: the ISBN when there is one, else title and first author. */
-export function duplicateKeys(meta: Pick<BookMetadata, "title" | "authors" | "isbn">): string[] {
-  const keys: string[] = [];
-  if (meta.isbn) keys.push(`isbn:${meta.isbn}`);
-  const title = normalizeForMatch(meta.title);
-  if (title !== "") keys.push(`book:${title}|${normalizeForMatch(meta.authors[0] ?? "")}`);
-  return keys;
+/** What the duplicate check compares: an ISBN, a title, and the first author's surname. */
+export interface BookIdentity {
+  isbn: string | null;
+  title: string;
+  surname: string;
+}
+
+/** An ISBN as 13 digits, so the hyphenated and the 10-digit forms of one ISBN compare equal. */
+export function normalizeIsbn(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const digits = raw.toUpperCase().replace(/[^0-9X]/g, "");
+  if (digits.length === 13 && /^\d{13}$/.test(digits)) return digits;
+  if (digits.length !== 10 || !/^\d{9}[\dX]$/.test(digits)) return null;
+  const core = `978${digits.slice(0, 9)}`;
+  const sum = [...core].reduce((total, digit, index) => total + Number(digit) * (index % 2 === 0 ? 1 : 3), 0);
+  return `${core}${(10 - (sum % 10)) % 10}`;
+}
+
+/**
+ * A title without its subtitle or a bracketed note, so "Dune: Deluxe
+ * Edition" and "Dune (Frank Herbert)" are both Dune.
+ */
+export function mainTitle(title: string): string {
+  const cut = title.split(/\s*[:(\[]|\s+[-–—]\s+/)[0] ?? title;
+  const main = normalizeForMatch(cut);
+  return main === "" ? normalizeForMatch(title) : main;
+}
+
+/** The surname: "Herbert" from both "Frank Herbert" and "Herbert, Frank"; "Austen" from "J. Austen". */
+export function surnameOf(author: string): string {
+  const name = author.replace(/^\[\[|\]\]$/g, "").trim();
+  const comma = name.indexOf(",");
+  const part = comma > 0 ? name.slice(0, comma) : (name.split(/\s+/).pop() ?? "");
+  return normalizeForMatch(part);
+}
+
+export function bookIdentity(meta: Pick<BookMetadata, "title" | "authors" | "isbn">): BookIdentity {
+  return { isbn: normalizeIsbn(meta.isbn), title: mainTitle(meta.title), surname: surnameOf(meta.authors[0] ?? "") };
+}
+
+/**
+ * The same book: one ISBN, or the same title by the same author. A missing
+ * author matches any, since notes made by hand often leave it out; a
+ * differing ISBN does not rule a match out, since an ebook and a print copy
+ * of one book carry different ones.
+ */
+export function sameBook(a: BookIdentity, b: BookIdentity): boolean {
+  if (a.isbn !== null && a.isbn === b.isbn) return true;
+  if (a.title === "" || a.title !== b.title) return false;
+  return a.surname === "" || b.surname === "" || a.surname === b.surname;
 }
 
 /** The names the note's properties are written under; the configurable ones come from settings. */
@@ -87,4 +130,41 @@ export function joinPath(folder: string, name: string): string {
 export function isInFolder(path: string, folder: string): boolean {
   const trimmed = folder.replace(/^\/+|\/+$/g, "").trim();
   return trimmed !== "" && path.startsWith(`${trimmed}/`);
+}
+
+/**
+ * The books that appear more than once, as groups of two or more. Only books
+ * sharing an ISBN or a title are compared, so a large library stays quick.
+ */
+export function groupDuplicates<T>(items: readonly T[], identity: (item: T) => BookIdentity): T[][] {
+  const ids = items.map(identity);
+  const parent = items.map((_, index) => index);
+  const root = (index: number): number => {
+    let at = index;
+    while (parent[at] !== at) at = parent[at] = parent[parent[at] as number] as number;
+    return at;
+  };
+  const join = (a: number, b: number): void => {
+    parent[root(a)] = root(b);
+  };
+  const byIsbn = new Map<string, number>();
+  const byTitle = new Map<string, number[]>();
+  ids.forEach((id, index) => {
+    if (id.isbn !== null) {
+      const seen = byIsbn.get(id.isbn);
+      if (seen === undefined) byIsbn.set(id.isbn, index);
+      else join(index, seen);
+    }
+    if (id.title === "") return;
+    const same = byTitle.get(id.title) ?? [];
+    for (const other of same) if (sameBook(id, ids[other] as BookIdentity)) join(index, other);
+    same.push(index);
+    byTitle.set(id.title, same);
+  });
+  const groups = new Map<number, T[]>();
+  items.forEach((item, index) => {
+    const key = root(index);
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  });
+  return [...groups.values()].filter((group) => group.length > 1);
 }

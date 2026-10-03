@@ -401,6 +401,12 @@ describe("status settings", () => {
     expect(mergeSettings({ version: SETTINGS_VERSION }).pendingReadLaterMigration).toBeUndefined();
   });
 
+  it("asks for wishlist books to be tagged when upgrading from before version 4", () => {
+    expect(mergeSettings({ version: 3 }).pendingWishlistMigration).toBe(true);
+    expect(mergeSettings({ version: SETTINGS_VERSION }).pendingWishlistMigration).toBeUndefined();
+    expect(mergeSettings(undefined).pendingWishlistMigration).toBeUndefined();
+  });
+
   it("keeps a migration still in progress", () => {
     const merged = mergeSettings({ version: SETTINGS_VERSION, pendingReadLaterMigration: "queued" });
     expect(merged.pendingReadLaterMigration).toBe("queued");

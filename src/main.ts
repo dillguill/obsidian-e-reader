@@ -4,7 +4,7 @@ import { findBookForEntry, highlightOfNote } from "./annotations/links";
 import { mergeBookInto, renameTypeInBook } from "./annotations/store";
 import { resolveBookAttachment } from "./core/attachment";
 import { isBookNote } from "./core/book-note";
-import { applyStatus } from "./core/status";
+import { applyStatus, hasStatus, statusProperty } from "./core/status";
 import { ReaderEvents } from "./core/reader-events";
 import { RESERVED_ENTRY_TYPE } from "./core/types";
 import { BookImporter, IMPORTABLE_EXTENSIONS, type ImportResult, type ImportSource } from "./import/importer";
@@ -339,7 +339,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       this.registerEvent(this.app.vault.on("create", (file) => this.onInboxCandidate(file)));
       this.registerEvent(this.app.vault.on("modify", (file) => this.onInboxCandidate(file)));
       this.scanInbox();
-      void this.migrateReadLater();
+      void this.migrateReadLater().then(() => this.migrateWishlist());
     });
   }
 
@@ -370,6 +370,21 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       const where = status.useTags ? "tags" : `“${status.property}”`;
       new Notice(`E-Reader: read later is now a status in ${where}. Moved ${moved} ${moved === 1 ? "book" : "books"}.`, 8000);
     }
+  }
+
+  /** Gives the wishlist status, once, to book notes that were wishlist books before it existed: those with no file. */
+  private async migrateWishlist(): Promise<void> {
+    if (!this.settings.pendingWishlistMigration) return;
+    const { status, properties } = this.settings;
+    for (const note of this.bookNotes()) {
+      if (resolveBookAttachment(this.app, note, properties.attachments) !== null) continue;
+      if (hasStatus(this.app.metadataCache.getFileCache(note)?.frontmatter?.[statusProperty(status)], status.wishlist)) continue;
+      await this.app.fileManager.processFrontMatter(note, (frontmatter: Record<string, unknown>) => {
+        applyStatus(frontmatter, status, status.wishlist, true);
+      });
+    }
+    delete this.settings.pendingWishlistMigration;
+    await this.saveSettings();
   }
 
   /** Imports whatever is already sitting in the inbox. Called at startup and when the inbox setting changes. */

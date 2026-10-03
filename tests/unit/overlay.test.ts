@@ -56,7 +56,7 @@ describe("decideReadStateOverlay", () => {
 
 describe("decideProgressOverlay", () => {
   it("renders nothing when the property is unbound", () => {
-    expect(decideProgressOverlay(null, 50, "bar")).toEqual({ kind: "none" });
+    expect(decideProgressOverlay(null, 50)).toEqual({ kind: "none" });
   });
 
   it.each([
@@ -65,47 +65,35 @@ describe("decideProgressOverlay", () => {
     ["empty string", ""],
     ["boolean", true],
   ])("renders nothing for %s", (_label, raw) => {
-    expect(decideProgressOverlay(PROGRESS_PROP, raw, "bar")).toEqual({ kind: "none" });
+    expect(decideProgressOverlay(PROGRESS_PROP, raw)).toEqual({ kind: "none" });
   });
 
   it("renders nothing for an unrecognised wrapper object (stand-in for ErrorValue)", () => {
     const errorLike = { toString: () => "42" };
-    expect(decideProgressOverlay(PROGRESS_PROP, errorLike, "bar")).toEqual({ kind: "none" });
+    expect(decideProgressOverlay(PROGRESS_PROP, errorLike)).toEqual({ kind: "none" });
   });
 
   it("renders nothing for a non-numeric string", () => {
-    expect(decideProgressOverlay(PROGRESS_PROP, "not-a-number", "bar")).toEqual({ kind: "none" });
+    expect(decideProgressOverlay(PROGRESS_PROP, "not-a-number")).toEqual({ kind: "none" });
   });
 
   it("clamps a value above 100 down to 100", () => {
-    expect(decideProgressOverlay(PROGRESS_PROP, 150, "bar")).toEqual({ kind: "progress", percent: 100, display: "bar" });
+    expect(decideProgressOverlay(PROGRESS_PROP, 150)).toEqual({ kind: "progress", percent: 100 });
   });
 
   it("clamps a negative value up to 0", () => {
-    expect(decideProgressOverlay(PROGRESS_PROP, -10, "percent")).toEqual({
-      kind: "progress",
-      percent: 0,
-      display: "percent",
-    });
+    expect(decideProgressOverlay(PROGRESS_PROP, -10)).toEqual({ kind: "progress", percent: 0 });
   });
 
   it("passes an in-range value through unchanged", () => {
-    expect(decideProgressOverlay(PROGRESS_PROP, 42, "bar")).toEqual({ kind: "progress", percent: 42, display: "bar" });
+    expect(decideProgressOverlay(PROGRESS_PROP, 42)).toEqual({ kind: "progress", percent: 42 });
   });
 
   it("accepts a numeric string", () => {
-    expect(decideProgressOverlay(PROGRESS_PROP, "77", "percent")).toEqual({
-      kind: "progress",
-      percent: 77,
-      display: "percent",
-    });
-  });
-
-  it("passes through the requested display mode", () => {
-    expect(decideProgressOverlay(PROGRESS_PROP, 10, "percent")).toEqual({ kind: "progress", percent: 10, display: "percent" });
+    expect(decideProgressOverlay(PROGRESS_PROP, "77")).toEqual({ kind: "progress", percent: 77 });
   });
 
   it("never infers progress from a read-state-shaped string value", () => {
-    expect(decideProgressOverlay(PROGRESS_PROP, "reading", "bar")).toEqual({ kind: "none" });
+    expect(decideProgressOverlay(PROGRESS_PROP, "reading")).toEqual({ kind: "none" });
   });
 });

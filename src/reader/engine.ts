@@ -113,12 +113,25 @@ export interface ReaderEngine {
   /**
    * Registers a handler for the end of a selection gesture inside the
    * rendered document — a mouse or touch release, NOT a settled selection.
-   * The reader's highlight mode turns a release into a highlight, so the
-   * signal has to be the release itself: epub.js's own `selected` event fires
-   * off a 250ms `selectionchange` debounce, which means pausing mid-drag
-   * would highlight half of what the reader was still selecting.
+   * The selection popup opens on the release itself rather than on a
+   * debounced `selectionchange`, which would pop it up whenever a drag
+   * paused halfway through.
    */
   onSelectionEnd(handler: () => void): void;
+  /**
+   * Registers a handler for every change to the selection inside the
+   * rendered document, undebounced. This is how a selection adjusted by
+   * dragging its handles on a touchscreen is noticed — those drags fire no
+   * touch events into the page — and how a selection that has been cleared
+   * takes the popup down with it.
+   */
+  onSelectionChange(handler: () => void): void;
+  /**
+   * The current selection's bounding box in the top window's client space,
+   * or null when there is none. The same space the context-menu and tap
+   * positions use, so the popup can be placed without knowing about iframes.
+   */
+  selectionRect(): { left: number; top: number; right: number; bottom: number } | null;
   /**
    * Drops the current selection inside the rendered document. The selection
    * belongs to whichever document the engine rendered into — an EPUB's
@@ -132,6 +145,22 @@ export interface ReaderEngine {
   pageState(): PageState | null;
   /** Jumps to a 1-based page (PDF) or location (EPUB). Out-of-range values clamp. */
   goToPage(page: number): Promise<void>;
+  /**
+   * One step forward or back, the way a keyboard page turn means it: a page
+   * (or a spread) for a fixed-page book, a page for a paginated EPUB, and a
+   * screenful for a scrolled one — continuing into the next or previous
+   * section once the current one runs out.
+   */
+  turnPage(direction: 1 | -1): Promise<void>;
+  /**
+   * Registers a handler for key presses inside documents the engine owns.
+   * Key events do not cross an iframe boundary, so an EPUB's sections need
+   * this to be heard at all; an engine that renders into the host document
+   * can leave it unused, since the view's own Scope already sees its keys.
+   * The handler returns whether it took the press, and only then is the
+   * default suppressed.
+   */
+  onKeyDown(handler: (event: KeyboardEvent) => boolean): void;
   /**
    * The page/location number a locator falls on, so the toolbar can tell
    * whether the current place is already bookmarked. Null when the locator

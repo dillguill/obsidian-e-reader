@@ -63,11 +63,6 @@ describe("readLibraryViewConfig", () => {
     expect(cfg.progressProperty).toBe("note.reading_progress");
   });
 
-  it("reads progressDisplay, defaulting to bar", () => {
-    expect(readLibraryViewConfig(fakeConfig({ progressDisplay: "percent" }), DEFAULT_PROPERTIES).progressDisplay).toBe("percent");
-    expect(readLibraryViewConfig(fakeConfig({ progressDisplay: "nonsense" }), DEFAULT_PROPERTIES).progressDisplay).toBe("bar");
-    expect(readLibraryViewConfig(fakeConfig({}), DEFAULT_PROPERTIES).progressDisplay).toBe("bar");
-  });
 });
 
 describe("overlay bindings fall back to the reader's configured properties", () => {

@@ -9,10 +9,12 @@ highlights that live in your notes as ordinary markdown.
 Bases query — your filters, your sort, your grouping. It reads the same
 configuration keys as the built-in Cards view (`image`, `imageFit`,
 `imageAspectRatio`, `cardSize`), so an existing `.base` keeps working, and
-adds a progress overlay — a bar or a percentage — plus a read-state badge
-derived from it: unread until a book is opened, reading while it is underway,
-finished at the end. Both bind themselves to whatever property the reader
-writes, so a plain `.base` shows them without any setup.
+shows where you are in each book: a clean cover until a book is opened, a
+fade with the percentage and a thin bar while it is underway, and a small
+check once it is finished. These bind themselves to whatever property the
+reader writes, so a plain `.base` shows them without any setup. Books without
+a cover get one drawn from their title, and right-clicking or long-pressing a
+card opens it, opens its note, or marks it finished or unread.
 
 **Reader.** EPUB and PDF, both remembering where you were, with a toolbar
 shaped like Obsidian's own PDF viewer: zoom or text size, a display menu, and
@@ -23,8 +25,13 @@ than whatever the book shipped with. The reader reports the book note as its
 file, so Obsidian's own Properties pane and everything else that follows the
 active file work on it unchanged.
 
-**Highlights and notes.** Select text and right-click, or arm highlight mode
-from the toolbar and simply drag. Saved highlights are painted back into the
+The left and right arrow keys and Page Up/Page Down turn the page, and **Next
+page**, **Previous page**, **Zoom in** and **Zoom out** are commands you can
+bind to any hotkey.
+
+**Highlights and notes.** Select text and a small bar opens beside it: tap a
+colour to highlight as that type, or copy the text. Right-click works too, and
+the **Highlight selection** command repeats the last type you chose. Saved highlights are painted back into the
 book in the colour of their type, and right-clicking one offers to recolour,
 copy or delete it. Each is written into the book note as a callout you can
 read, edit and link to:

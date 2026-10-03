@@ -257,6 +257,9 @@ const OVERSCROLL_THRESHOLD_PX = 160;
 /** A gesture is over once no scroll event has arrived for this long. */
 const GESTURE_IDLE_MS = 180;
 
+/** How much of the pane a keyboard page turn scrolls in a scrolled book. */
+const SCREENFUL_FRACTION = 0.9;
+
 /** How long the pane must hold still before the book is reflowed. */
 const RESIZE_SETTLE_MS = 200;
 
@@ -308,6 +311,8 @@ export class EpubEngine implements ReaderEngine {
   private contextMenuHandler: ((position: { x: number; y: number }) => boolean) | null = null;
   private tapHandler: ((position: { x: number; y: number }) => void) | null = null;
   private selectionEndHandler: (() => void) | null = null;
+  private selectionChangeHandler: (() => void) | null = null;
+  private keyDownHandler: ((event: KeyboardEvent) => boolean) | null = null;
   private changeHandler: (() => void) | null = null;
   private textScale: number;
   private flowMode: EpubFlow;
@@ -406,6 +411,12 @@ export class EpubEngine implements ReaderEngine {
       const fireSelectionEnd = (): void => this.selectionEndHandler?.();
       contents.document.addEventListener("mouseup", fireSelectionEnd, options);
       contents.document.addEventListener("touchend", fireSelectionEnd, options);
+      contents.document.addEventListener("selectionchange", () => this.selectionChangeHandler?.(), options);
+      // Clicking into the book moves focus into its iframe, out of reach of
+      // the view's Scope, so key presses there are forwarded from here.
+      contents.document.addEventListener("keydown", (event: KeyboardEvent) => {
+        if (this.keyDownHandler?.(event)) event.preventDefault();
+      }, options);
       this.addNavigationGestures(contents);
       // A section that arrives later still gets the vault's theme and
       // whatever highlights belong to it.
@@ -540,9 +551,9 @@ export class EpubEngine implements ReaderEngine {
     const doc = contents.document;
 
     // A tap is only a tap if the pointer did not travel; otherwise it is the
-    // tail of a drag-selection, whose `click` fires after highlight mode has
-    // already consumed and cleared the selection — without this a highlight
-    // would also turn the page.
+    // tail of a drag-selection, whose `click` can fire after the selection
+    // has already been consumed and cleared — without this, highlighting from
+    // the popup could also turn the page.
     const options = { signal: this.listeners?.signal };
     let downAt: { x: number; y: number } | null = null;
     doc.addEventListener("mousedown", (event: MouseEvent) => {
@@ -776,6 +787,26 @@ export class EpubEngine implements ReaderEngine {
     }
   }
 
+  async turnPage(direction: 1 | -1): Promise<void> {
+    const step = direction === 1 ? "next" : "prev";
+    if (this.flowMode === "paginated") {
+      await this.turn(step);
+      return;
+    }
+    // `scrolled-doc` holds one whole section, so a page is a screenful of
+    // it, and only at its end does the turn move to the neighbouring one.
+    const stage = this.stageEl();
+    if (!stage) return;
+    const atBottom = stage.scrollTop + stage.clientHeight >= stage.scrollHeight - 2;
+    const atTop = stage.scrollTop <= 0;
+    if ((direction === 1 && atBottom) || (direction === -1 && atTop)) {
+      await this.turn(step);
+      return;
+    }
+    // A little overlap keeps the last line read in view after the jump.
+    stage.scrollBy({ top: direction * stage.clientHeight * SCREENFUL_FRACTION });
+  }
+
   // ---------------------------------------------------------------- theme
 
   /**
@@ -977,6 +1008,30 @@ export class EpubEngine implements ReaderEngine {
     this.selectionEndHandler = handler;
   }
 
+  onSelectionChange(handler: () => void): void {
+    this.selectionChangeHandler = handler;
+  }
+
+  selectionRect(): { left: number; top: number; right: number; bottom: number } | null {
+    for (const contents of this.rendition?.getContents() ?? []) {
+      const range = activeRange(contents.window.getSelection());
+      if (!range) continue;
+      const rect = range.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      // The range reports in the section's own viewport; the iframe's box
+      // moves that into the host's.
+      const frameRect = contents.window.frameElement?.getBoundingClientRect();
+      const dx = frameRect?.left ?? 0;
+      const dy = frameRect?.top ?? 0;
+      return { left: rect.left + dx, top: rect.top + dy, right: rect.right + dx, bottom: rect.bottom + dy };
+    }
+    return null;
+  }
+
+  onKeyDown(handler: (event: KeyboardEvent) => boolean): void {
+    this.keyDownHandler = handler;
+  }
+
   clearSelection(): void {
     // Each section is its own document with its own selection.
     for (const contents of this.rendition?.getContents() ?? []) {
@@ -997,6 +1052,8 @@ export class EpubEngine implements ReaderEngine {
     this.contextMenuHandler = null;
     this.tapHandler = null;
     this.selectionEndHandler = null;
+    this.selectionChangeHandler = null;
+    this.keyDownHandler = null;
     this.changeHandler = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;

@@ -19,6 +19,14 @@ import { type Box, placePopup } from "./popup-position";
 /** How long after a release a press still counts, so a touch's late click lands first. */
 const PRESS_RELEASE_MS = 400;
 
+/**
+ * Where the popup goes: floating beside the selection, or docked along the
+ * bottom of the reader. A touchscreen docks it, because iOS and Android draw
+ * their own selection menu right beside the selection and a page cannot hide
+ * it; two menus at the same spot covered each other.
+ */
+export type PopupPlacement = "above" | "below" | "docked";
+
 export interface SelectionPopupCallbacks {
   highlight(type: string, selection: EngineSelection): void;
   copy(selection: EngineSelection): void;
@@ -83,7 +91,7 @@ export class SelectionPopup {
    * Opens over `anchor` for `selection`. `types` is empty when the open file
    * cannot take highlights, which leaves Copy on its own.
    */
-  show(selection: EngineSelection, anchor: Box, types: readonly AnnotationType[], prefer: "above" | "below"): void {
+  show(selection: EngineSelection, anchor: Box, types: readonly AnnotationType[], placement: PopupPlacement): void {
     this.selection = selection;
     this.el.empty();
     for (const type of types) {
@@ -103,17 +111,19 @@ export class SelectionPopup {
     setTooltip(copy, "Copy");
 
     this.el.show();
-    this.place(anchor, prefer);
+    this.place(anchor, placement);
   }
 
   /** Moves the open popup to follow its selection; closes it once that has scrolled away. */
-  reposition(anchor: Box | null, prefer: "above" | "below"): void {
-    if (!this.selection) return;
+  reposition(anchor: Box | null, placement: PopupPlacement): void {
+    // A docked bar does not follow the selection; it closes when the
+    // selection is cleared, which the view handles.
+    if (!this.selection || placement === "docked") return;
     if (!anchor) {
       this.hide();
       return;
     }
-    this.place(anchor, prefer);
+    this.place(anchor, placement);
   }
 
   hide(): void {
@@ -121,9 +131,15 @@ export class SelectionPopup {
     this.el.hide();
   }
 
-  private place(anchor: Box, prefer: "above" | "below"): void {
+  private place(anchor: Box, placement: PopupPlacement): void {
+    this.el.toggleClass("is-docked", placement === "docked");
+    if (placement === "docked") {
+      // Laid out by styles.css; clear whatever a floating placement left.
+      this.el.setCssStyles({ left: "", top: "" });
+      return;
+    }
     const bounds = this.hostEl.getBoundingClientRect();
-    const at = placePopup(anchor, bounds, { width: this.el.offsetWidth, height: this.el.offsetHeight }, prefer);
+    const at = placePopup(anchor, bounds, { width: this.el.offsetWidth, height: this.el.offsetHeight }, placement);
     if (!at) {
       this.hide();
       return;

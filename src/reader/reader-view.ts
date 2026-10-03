@@ -29,7 +29,7 @@ import { type ReadingPosition, positionChanged, shouldFlushNow } from "./positio
 import { clampProgress } from "./progress";
 import { highlightColor } from "./highlight-style";
 import { isTypingTarget, keyAction } from "./keys";
-import { SelectionPopup } from "./selection-popup";
+import { type PopupPlacement, SelectionPopup } from "./selection-popup";
 import { ReaderToolbar } from "./toolbar";
 import { toolbarState } from "./toolbar-model";
 import { stepScale } from "./zoom";
@@ -488,9 +488,9 @@ export class ReaderView extends FileView {
 
   // ------------------------------------------------------ selection popup
 
-  /** Where the popup sits by default. A touchscreen's own selection menu opens above, so it goes below there. */
-  private popupSide(): "above" | "below" {
-    return Platform.isMobile ? "below" : "above";
+  /** Docked on a touchscreen, clear of the platform's own selection menu; beside the selection otherwise. */
+  private popupPlacement(): PopupPlacement {
+    return Platform.isMobile ? "docked" : "above";
   }
 
   /**
@@ -533,12 +533,12 @@ export class ReaderView extends FileView {
     }
     // A file that is not a book note cannot take highlights; Copy still works.
     const types = this.bookNote() ? this.getSettings().annotationTypes : [];
-    popup.show(selection, rect, types, this.popupSide());
+    popup.show(selection, rect, types, this.popupPlacement());
   }
 
   private repositionPopup(): void {
     if (!this.popup?.current()) return;
-    this.popup.reposition(this.engine?.selectionRect() ?? null, this.popupSide());
+    this.popup.reposition(this.engine?.selectionRect() ?? null, this.popupPlacement());
   }
 
   /** Closes the popup, and with `clearSelection` the selection it was open for too. */

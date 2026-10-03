@@ -183,6 +183,14 @@
   background: var(--ereader-progress-fill, #fff);
 }
 
+/* A file being dragged over the library from outside the vault. */
+.ereader-library.is-drop-target {
+  outline: 2px dashed var(--interactive-accent);
+  outline-offset: -8px;
+  border-radius: var(--radius-l);
+  background: var(--background-modifier-hover);
+}
+
 /* Empty and error states. */
 .ereader-library__message {
   display: flex;

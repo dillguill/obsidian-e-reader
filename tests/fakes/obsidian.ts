@@ -73,6 +73,15 @@ export class TFile {
 
   constructor(path: string) {
     this.path = path;
+    this.name = "";
+    this.basename = "";
+    this.extension = "";
+    this._setPath(path);
+  }
+
+  /** Re-derives the name parts, as a rename does. */
+  _setPath(path: string): void {
+    this.path = path;
     const slashIdx = path.lastIndexOf("/");
     this.name = slashIdx >= 0 ? path.slice(slashIdx + 1) : path;
     const dotIdx = this.name.lastIndexOf(".");
@@ -296,8 +305,8 @@ export class Vault extends Events {
   _contents = new Map<string, string>();
   _binaryContents = new Map<string, ArrayBuffer>();
 
-  getAbstractFileByPath(path: string): TFile | null {
-    return this._files.get(path) ?? null;
+  getAbstractFileByPath(path: string): TFile | TFolder | null {
+    return this._files.get(path) ?? (this._folders.has(path) ? new TFolder(path) : null);
   }
 
   async read(file: TFile): Promise<string> {
@@ -335,6 +344,49 @@ export class Vault extends Events {
     this._contents.set(file.path, data);
     this.trigger("modify", file);
   }
+
+  getMarkdownFiles(): TFile[] {
+    return this.getFiles().filter((file) => file.extension === "md");
+  }
+
+  /** Folders are tracked by path only; `getAbstractFileByPath` reports them as present. */
+  _folders = new Set<string>();
+
+  async createFolder(path: string): Promise<TFolder> {
+    if (this._folders.has(path)) throw new Error(`Folder already exists: ${path}`);
+    this._folders.add(path);
+    return new TFolder(path);
+  }
+
+  async delete(file: TFile | TFolder, _force?: boolean): Promise<void> {
+    if (file instanceof TFolder) {
+      this._folders.delete(file.path);
+      return;
+    }
+    this._files.delete(file.path);
+    this._contents.delete(file.path);
+    this._binaryContents.delete(file.path);
+    this.trigger("delete", file);
+  }
+
+  async rename(file: TFile, newPath: string): Promise<void> {
+    if (this._files.has(newPath)) throw new Error(`File already exists: ${newPath}`);
+    const oldPath = file.path;
+    const content = this._contents.get(oldPath);
+    const binary = this._binaryContents.get(oldPath);
+    this._files.delete(oldPath);
+    this._contents.delete(oldPath);
+    this._binaryContents.delete(oldPath);
+    file._setPath(newPath);
+    this._files.set(newPath, file);
+    if (content !== undefined) this._contents.set(newPath, content);
+    if (binary !== undefined) this._binaryContents.set(newPath, binary);
+    this.trigger("rename", file, oldPath);
+  }
+}
+
+export class TFolder {
+  constructor(public path: string) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +421,11 @@ export class MetadataCache extends Events {
    * several files share a name; this fake just returns the first (insertion
    * order), which is enough for tests that don't rely on that tie-break.
    */
+  /** The real one shortens to the bare name when unambiguous; this fake always does, keeping the extension except for notes. */
+  fileToLinktext(file: TFile, _sourcePath: string, omitMdExtension = true): string {
+    return omitMdExtension && file.extension === "md" ? file.basename : file.name;
+  }
+
   getFirstLinkpathDest(linkpath: string, sourcePath: string): TFile | null {
     const normalized = linkpath.trim();
     if (normalized === "") return null;
@@ -410,6 +467,10 @@ export class FileManager {
    * Does not model a configurable attachment folder (the real API does) —
    * this fake just avoids colliding with an existing vault path.
    */
+  async renameFile(file: TFile, newPath: string): Promise<void> {
+    await this.vault.rename(file, newPath);
+  }
+
   async getAvailablePathForAttachment(filename: string, _sourcePath?: string): Promise<string> {
     const dotIdx = filename.lastIndexOf(".");
     const base = dotIdx > 0 ? filename.slice(0, dotIdx) : filename;
@@ -620,6 +681,8 @@ export interface RequestUrlParam {
   method?: string;
   headers?: Record<string, string>;
   body?: string | ArrayBuffer;
+  /** Whether a 400+ status rejects. Defaults to true, as in the real API. */
+  throw?: boolean;
 }
 
 export interface RequestUrlResponse {

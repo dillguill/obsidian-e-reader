@@ -1,10 +1,16 @@
 // Serialising and parsing one annotation entry, per
 // specs/001-bases-ereader/contracts/highlight-entry.md.
 //
-// The visible `==quote==` is the single source of truth for the quoted text
-// (contract rule 3): it is both what the reader sees and what re-anchoring
-// matches against, so editing the quote by hand edits the anchor. The
-// `%%…%%` comment carries only the surrounding metadata.
+// The entry is a callout whose type is the highlight's type (`> [!note]`), so
+// a CSS snippet can style each type differently. The quote line under it is
+// the single source of truth for the quoted text (contract rule 3): it is
+// both what the reader sees and what re-anchoring matches against, so editing
+// the quote by hand edits the anchor. The `%%…%%` comment carries only the
+// surrounding metadata.
+//
+// Entries written before 0.3.7 used `> [!quote] <type>` with the quote
+// wrapped in `==…==`. Those still parse, and the whole region is rewritten
+// in the new form the next time any entry in that note changes.
 //
 // A malformed entry is never rewritten or discarded (contract rule 7) — the
 // parser reports it and callers preserve the original text verbatim.
@@ -33,7 +39,9 @@ export interface MalformedEntry {
 export type ParsedEntry = { ok: true; entry: Entry } | { ok: false; malformed: MalformedEntry };
 
 const ID_RE = /^[a-z0-9-]+$/;
-const CALLOUT_RE = /^\[!([a-zA-Z0-9_-]+)\]\s*(.*)$/;
+const CALLOUT_RE = /^\[!([^\]]+)\][+-]?\s*(.*)$/;
+/** The callout type every entry used before types became callout types. */
+const LEGACY_CALLOUT = "quote";
 
 export function isValidEntryId(id: string): boolean {
   return ID_RE.test(id);
@@ -81,8 +89,8 @@ function quoteLines(text: string): string[] {
  * tables), unlike simple paragraphs where the identifier ends the line.
  */
 export function serializeEntry(entry: Entry): string {
-  const lines: string[] = [`> [!quote] ${entry.type}`];
-  if (entry.exact !== "") lines.push(`> ==${entry.exact}==`);
+  const lines: string[] = [`> [!${entry.type}]`];
+  if (entry.exact !== "") lines.push(...quoteLines(entry.exact));
   lines.push(`> %%${encodeAnchorJson(entry.anchor)}%%`);
   if (entry.comment !== "") {
     lines.push(">");
@@ -138,10 +146,14 @@ export function parseEntry(raw: string, blockId: string | null = null): ParsedEn
   const inner = lines.map(stripQuoteMarker);
   const calloutMatch = (inner[0] as string).trim().match(CALLOUT_RE);
   if (!calloutMatch) return malformed("first line is not a callout header");
-  const type = (calloutMatch[2] ?? "").trim();
+  const calloutType = (calloutMatch[1] ?? "").trim();
+  const title = (calloutMatch[2] ?? "").trim();
+  // The old form put the type in the title of a `quote` callout. A `quote`
+  // callout with no title is the new form for a type named "quote".
+  const type = calloutType.toLowerCase() === LEGACY_CALLOUT && title !== "" ? title : calloutType;
   if (type === "") return malformed("callout carries no entry type");
 
-  let exact = "";
+  const quote: string[] = [];
   let anchorJson: string | null = null;
   let commentStart = inner.length;
 
@@ -154,13 +166,14 @@ export function parseEntry(raw: string, blockId: string | null = null): ParsedEn
       commentStart = i + 1;
       break;
     }
-    if (exact === "" && line.startsWith("==") && line.endsWith("==") && line.length > 4) {
-      // First `==` to last `==`, so a quote that itself contains `==`
-      // round-trips exactly rather than being truncated at the inner marker.
-      exact = line.slice(2, -2);
-      continue;
-    }
-    return malformed("unexpected content before the anchor record");
+    quote.push(line);
+  }
+
+  let exact = quote.join(" ");
+  if (exact.startsWith("==") && exact.endsWith("==") && exact.length > 4) {
+    // The old form's highlight marks. First `==` to last `==`, so a quote
+    // that itself contains `==` round-trips rather than being truncated.
+    exact = exact.slice(2, -2);
   }
 
   if (anchorJson === null) return malformed("entry has no anchor record");

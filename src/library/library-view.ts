@@ -7,6 +7,8 @@
 
 import type { BasesEntry, BasesPropertyId, QueryController } from "obsidian";
 import { BasesView, Component, Menu, setIcon } from "obsidian";
+import type { ImportResult, ImportSource } from "../import/importer";
+import { IMPORTABLE_EXTENSIONS } from "../import/importer";
 import type { Settings } from "../settings/settings-model";
 import { READER_VIEW_TYPE, type ReaderViewState } from "../reader/reader-view";
 import { renderCard } from "./card";
@@ -40,10 +42,47 @@ export class LibraryView extends BasesView {
     controller: QueryController,
     containerEl: HTMLElement,
     private readonly getSettings: () => Settings,
+    private readonly importBook: (source: ImportSource) => Promise<ImportResult | null>,
   ) {
     super(controller);
     this.containerEl = containerEl;
     this.rootEl = containerEl.createDiv({ cls: "ereader-library" });
+    this.watchDrops();
+  }
+
+  /** EPUBs and PDFs dropped onto the library from outside the vault are imported. */
+  private watchDrops(): void {
+    const carriesFiles = (evt: DragEvent): boolean => evt.dataTransfer?.types.includes("Files") ?? false;
+    // dragenter/dragleave fire for every child crossed, so the highlight
+    // counts them rather than toggling.
+    let depth = 0;
+    this.registerDomEvent(this.containerEl, "dragenter", (evt: DragEvent) => {
+      if (!carriesFiles(evt)) return;
+      depth++;
+      this.rootEl.addClass("is-drop-target");
+    });
+    this.registerDomEvent(this.containerEl, "dragleave", () => {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) this.rootEl.removeClass("is-drop-target");
+    });
+    this.registerDomEvent(this.containerEl, "dragover", (evt: DragEvent) => {
+      if (!carriesFiles(evt)) return;
+      evt.preventDefault();
+      if (evt.dataTransfer) evt.dataTransfer.dropEffect = "copy";
+    });
+    this.registerDomEvent(this.containerEl, "drop", (evt: DragEvent) => {
+      depth = 0;
+      this.rootEl.removeClass("is-drop-target");
+      const files = Array.from(evt.dataTransfer?.files ?? []).filter((file) =>
+        IMPORTABLE_EXTENSIONS.has(file.name.split(".").pop()?.toLowerCase() ?? ""),
+      );
+      if (files.length === 0) return;
+      evt.preventDefault();
+      evt.stopPropagation();
+      void (async () => {
+        for (const file of files) await this.importBook({ kind: "external", name: file.name, data: await file.arrayBuffer() });
+      })();
+    });
   }
 
   onDataUpdated(): void {
@@ -99,8 +138,8 @@ export class LibraryView extends BasesView {
       this.renderMessage(
         "library",
         "No books here yet",
-        `A book is a note with "${marker}: ${markerValue}" and its EPUB or PDF linked in "${attachments}". ` +
-          "If you have some, check this view's filters.",
+        `Drop an EPUB or PDF here to import it. A book is a note with "${marker}: ${markerValue}" and its file ` +
+          `linked in "${attachments}"; if you have some, check this view's filters.`,
       );
       return;
     }

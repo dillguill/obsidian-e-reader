@@ -331,7 +331,13 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
   scanInbox(): void {
     const inbox = this.settings.import.inboxFolder;
     if (inbox === "") return;
-    for (const file of this.app.vault.getFiles()) this.onInboxCandidate(file);
+    // A book's own file can live in the inbox, when the inbox is also where
+    // book files are kept. Those are the library, not new arrivals, and
+    // reading them all again at every start can take a phone down.
+    const attached = this.importer.attachedPaths();
+    for (const file of this.app.vault.getFiles()) {
+      if (!attached.has(file.path)) this.onInboxCandidate(file);
+    }
   }
 
   /** Schedules an inbox file for import once it has stopped changing. */
@@ -362,7 +368,10 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     if (this.settledTimer !== null) window.clearTimeout(this.settledTimer);
     this.settledTimer = window.setTimeout(() => {
       this.settledTimer = null;
-      const files = [...this.settled.values()].filter((f) => this.app.vault.getAbstractFileByPath(f.path) === f);
+      const attached = this.importer.attachedPaths();
+      const files = [...this.settled.values()].filter(
+        (f) => this.app.vault.getAbstractFileByPath(f.path) === f && !attached.has(f.path),
+      );
       this.settled.clear();
       for (const f of files) this.inboxSkipped.add(f.path);
       const epubs = files.filter((f) => f.extension === "epub");

@@ -23,8 +23,13 @@ than whatever the book shipped with. The reader reports the book note as its
 file, so Obsidian's own Properties pane and everything else that follows the
 active file work on it unchanged.
 
-**Highlights and notes.** Select text and right-click, or arm highlight mode
-from the toolbar and simply drag. Saved highlights are painted back into the
+The left and right arrow keys and Page Up/Page Down turn the page, and **Next
+page**, **Previous page**, **Zoom in** and **Zoom out** are commands you can
+bind to any hotkey.
+
+**Highlights and notes.** Select text and a small bar opens beside it: tap a
+colour to highlight as that type, or copy the text. Right-click works too, and
+the **Highlight selection** command repeats the last type you chose. Saved highlights are painted back into the
 book in the colour of their type, and right-clicking one offers to recolour,
 copy or delete it. Each is written into the book note as a callout you can
 read, edit and link to:

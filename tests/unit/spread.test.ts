@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSpreadMode, spreadRows } from "../../src/reader/spread";
+import { adjacentRowPage, isSpreadMode, spreadRows } from "../../src/reader/spread";
 
 describe("spreadRows", () => {
   it("gives one page per row in single mode", () => {
@@ -49,5 +49,30 @@ describe("isSpreadMode", () => {
     expect(isSpreadMode("double")).toBe(false);
     expect(isSpreadMode(2)).toBe(false);
     expect(isSpreadMode(null)).toBe(false);
+  });
+});
+
+describe("adjacentRowPage", () => {
+  it("moves one page at a time in single mode", () => {
+    const rows = spreadRows(4, "single");
+    expect(adjacentRowPage(rows, 2, 1)).toBe(3);
+    expect(adjacentRowPage(rows, 2, -1)).toBe(1);
+  });
+
+  it("moves a whole spread, landing on its first page", () => {
+    const rows = spreadRows(6, "odd");
+    expect(adjacentRowPage(rows, 1, 1)).toBe(2);
+    expect(adjacentRowPage(rows, 3, 1)).toBe(4);
+    expect(adjacentRowPage(rows, 5, -1)).toBe(2);
+  });
+
+  it("stops at either end of the document", () => {
+    const rows = spreadRows(4, "even");
+    expect(adjacentRowPage(rows, 4, 1)).toBeNull();
+    expect(adjacentRowPage(rows, 1, -1)).toBeNull();
+  });
+
+  it("gives nothing for a page outside the document", () => {
+    expect(adjacentRowPage(spreadRows(4, "single"), 9, 1)).toBeNull();
   });
 });

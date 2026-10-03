@@ -60,9 +60,6 @@ describe("toolbarState", () => {
   const base = {
     pages: { current: 12, total: 340, unit: "page" as const },
     scale: 1,
-    highlightMode: false,
-    activeType: "idea",
-    activeColor: "#ffd76e",
     bookmarked: false,
   };
 
@@ -98,22 +95,8 @@ describe("toolbarState", () => {
     expect(toolbarState({ ...base, pages: null }).pageTotal).toBe(0);
   });
 
-  it("passes the highlight mode and bookmark toggles through", () => {
-    const state = toolbarState({ ...base, highlightMode: true, bookmarked: true });
-    expect(state.highlightMode).toBe(true);
-    expect(state.bookmarked).toBe(true);
-  });
-
-  it("carries the armed type and its colour, for the button and the picker", () => {
-    const state = toolbarState({ ...base, activeType: "question", activeColor: "#7ec4f5" });
-    expect(state.activeType).toBe("question");
-    expect(state.activeColor).toBe("#7ec4f5");
-  });
-
-  // Every type can be deleted from the settings, and highlight mode then has
-  // nothing to write; the button has to say so rather than arm into nothing.
-  it("cannot be in highlight mode with no type to write", () => {
-    const state = toolbarState({ ...base, highlightMode: true, activeType: "", activeColor: "" });
-    expect(state.highlightMode).toBe(false);
+  it("passes the bookmark toggle through", () => {
+    expect(toolbarState({ ...base, bookmarked: true }).bookmarked).toBe(true);
+    expect(toolbarState(base).bookmarked).toBe(false);
   });
 });

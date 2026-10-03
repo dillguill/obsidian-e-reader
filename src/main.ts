@@ -191,6 +191,25 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       },
     });
 
+    // No default hotkeys: the arrow keys already turn pages inside the reader,
+    // and these are here so a page turn or zoom can be bound to anything else.
+    const readerCommand = (id: string, name: string, run: (view: ReaderView) => Promise<void>): void => {
+      this.addCommand({
+        id,
+        name,
+        checkCallback: (checking) => {
+          const view = this.app.workspace.getActiveViewOfType(ReaderView);
+          if (!view) return false;
+          if (!checking) void run(view);
+          return true;
+        },
+      });
+    };
+    readerCommand("next-page", "Next page", (view) => view.turnPage(1));
+    readerCommand("previous-page", "Previous page", (view) => view.turnPage(-1));
+    readerCommand("zoom-in", "Zoom in", (view) => view.zoom(1));
+    readerCommand("zoom-out", "Zoom out", (view) => view.zoom(-1));
+
     // Closing Obsidian's outline is a single action taken when the vault
     // opens, never a watcher that keeps re-closing it: there is no supported
     // way to disable a core plugin (`app.internalPlugins` is not public API),

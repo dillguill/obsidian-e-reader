@@ -1,6 +1,6 @@
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
-import { extractIsbn, opfPathFromContainer, parseOpf, readEpubMetadata } from "../../src/import/epub-metadata";
+import { extractIsbn, opfPathFromContainer, parseOpf, readEpubImages, readEpubMetadata } from "../../src/import/epub-metadata";
 import { decodeEntities, findElements } from "../../src/import/xml";
 
 const CONTAINER = `<?xml version="1.0"?>
@@ -105,5 +105,22 @@ describe("EPUB package metadata", () => {
     zip.file("mimetype", "application/epub+zip");
     const meta = await readEpubMetadata(await zip.generateAsync({ type: "arraybuffer" }), "My Book");
     expect(meta).toEqual({ title: "My Book", authors: [], subjects: [] });
+  });
+});
+
+describe("pictures inside an EPUB", () => {
+  it("offers the larger pictures, biggest first, leaving out the declared cover and small ones", async () => {
+    const zip = new JSZip();
+    zip.file("META-INF/container.xml", CONTAINER);
+    zip.file("OEBPS/content.opf", OPF3);
+    zip.file("OEBPS/images/cover art.jpg", new Uint8Array(20000));
+    zip.file("OEBPS/images/plate.png", new Uint8Array(30000));
+    zip.file("OEBPS/images/map.jpg", new Uint8Array(10000));
+    zip.file("OEBPS/images/dot.gif", new Uint8Array(100));
+    const images = await readEpubImages(await zip.generateAsync({ type: "arraybuffer" }));
+    expect(images.map((image) => [image.extension, image.data.byteLength])).toEqual([
+      ["png", 30000],
+      ["jpg", 10000],
+    ]);
   });
 });

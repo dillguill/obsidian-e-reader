@@ -9,7 +9,8 @@ import { ReaderEvents } from "./core/reader-events";
 import { RESERVED_ENTRY_TYPE } from "./core/types";
 import { BookImporter, IMPORTABLE_EXTENSIONS, type ImportResult, type ImportSource } from "./import/importer";
 import { type WishlistPick, chooseBookFile, searchForWishlist } from "./import/modals";
-import { readEpubMetadata } from "./import/epub-metadata";
+import { readEpubImages, readEpubMetadata } from "./import/epub-metadata";
+import type { BookCover } from "./import/metadata";
 import { coverChoices, coverImageUrl, fetchCover, findBook } from "./import/open-library";
 import { type CoverOption, type DetailOption, pickCover, pickDetails } from "./import/review-modals";
 import { detailRows, groupDuplicates, isInFolder, keepDetails } from "./import/plan";
@@ -405,6 +406,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     if (!(file instanceof TFile) || !IMPORTABLE_EXTENSIONS.has(file.extension)) return;
     if (!isInFolder(file.path, this.settings.import.inboxFolder) || this.importer.wrote(file.path)) return;
     if (this.inboxSkipped.has(file.path)) return;
+    if (file.extension === "pdf" && this.settings.import.ignoredPdfs.includes(file.path)) return;
     const pending = this.inboxTimers.get(file.path);
     if (pending !== undefined) window.clearTimeout(pending);
     const timer = window.setTimeout(() => {
@@ -631,17 +633,23 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     const options = (async (): Promise<CoverOption[]> => {
       const found: CoverOption[] = [];
       const file = resolveBookAttachment(this.app, note, this.settings.properties.attachments);
-      if (file?.extension === "epub") {
-        try {
-          const { cover } = await readEpubMetadata(await this.app.vault.readBinary(file), note.basename);
-          if (cover) {
-            const url = URL.createObjectURL(new Blob([cover.data]));
-            urls.push(url);
-            found.push({ src: url, label: "The cover inside the book", load: async () => cover });
-          }
-        } catch (error) {
-          console.debug("[e-reader] could not read the book's own cover", error);
+      const offer = (cover: BookCover, label: string): void => {
+        const url = URL.createObjectURL(new Blob([cover.data]));
+        urls.push(url);
+        found.push({ src: url, label, load: async () => cover });
+      };
+      try {
+        if (file?.extension === "epub") {
+          const data = await this.app.vault.readBinary(file);
+          const { cover } = await readEpubMetadata(data, note.basename);
+          if (cover) offer(cover, "The book's own cover");
+          for (const image of await readEpubImages(data)) offer(image, "A picture inside the book");
+        } else if (file?.extension === "pdf") {
+          const { cover } = await readPdfMetadata(await this.app.vault.readBinary(file));
+          if (cover) offer({ data: cover, extension: "jpg" }, "The first page");
         }
+      } catch (error) {
+        console.debug("[e-reader] could not read covers from the book file", error);
       }
       const match = await findBook(identity);
       const ids = await coverChoices(match?.coverId ?? null, match?.workKey ?? null);
@@ -802,6 +810,8 @@ function remoteCover(id: number): CoverOption {
   return { src: coverImageUrl(id, "M"), label: "Open Library cover", load: () => fetchCover(coverImageUrl(id, "L")) };
 }
 
+const PDF_PAGE_SIZE = 50;
+
 /** Asks which of the PDFs that arrived in the inbox are books. */
 class InboxPdfModal extends Modal {
   private readonly chosen = new Set<TFile>();
@@ -819,47 +829,60 @@ class InboxPdfModal extends Modal {
     const { contentEl } = this;
     this.setTitle(this.files.length === 1 ? "Import this PDF as a book?" : `Import these ${this.files.length} PDFs as books?`);
     contentEl.createEl("p", {
-      text: "PDFs in your inbox are only imported when you say so. Tick the ones that are books.",
+      text:
+        "PDFs in your inbox are only imported when you say so. Tick the ones that are books; " +
+        "the rest are not asked about again. Add one later with “Import as book” in its file menu.",
       cls: "setting-item-description",
     });
-    for (const file of this.files) {
-      new Setting(contentEl)
-        .setName(file.basename)
-        .setDesc(file.parent?.path ?? "")
-        .addToggle((toggle) =>
-          toggle.setValue(false).onChange((on) => {
-            if (on) this.chosen.add(file);
-            else this.chosen.delete(file);
-          }),
-        );
-    }
-    new Setting(contentEl)
-      .addButton((button) =>
-        button.setButtonText("Never ask about the others").onClick(() => {
-          this.finish(
-            [...this.chosen],
-            this.files.filter((file) => !this.chosen.has(file)),
-          );
+    const list = contentEl.createDiv();
+    const footer = contentEl.createDiv();
+    // Hundreds of rows at once can take a phone down, so they come a page at a time.
+    let shown = 0;
+    const more = new Setting(footer).addButton((button) =>
+      button.setButtonText("Show more").onClick(() => showPage()),
+    );
+    const showPage = (): void => {
+      const end = Math.min(this.files.length, shown + PDF_PAGE_SIZE);
+      for (; shown < end; shown++) {
+        const file = this.files[shown];
+        if (file) this.renderRow(list, file);
+      }
+      more.settingEl.toggle(shown < this.files.length);
+      more.setName(shown < this.files.length ? `Showing ${shown} of ${this.files.length}` : "");
+    };
+    showPage();
+    new Setting(footer).addButton((button) =>
+      button
+        .setButtonText("Import")
+        .setCta()
+        .onClick(() => this.finish()),
+    );
+  }
+
+  private renderRow(list: HTMLElement, file: TFile): void {
+    new Setting(list)
+      .setName(file.basename)
+      .setDesc(file.parent?.path ?? "")
+      .addToggle((toggle) =>
+        toggle.setValue(false).onChange((on) => {
+          if (on) this.chosen.add(file);
+          else this.chosen.delete(file);
         }),
-      )
-      .addButton((button) =>
-        button
-          .setButtonText("Import")
-          .setCta()
-          .onClick(() => this.finish([...this.chosen], [])),
       );
   }
 
   override onClose(): void {
     this.contentEl.empty();
-    // Closed without a choice: nothing is imported, and these are asked
-    // about again the next time Obsidian starts.
-    if (!this.settled) this.onDone([], []);
+    // Closing counts as an answer too: whatever is ticked is imported and
+    // the rest are not asked about again, so the same list cannot come
+    // back at every start.
+    if (!this.settled) this.finish();
   }
 
-  private finish(chosen: TFile[], ignored: TFile[]): void {
+  private finish(): void {
+    if (this.settled) return;
     this.settled = true;
-    this.onDone(chosen, ignored);
+    this.onDone([...this.chosen], this.files.filter((file) => !this.chosen.has(file)));
     this.close();
   }
 }

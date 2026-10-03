@@ -205,7 +205,7 @@ export class EReaderSettingTab extends PluginSettingTab {
     );
     folderSetting(
       "Inbox folder",
-      "Any EPUB or PDF that lands here is imported automatically. Empty turns this off.",
+      "EPUBs that land here are imported automatically; for PDFs you are asked which are books. Empty turns this off.",
       "Off",
       () => settings.inboxFolder,
       (value) => (settings.inboxFolder = value),

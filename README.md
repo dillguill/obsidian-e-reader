@@ -16,8 +16,10 @@ reader writes, so a plain `.base` shows them without any setup. Books without
 a cover get one drawn from their title, and right-clicking or long-pressing a
 card opens it, opens its note, or marks it finished or unread.
 
-**Import.** Drop an EPUB or PDF onto the Library, set an inbox folder that
-imports anything landing in it, or run "Import a book from the vault". The
+**Import.** Drop an EPUB or PDF onto the Library, set an inbox folder, or run
+"Import a book from the vault". EPUBs landing in the inbox are imported
+straight away; PDFs, which are as often papers or receipts as books, wait
+until you tick the ones that are books. The
 title, author, language, cover and more are read from the file itself, and
 Open Library can fill in what the file does not say (ISBN, page count,
 subjects, a cover). The note goes to your book notes folder (`Library` by

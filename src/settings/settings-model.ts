@@ -81,6 +81,12 @@ export interface ImportSettings {
   inboxFolder: string;
   /** Fill fields the file does not carry from Open Library. */
   lookUpMetadata: boolean;
+  /**
+   * PDFs in the inbox the reader said are not books. A PDF is as likely to be
+   * a receipt or a paper as a book, so the inbox asks before importing one,
+   * and these are not asked about again.
+   */
+  ignoredPdfs: string[];
 }
 
 /** Toolbar state that persists across closing and reopening a book. */
@@ -187,7 +193,7 @@ export const DEFAULT_SETTINGS: Settings = {
   ],
   readers: { epub: "plugin", pdf: "plugin" },
   panes: { outline: true, highlights: true, hideNativeOutline: false },
-  import: { notesFolder: "Library", filesFolder: "", inboxFolder: "", lookUpMetadata: true },
+  import: { notesFolder: "Library", filesFolder: "", inboxFolder: "", lookUpMetadata: true, ignoredPdfs: [] },
   reader: {
     pdfScale: 1,
     pdfFit: "width",
@@ -303,6 +309,9 @@ function mergeImport(saved: Record<string, unknown>): ImportSettings {
     filesFolder: mergeFolder(from["filesFolder"], defaults.filesFolder),
     inboxFolder: mergeFolder(from["inboxFolder"], defaults.inboxFolder),
     lookUpMetadata: mergeBoolean(from["lookUpMetadata"], defaults.lookUpMetadata),
+    ignoredPdfs: Array.isArray(from["ignoredPdfs"])
+      ? from["ignoredPdfs"].filter((path): path is string => typeof path === "string")
+      : [],
   };
 }
 

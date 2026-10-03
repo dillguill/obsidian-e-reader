@@ -51,3 +51,20 @@ export function writeRegion(noteText: string, body: string, heading = DEFAULT_RE
   const separator = before === "" ? "" : "\n\n";
   return `${before}${separator}${heading}\n${block}\n`;
 }
+
+/**
+ * Returns `noteText` without the region, and without the default heading
+ * when it sits directly above the region with nothing under it but the
+ * region. Used when every entry has moved out of the note.
+ */
+export function removeRegion(noteText: string): string {
+  const region = findRegion(noteText);
+  if (!region) return noteText;
+  let start = region.start;
+  const headingLine = `${DEFAULT_REGION_HEADING}\n`;
+  if (noteText.slice(0, start).endsWith(headingLine)) start -= headingLine.length;
+  const before = noteText.slice(0, start).replace(/\s+$/, "");
+  const after = noteText.slice(region.end).replace(/^\s+/, "");
+  const joined = [before, after].filter((part) => part !== "").join("\n\n");
+  return joined === "" ? "" : `${joined}\n`;
+}

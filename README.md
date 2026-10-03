@@ -56,7 +56,7 @@ copy or delete it. Each is written into the book note as a callout you can
 read, edit and link to:
 
 ```markdown
-> [!idea] Idea · [p. 35](obsidian://e-reader?vault=…&file=…&id=h-a1b2c3)
+> [!idea] Idea · [p. 35](obsidian://e-reader?vault=…&id=h-a1b2c3)
 > the spice must flow
 > %%{"id":"h-a1b2c3","created":"2026-08-20T10:04:00Z"}%%
 >
@@ -67,12 +67,31 @@ read, edit and link to:
 
 The callout's type is the highlight's type, so a CSS snippet can give each type
 its own callout style, and the link in its title opens the book at that
-highlight. **Highlight format** in settings can write a plain `> quote`
-instead, or give each highlight a note of its own with properties you name
-(book, type, page, section, created), linked from the book note so Bases can
-list and group them. Highlights already written keep their format. The quote is the anchor as well as the display, so
-editing it by hand edits the anchor. Everything outside the plugin's `%%e-reader:begin/end%%` markers
-is yours and is never touched. Nothing lives in a sidecar database.
+highlight. The quote is the anchor as well as the display, so editing it by
+hand edits the anchor. Everything outside the plugin's `%%e-reader:begin/end%%`
+markers is yours and is never touched. Nothing lives in a sidecar database.
+
+**Where highlights live.** Settings → Highlights picks one of two places:
+
+- **The book note** (the default), as a callout or a plain `> quote`.
+- **Notes**: each highlight gets a note of its own, with properties you name
+  (book, type, page, section, created, anchor). The body is just the quote, the
+  page link and your comment. The book note gets one embedded Bases view,
+  `![[Highlights.base#This book]]`, listing its highlights, and nothing else.
+
+Both are always read, so switching never loses anything. When you switch, the
+plugin offers to move existing highlights across; the commands **Move all
+highlights into highlight notes** and **Move all highlights into book notes**
+do the same later.
+
+To quote a highlight elsewhere, use **Copy link** or **Copy embed** from its
+menu in the reader or the Highlights pane: an embed shows the quote inline and
+links back to where it lives. **Open in book** (a command, and in a highlight
+note's file menu) opens the reader at that highlight. **Rename a highlight
+type** renames it in settings and in every book.
+
+**Bookmarks** are a `bookmarks` list property on the book note, one position
+per item.
 
 **Outline.** The book's own table of contents, nested, with the current
 section tracking as you read. It falls back to a note's markdown headings when

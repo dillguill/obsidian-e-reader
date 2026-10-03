@@ -114,9 +114,14 @@ function parseYamlScalar(raw: string): unknown {
   if (s === "false") return false;
   if (s === "null" || s === "~") return null;
   if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-    return s.slice(1, -1);
+  if (s.startsWith('"') && s.endsWith('"')) {
+    try {
+      return JSON.parse(s) as unknown;
+    } catch {
+      return s.slice(1, -1);
+    }
   }
+  if (s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1).replace(/''/g, "'");
   if (s.startsWith("[") && s.endsWith("]")) {
     const inner = s.slice(1, -1).trim();
     if (inner === "") return [];
@@ -513,6 +518,12 @@ export class FileManager {
     const newContent =
       Object.keys(frontmatter).length > 0 ? `---\n${stringifyFrontmatter(frontmatter)}\n---\n${body}` : body;
     await this.vault.modify(file, newContent);
+  }
+
+  /** Always a wikilink, as with Obsidian's default "Use [[Wikilinks]]". */
+  generateMarkdownLink(file: TFile, _sourcePath: string, subpath = "", alias = ""): string {
+    const name = file.extension === "md" ? file.basename : file.name;
+    return `[[${name}${subpath}${alias === "" ? "" : `|${alias}`}]]`;
   }
 
   /**

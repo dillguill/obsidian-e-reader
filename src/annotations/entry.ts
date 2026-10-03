@@ -35,12 +35,14 @@ export interface Entry {
   anchor: AnchorRecord;
   /** How the entry is written. Absent means a callout. Kept per entry so changing the setting never rewrites old ones. */
   format?: EntryFormat;
+  /** Path of the note the entry is written in, when that is not the book note: a highlight note's own path. */
+  source?: string;
 }
 
 /**
  * Where an entry lives and in what shape. `callout` and `quote` are written
  * into the book note's region; `note` entries are notes of their own
- * (highlight-notes.ts) that the region only links to.
+ * (highlight-notes.ts).
  */
 export type EntryFormat = "callout" | "quote" | "note";
 
@@ -108,7 +110,7 @@ function encodeAnchorJson(anchor: AnchorRecord, type?: string): string {
   return JSON.stringify(json).replace(/%/g, "\\u0025");
 }
 
-function quoteLines(text: string): string[] {
+export function quoteLines(text: string): string[] {
   return text.split("\n").map((line) => (line === "" ? ">" : `> ${line}`));
 }
 

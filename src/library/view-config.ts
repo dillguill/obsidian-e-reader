@@ -19,7 +19,6 @@ export interface LibraryViewConfig {
   cardSize: number;
   /** Feeds BOTH overlays: the progress bar and the badge derived from it. */
   progressProperty: BasesPropertyId | null;
-  progressDisplay: "bar" | "percent";
 }
 
 function positiveNumber(value: unknown, fallback: number): number {
@@ -49,6 +48,5 @@ export function readLibraryViewConfig(config: BasesViewConfig, properties: Overl
     imageAspectRatio: positiveNumber(config.get("imageAspectRatio"), DEFAULT_ASPECT_RATIO),
     cardSize: positiveNumber(config.get("cardSize"), DEFAULT_CARD_SIZE),
     progressProperty: config.getAsPropertyId("progressProperty") ?? noteProperty(properties.progress),
-    progressDisplay: config.get("progressDisplay") === "percent" ? "percent" : "bar",
   };
 }

@@ -71,56 +71,153 @@
   color: var(--text-muted);
 }
 
-/* Overlays */
+/* A card is pressed, not read: no text selection or iOS callout on a long
+   press, which opens the card's menu instead. */
+.ereader-card {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.ereader-cover {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+/* A cover for a book that has none. The hue comes from the title. */
+.ereader-cover__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  padding: 14% 12%;
+  background: linear-gradient(
+    160deg,
+    hsl(var(--ereader-cover-hue, 220), 32%, 42%),
+    hsl(calc(var(--ereader-cover-hue, 220) + 24), 38%, 24%)
+  );
+}
+
+.ereader-cover__placeholder::before {
+  /* A spine, so it reads as a book rather than a swatch. */
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 6%;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.ereader-cover__placeholder-title {
+  font-family: var(--font-text);
+  font-size: calc(var(--ereader-card-w, 200px) * 0.085);
+  font-weight: var(--font-semibold);
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.92);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+.ereader-cover.has-image .ereader-cover__placeholder {
+  display: none;
+}
+
+/* Overlays. Covers can be any colour, so both sit on their own dark,
+   translucent ground rather than relying on the page's contrast. */
 .ereader-badge {
   position: absolute;
   top: var(--size-4-2);
   right: var(--size-4-2);
   display: flex;
-  padding: 3px;
-  border-radius: var(--radius-s);
-  background: var(--background-primary);
-  color: var(--text-muted);
-  box-shadow: var(--shadow-s);
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
 }
 
-.ereader-badge.is-reading { color: var(--text-accent); }
-.ereader-badge.is-finished { color: var(--color-green); }
+.ereader-badge .svg-icon {
+  width: 13px;
+  height: 13px;
+  stroke-width: 3;
+}
 
-/* The bar sits on top of a cover, which can be any colour at all, so it
-   cannot rely on the page's own contrast the way ordinary UI can. Hence a
-   darkened track to sit in, a little more height than a hairline, and a glow
-   that lifts the fill off a busy image. Override `--ereader-progress-fill`
-   in a snippet to recolour it. */
+/* In progress: a fade along the bottom carrying the percentage and a thin
+   bar. Override `--ereader-progress-fill` in a snippet to recolour the bar. */
 .ereader-progress {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  height: 6px;
-  background: rgba(0, 0, 0, 0.5);
-  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.25);
+  padding: 28px var(--size-4-2) var(--size-4-2);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.72));
+  pointer-events: none;
+}
+
+.ereader-progress__label {
+  margin-bottom: 5px;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #fff;
+}
+
+.ereader-progress__track {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.25);
+  overflow: hidden;
 }
 
 .ereader-progress__fill {
   height: 100%;
-  background: var(--ereader-progress-fill, var(--color-accent, var(--interactive-accent)));
-  box-shadow: 0 0 6px var(--ereader-progress-fill, var(--color-accent, var(--interactive-accent)));
+  border-radius: 2px;
+  background: var(--ereader-progress-fill, #fff);
 }
 
-.ereader-progress.is-percent {
-  height: auto;
-  padding: 2px var(--size-4-2);
-  font-size: var(--font-ui-smaller);
+/* Empty and error states. */
+.ereader-library__message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--size-4-2);
+  max-width: 360px;
+  margin: 15vh auto 0;
+  text-align: center;
+}
+
+.ereader-library__message-icon {
+  color: var(--text-faint);
+}
+
+.ereader-library__message-icon .svg-icon {
+  width: 36px;
+  height: 36px;
+}
+
+.ereader-library__message-title {
+  font-size: var(--font-ui-medium);
   font-weight: var(--font-semibold);
-  color: #fff;
-  background: rgba(0, 0, 0, 0.6);
-  text-align: right;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  color: var(--text-normal);
+}
+
+.ereader-library__message-detail {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  line-height: var(--line-height-normal);
 }
 
 /* Reader view */
 .ereader-reader {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -181,22 +278,72 @@
   pointer-events: none;
 }
 
-/* Armed highlight mode reads off the button in the colour it will write, so
-   it is obvious which type the next drag becomes. */
+/* The bookmark button, filled while the page is bookmarked. */
 .ereader-toolbar__button.is-active {
-  color: var(--ereader-active-hl, var(--text-accent));
+  color: var(--text-accent);
 }
 
-/* Colour chip beside a type name in the highlight-type picker. MenuItem
-   exposes no DOM element, so this rides in on setTitle's fragment form. */
-.ereader-toolbar__swatch {
-  display: inline-block;
-  width: 0.8em;
-  height: 0.8em;
-  margin-inline-end: var(--size-4-2);
-  border-radius: var(--radius-s);
-  vertical-align: baseline;
+/* Selection popup: a swatch per highlight type, then Copy. Positioned in JS
+   against `.ereader-reader`, which is why that is `position: relative`. */
+.ereader-popup {
+  position: absolute;
+  z-index: var(--layer-popover);
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-1) var(--size-4-2);
+  background: var(--background-primary);
+  border: var(--border-width) solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+}
+
+/* `button` so each swatch is focusable and announced; the theme's button
+   chrome is taken off so only the colour shows. */
+.ereader-popup__swatch {
+  width: 22px;
+  height: 22px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
   box-shadow: inset 0 0 0 1px var(--background-modifier-border);
+  cursor: pointer;
+  transition: transform 80ms ease;
+}
+
+.ereader-popup__swatch:hover {
+  transform: scale(1.12);
+}
+
+.ereader-popup__swatch:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.ereader-popup__divider {
+  width: var(--border-width);
+  height: var(--icon-size);
+  background-color: var(--background-modifier-border);
+}
+
+/* Docked along the bottom of the reader on a touchscreen, where the
+   platform's own selection menu owns the space beside the selection. */
+.ereader-popup.is-docked {
+  left: 50%;
+  top: auto;
+  bottom: calc(var(--size-4-4) + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  max-width: calc(100% - 2 * var(--size-4-4));
+  overflow-x: auto;
+  padding: var(--size-4-2) var(--size-4-3);
+  box-shadow: var(--shadow-l);
+}
+
+/* A fingertip needs a bigger target than a pointer. */
+.is-mobile .ereader-popup__swatch {
+  width: 32px;
+  height: 32px;
 }
 
 .ereader-reader__empty {

@@ -219,8 +219,9 @@ export class EReaderSettingTab extends PluginSettingTab {
               return;
             }
             if (trimmed === "") return;
-            // A rename has to carry the active choice with it, or the reader's
-            // highlight mode would silently fall back to the first type.
+            // A rename has to carry the active choice with it, or the
+            // "Highlight selection" command would silently fall back to the
+            // first type.
             if (this.host.settings.reader.activeAnnotationType === type.name) {
               this.host.settings.reader.activeAnnotationType = trimmed;
             }

@@ -78,6 +78,8 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       progress: DEFAULT_SETTINGS.properties.progress,
       lastRead: DEFAULT_SETTINGS.properties.lastRead,
       furthestRead: DEFAULT_SETTINGS.properties.furthestRead,
+      readLater: DEFAULT_SETTINGS.properties.readLater,
+      bookmarks: DEFAULT_SETTINGS.properties.bookmarks,
     });
   });
 
@@ -148,6 +150,8 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         progress: "percent",
         lastRead: "last-position",
         furthestRead: "furthest-position",
+        readLater: "queued",
+        bookmarks: "marks",
       },
       annotationTypes: [
         { name: "idea", color: "#111111" },
@@ -156,6 +160,12 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       readers: { epub: "plugin", pdf: "default" },
       panes: { outline: false, highlights: true, hideNativeOutline: true },
       import: { notesFolder: "Books", filesFolder: "Books/files", inboxFolder: "Inbox", lookUpMetadata: false, ignoredPdfs: ["Inbox/receipt.pdf"] },
+      highlights: {
+        template: "Templates/Highlight.md",
+        folder: "Notes/Highlights",
+        subfolderPerBook: false,
+        properties: { book: "source", type: "kind", section: "part", page: "p", created: "made" },
+      },
       reader: {
         pdfScale: 1.25,
         pdfFit: "none",
@@ -364,5 +374,10 @@ describe("pdf fit mode", () => {
   // the fit default, which is what makes an old vault stop overflowing.
   it("gives settings saved without a fit the default one", () => {
     expect(mergeSettings({ reader: { pdfScale: 1 } }).reader.pdfFit).toBe("width");
+  });
+
+  it("drops the highlight placement settings earlier betas had", () => {
+    const { highlights } = mergeSettings({ highlights: { format: "note", mode: "notes", style: "quote", pageLinks: false } });
+    expect(highlights).toEqual(DEFAULT_SETTINGS.highlights);
   });
 });

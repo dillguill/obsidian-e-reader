@@ -27,6 +27,14 @@ default) and the file to wherever Obsidian puts attachments, or a folder you
 choose. A book already in the library is never imported twice, and a failed
 import leaves nothing behind.
 
+**Wishlist and read later.** "Add a book to the wishlist" searches Open
+Library and saves a book note with its details and cover but no file. In the
+library it shows faded and labelled *Wishlist*; opening it offers **Add
+file…**, and importing the book later (by drop, inbox or command) fills that
+same note instead of making a second one. **Read later** in a card's menu
+ticks a `read_later` property and puts a bookmark on the cover; filter a
+Bases view on it for a reading queue.
+
 **Reader.** EPUB and PDF, both remembering where you were, with a toolbar
 shaped like Obsidian's own PDF viewer: zoom or text size, a display menu, and
 a page box you can type into. PDFs offer fit-to-width, fit-to-height, two-page
@@ -50,7 +58,8 @@ read, edit and link to:
 ```markdown
 > [!idea]
 > the spice must flow
-> %%{"id":"h-a1b2c3","created":"2026-08-20T10:04:00Z"}%%
+> – [Dune, Book One, p. 35](obsidian://e-reader?vault=…&id=h-a1b2c3)
+> %%{"id":"h-a1b2c3","section":"Book One","created":"2026-08-20T10:04:00Z"}%%
 >
 > Worth comparing to the guild's monopoly argument.
 
@@ -58,9 +67,31 @@ read, edit and link to:
 ```
 
 The callout's type is the highlight's type, so a CSS snippet can give each type
-its own callout style. The quote is the anchor as well as the display, so
-editing it by hand edits the anchor. Everything outside the plugin's `%%e-reader:begin/end%%` markers
-is yours and is never touched. Nothing lives in a sidecar database.
+its own callout style, and the source line under the quote opens the book at that
+highlight. The quote is the anchor as well as the display, so editing it by
+hand edits the anchor. Everything outside the plugin's `%%e-reader:begin/end%%`
+markers is yours and is never touched. Nothing lives in a sidecar database.
+
+**Using a highlight elsewhere.** The book note is the one place highlights
+are kept. From a highlight's menu, in the reader or the Highlights pane:
+
+- **Copy as quote** or **Copy as callout** copies the quote with its source
+  line and a `[[Book#^id|View in book note]]` beside it, then your comment.
+- **Copy link** copies `[[Book#^id]]`.
+- **Export as note** creates a note of its own, named after the quote's
+  opening words, with book, type, chapter, page and created properties (names and
+  folder in settings). Its body is the quote copy by default; set a
+  **Template** in settings to lay it out yourself with `{{highlight}}`,
+  `{{quote}}`, `{{comment}}`, `{{link}}`, `{{source}}`, `{{book}}`,
+  `{{chapter}}`, `{{page}}`, `{{type}}` and `{{created}}`. It is a starting
+  point for your own thoughts, not a second copy the plugin keeps in sync.
+
+**Open in book** (a command, and in an exported note's file menu) opens the
+reader at that highlight. **Rename a highlight type** renames it in settings
+and in every book.
+
+**Bookmarks** are a `bookmarks` list property on the book note, one position
+per item.
 
 **Outline.** The book's own table of contents, nested, with the current
 section tracking as you read. It falls back to a note's markdown headings when
@@ -99,9 +130,12 @@ marker, and both the property name and the value are configurable.
 Then create a base, add a view, and choose **Library** as its type. Clicking a
 cover opens the book.
 
-The reader writes back only `reading_progress` (0-100) and `reading_position`
-(where you left off), and only while you are reading. Both names are
-configurable in settings, along with the properties the plugin reads and the
+The reader writes back only `reading_progress` (0-100), `reading_position`
+(where you left off) and `furthest_position` (the furthest you have read,
+which only moves forward), and only while you are reading. A book opens where
+you left off; if you read further elsewhere, for example on another device,
+a bar offers to jump there. **Mark as unread** on a library card clears all
+three. The names are configurable in settings, along with the properties the plugin reads and the
 highlight types and their colours.
 
 ## Building

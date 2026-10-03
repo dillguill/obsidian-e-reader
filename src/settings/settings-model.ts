@@ -35,6 +35,10 @@ export interface PropertyNames {
   progress: string;
   lastRead: string;
   furthestRead: string;
+  /** Checkbox marking a book to read later. Written from the library's card menu. */
+  readLater: string;
+  /** List of bookmarked positions (locators), written by the reader's bookmark button. */
+  bookmarks: string;
 }
 
 /**
@@ -66,6 +70,32 @@ export interface PaneSettings {
    * one-shot `detachLeavesOfType`, never a watcher that re-applies itself.
    */
   hideNativeOutline: boolean;
+}
+
+/** The properties an exported highlight note carries, by the names the reader chose. */
+export interface HighlightNoteProperties {
+  /** Link to the book note. */
+  book: string;
+  type: string;
+  /** The chapter or section, from the book's table of contents. */
+  section: string;
+  page: string;
+  created: string;
+}
+
+/**
+ * Highlights always live in the book note (src/annotations/store.ts); these
+ * settings only shape a highlight exported as a note of its own, which
+ * embeds the highlight rather than copying it.
+ */
+export interface HighlightSettings {
+  /** A note whose text, with `{{placeholders}}` filled in, becomes an exported note's body. Empty uses the built-in layout. */
+  template: string;
+  /** Where exported highlight notes go. Empty means the vault root. */
+  folder: string;
+  /** Put each book's exported notes in a subfolder named after the book. */
+  subfolderPerBook: boolean;
+  properties: HighlightNoteProperties;
 }
 
 /** Where an imported book's note and files go (see src/import/importer.ts). */
@@ -153,6 +183,7 @@ export interface Settings {
   readers: ReaderChoices;
   panes: PaneSettings;
   import: ImportSettings;
+  highlights: HighlightSettings;
   reader: ReaderPreferences;
 }
 
@@ -185,6 +216,8 @@ export const DEFAULT_SETTINGS: Settings = {
     progress: "reading_progress",
     lastRead: "reading_position",
     furthestRead: "furthest_position",
+    readLater: "read_later",
+    bookmarks: "bookmarks",
   },
   annotationTypes: [
     { name: "idea", color: "#ffd76e" },
@@ -194,6 +227,12 @@ export const DEFAULT_SETTINGS: Settings = {
   readers: { epub: "plugin", pdf: "plugin" },
   panes: { outline: true, highlights: true, hideNativeOutline: false },
   import: { notesFolder: "Library", filesFolder: "", inboxFolder: "", lookUpMetadata: true, ignoredPdfs: [] },
+  highlights: {
+    template: "",
+    folder: "Highlights",
+    subfolderPerBook: true,
+    properties: { book: "book", type: "highlight", section: "chapter", page: "page", created: "created" },
+  },
   reader: {
     pdfScale: 1,
     pdfFit: "width",
@@ -315,6 +354,23 @@ function mergeImport(saved: Record<string, unknown>): ImportSettings {
   };
 }
 
+function mergeHighlights(saved: Record<string, unknown>): HighlightSettings {
+  const from = group(saved, "highlights");
+  const defaults = DEFAULT_SETTINGS.highlights;
+  const savedProperties = isRecord(from["properties"]) ? from["properties"] : {};
+  const properties = { ...defaults.properties };
+  for (const key of Object.keys(properties) as (keyof HighlightNoteProperties)[]) {
+    const value = savedProperties[key];
+    if (typeof value === "string" && value.trim() !== "") properties[key] = value.trim();
+  }
+  return {
+    template: typeof from["template"] === "string" ? from["template"].trim() : defaults.template,
+    folder: mergeFolder(from["folder"], defaults.folder),
+    subfolderPerBook: mergeBoolean(from["subfolderPerBook"], defaults.subfolderPerBook),
+    properties,
+  };
+}
+
 /** A saved scale is clamped rather than rejected — a stale value is still a usable one. */
 function mergeScale(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? clampScale(value) : fallback;
@@ -354,6 +410,7 @@ export function mergeSettings(saved: unknown): Settings {
     // The OPDS catalog was dropped; its old address is not carried forward.
     catalog: _catalog,
     import: _import,
+    highlights: _highlights,
     reader: _reader,
     ...rest
   } = savedObject;
@@ -366,6 +423,7 @@ export function mergeSettings(saved: unknown): Settings {
     readers: mergeReaders(savedObject),
     panes: mergePanes(savedObject),
     import: mergeImport(savedObject),
+    highlights: mergeHighlights(savedObject),
     reader: mergeReaderPreferences(savedObject, annotationTypes),
   };
 }

@@ -1,11 +1,18 @@
 import type { BasesAllOptions, WorkspaceLeaf } from "obsidian";
 import { FuzzySuggestModal, Modal, Notice, Plugin, Setting, TFile } from "obsidian";
+import { findBookForEntry, highlightOfNote } from "./annotations/links";
+import { renameTypeInBook } from "./annotations/store";
+import { isBookNote } from "./core/book-note";
 import { ReaderEvents } from "./core/reader-events";
+import { RESERVED_ENTRY_TYPE } from "./core/types";
 import { BookImporter, IMPORTABLE_EXTENSIONS, type ImportResult, type ImportSource } from "./import/importer";
+import { type WishlistPick, chooseBookFile, searchForWishlist } from "./import/modals";
+import { fetchCover } from "./import/open-library";
 import { isInFolder } from "./import/plan";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
 import { readPdfMetadata } from "./reader/pdf/adapter";
 import { READER_VIEW_TYPE, ReaderView } from "./reader/reader-view";
+import { activeReaderFor, revealReader } from "./sidebar/active-reader";
 import { HIGHLIGHTS_VIEW_TYPE, HighlightsView } from "./sidebar/highlights-view";
 import { OUTLINE_VIEW_TYPE, OutlineView } from "./sidebar/outline-view";
 import { EReaderSettingTab, type SettingsHost } from "./settings/settings-tab";
@@ -116,12 +123,13 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
 
     this.registerView(
       READER_VIEW_TYPE,
-      (leaf) => new ReaderView(leaf, () => this.settings, () => void this.saveSettings(), this.readerEvents),
+      (leaf) =>
+        new ReaderView(leaf, () => this.settings, () => void this.saveSettings(), this.readerEvents, (note) => this.attachFile(note)),
     );
     // Both panes are registered whatever the settings say: `registerView` has
     // no public counterpart to undo it, so the toggles gate the commands and
     // detach open leaves instead (see applyPaneSettings).
-    this.registerView(HIGHLIGHTS_VIEW_TYPE, (leaf) => new HighlightsView(leaf));
+    this.registerView(HIGHLIGHTS_VIEW_TYPE, (leaf) => new HighlightsView(leaf, () => this.settings));
     this.registerView(OUTLINE_VIEW_TYPE, (leaf) => new OutlineView(leaf, this.readerEvents));
 
     // Obsidian does not index unknown extensions, so .epub files are invisible
@@ -146,7 +154,13 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
         name: "Library",
         icon: "library",
         factory: (controller, containerEl) =>
-          new LibraryView(controller, containerEl, () => this.settings, (source) => this.importBook(source)),
+          new LibraryView(
+            controller,
+            containerEl,
+            () => this.settings,
+            (source) => this.importBook(source),
+            (note) => this.attachFile(note),
+          ),
         options: () => libraryViewOptions(this.settings),
       });
       if (!registered) {
@@ -226,6 +240,49 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       id: "import-book",
       name: "Import a book from the vault",
       callback: () => new ImportSuggestModal(this, (file) => void this.importBook({ kind: "vault", file })).open(),
+    });
+
+    // The links each highlight carries (annotations/highlight-notes.ts,
+    // readerUrl): obsidian://e-reader?id=<entry> opens the book in the reader
+    // at that highlight. Links written by 0.3.7 betas also name the book
+    // note (`file=`), which is used when it still resolves.
+    this.registerObsidianProtocolHandler("e-reader", (params) => void this.openHighlight(params["file"], params["id"]));
+
+    this.addCommand({
+      id: "open-highlight-in-book",
+      name: "Open this note's highlight in the book",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        const found = file ? highlightOfNote(this.app, file, this.settings.highlights) : null;
+        if (!found) return false;
+        if (!checking) void this.openHighlight(found.book.path, found.id);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "rename-highlight-type",
+      name: "Rename a highlight type",
+      callback: () => new HighlightTypeSuggest(this, (from) => this.renameHighlightType(from, () => undefined)).open(),
+    });
+
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (!(file instanceof TFile) || file.extension !== "md") return;
+        const found = highlightOfNote(this.app, file, this.settings.highlights);
+        if (!found) return;
+        menu.addItem((item) =>
+          item
+            .setTitle("Open in book")
+            .setIcon("book-open")
+            .onClick(() => void this.openHighlight(found.book.path, found.id)),
+        );
+      }),
+    );
+
+    this.addCommand({
+      id: "add-to-wishlist",
+      name: "Add a book to the wishlist",
+      callback: () => searchForWishlist(this.app, (pick) => void this.addToWishlist(pick)),
     });
 
     this.registerEvent(
@@ -371,6 +428,106 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     }
   }
 
+  /**
+   * Opens a book note in the reader, reusing a tab already showing it, and
+   * moves to one of its highlights. Without a usable path the book is found
+   * from the highlight's id.
+   */
+  private async openHighlight(path: string | undefined, id: string | undefined): Promise<void> {
+    const named = path ? this.app.vault.getAbstractFileByPath(path) : null;
+    const note = named instanceof TFile ? named : id ? findBookForEntry(this.app, id, this.settings.highlights) : null;
+    if (!(note instanceof TFile)) {
+      new Notice("E-Reader: that book's note could not be found.");
+      return;
+    }
+    let reader = activeReaderFor(this.app, note);
+    if (!reader) {
+      const leaf = this.app.workspace.getLeaf(true);
+      await leaf.setViewState({ type: READER_VIEW_TYPE, state: { file: note.path }, active: true });
+      reader = leaf.view instanceof ReaderView ? leaf.view : null;
+    }
+    if (!reader) return;
+    revealReader(this.app, reader);
+    if (id) await reader.goToEntry(id);
+  }
+
+  /** Every book note in the vault. */
+  private bookNotes(): TFile[] {
+    const { marker, markerValue } = this.settings.properties;
+    return this.app.vault
+      .getMarkdownFiles()
+      .filter((file) => isBookNote(this.app.metadataCache.getFileCache(file)?.frontmatter, marker, markerValue));
+  }
+
+  /** Asks for a new name for highlight type `from`, then renames it in settings and in every book. */
+  renameHighlightType(from: string, onDone: () => void): void {
+    new RenameTypeModal(this, from, (to) => {
+      void this.renameTypeEverywhere(from, to).then(onDone);
+    }).open();
+  }
+
+  private async renameTypeEverywhere(from: string, to: string): Promise<void> {
+    const type = this.settings.annotationTypes.find((candidate) => candidate.name === from);
+    const merged = this.settings.annotationTypes.some((candidate) => candidate.name === to);
+    if (type && !merged) type.name = to;
+    // Renaming onto an existing type merges the two; the target keeps its colour.
+    if (type && merged) this.settings.annotationTypes = this.settings.annotationTypes.filter((candidate) => candidate !== type);
+    if (this.settings.reader.activeAnnotationType === from) this.settings.reader.activeAnnotationType = to;
+    await this.saveSettings();
+    let count = 0;
+    const failed: string[] = [];
+    for (const book of this.bookNotes()) {
+      try {
+        count += await renameTypeInBook(this.app, book, from, to, this.settings);
+      } catch (error) {
+        console.error(`[e-reader] could not rename highlight types in ${book.path}`, error);
+        failed.push(book.basename);
+      }
+    }
+    const lines = [`Renamed “${from}” to “${to}” on ${count} highlight${count === 1 ? "" : "s"}.`];
+    if (failed.length > 0) lines.push(`Could not update ${failed.length === 1 ? `“${failed[0]}”` : `${failed.length} books`}; the developer console has the details.`);
+    new Notice(lines.join("\n"), failed.length > 0 ? 10000 : 5000);
+  }
+
+  /** Saves a book you do not have yet, with its cover when Open Library has one. */
+  async addToWishlist(pick: WishlistPick): Promise<void> {
+    try {
+      const cover = await fetchCover(pick.coverUrl);
+      const result = await this.importer.addToWishlist(cover ? { ...pick.meta, cover } : pick.meta);
+      if (result.status === "imported") new Notice(`Added “${result.title}” to your wishlist.`);
+      else if (result.status === "duplicate") {
+        new Notice(`“${result.title}” is already in your library, as ${result.existing.basename}. Nothing was changed.`, 8000);
+      }
+    } catch (error) {
+      console.error("[e-reader] could not add to the wishlist", error);
+      new Notice(`Could not add “${pick.meta.title}”: ${String(error)}. Nothing was changed.`, 10000);
+    }
+  }
+
+  /** Asks for a book's file and attaches it. Resolves true once the book has its file. */
+  async attachFile(note: TFile): Promise<boolean> {
+    const source = await chooseBookFile(this.app, () => {
+      const attached = this.attachedPaths();
+      return this.app.vault.getFiles().filter((file) => !attached.has(file.path));
+    });
+    if (!source) return false;
+    const name = source.kind === "vault" ? source.file.name : source.name;
+    try {
+      const result = await this.importer.attach(note, source);
+      if (result.status === "attached") {
+        new Notice(`Added ${result.file.name} to “${note.basename}”.`);
+        return true;
+      }
+      if (result.status === "in-use") new Notice(`${name} already belongs to “${result.existing.basename}”. Nothing was changed.`, 8000);
+      else new Notice(`${name} is not an EPUB or PDF.`);
+      return false;
+    } catch (error) {
+      console.error("[e-reader] could not attach a file", error);
+      new Notice(`Could not add ${name}: ${String(error)}. Nothing was changed.`, 10000);
+      return false;
+    }
+  }
+
   /** The type a highlight is written as. Falls back when every type has been removed. */
   private activeHighlightType(): string {
     const active = this.settings.reader.activeAnnotationType;
@@ -495,5 +652,71 @@ class InboxPdfModal extends Modal {
     this.settled = true;
     this.onDone(chosen, ignored);
     this.close();
+  }
+}
+
+/** Picks one of the configured highlight types. */
+class HighlightTypeSuggest extends FuzzySuggestModal<string> {
+  constructor(
+    private readonly plugin: EReaderPlugin,
+    private readonly onChoose: (type: string) => void,
+  ) {
+    super(plugin.app);
+    this.setPlaceholder("Choose the highlight type to rename");
+  }
+
+  getItems(): string[] {
+    return this.plugin.settings.annotationTypes.map((type) => type.name);
+  }
+
+  getItemText(type: string): string {
+    return type;
+  }
+
+  onChooseItem(type: string): void {
+    this.onChoose(type);
+  }
+}
+
+/** Asks for a highlight type's new name. */
+class RenameTypeModal extends Modal {
+  constructor(
+    plugin: EReaderPlugin,
+    private readonly from: string,
+    private readonly onRename: (to: string) => void,
+  ) {
+    super(plugin.app);
+  }
+
+  override onOpen(): void {
+    this.setTitle(`Rename “${this.from}”`);
+    this.contentEl.createEl("p", {
+      text: "Every highlight of this type is renamed too, in every book note and on exported highlight notes.",
+      cls: "setting-item-description",
+    });
+    let value = this.from;
+    const submit = (): void => {
+      const to = value.trim();
+      if (to === "" || to === this.from) return;
+      if (to === RESERVED_ENTRY_TYPE) {
+        new Notice(`E-Reader: "${RESERVED_ENTRY_TYPE}" is reserved for bookmarks.`);
+        return;
+      }
+      this.close();
+      this.onRename(to);
+    };
+    new Setting(this.contentEl).setName("New name").addText((text) => {
+      text.setValue(this.from).onChange((next) => {
+        value = next;
+      });
+      text.inputEl.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") submit();
+      });
+    });
+    new Setting(this.contentEl).addButton((button) => button.setButtonText("Rename").setCta().onClick(submit));
+  }
+
+  override onClose(): void {
+    this.contentEl.empty();
   }
 }

@@ -679,3 +679,99 @@
 .ereader-outline .tree-item-self.mod-leaf .collapse-icon {
   width: 10px;
 }
+
+/* The offer to jump to the furthest-read position (FR-015b). It floats over
+   the page rather than pushing it down, so accepting or dismissing it does
+   not shift the text the reader has just started on. */
+.ereader-reader__resume {
+  position: absolute;
+  top: var(--size-4-12);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  max-width: calc(100% - var(--size-4-8));
+  padding: var(--size-4-1) var(--size-4-1) var(--size-4-1) var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-l);
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+}
+
+.ereader-reader__resume span {
+  flex: 1 1 auto;
+}
+
+.ereader-reader__resume button {
+  flex: none;
+}
+
+/* Read later: a bookmark in the corner opposite the finished check. */
+.ereader-badge.is-read-later {
+  right: auto;
+  left: var(--size-4-2);
+}
+
+/* A wishlist book has no file yet. Its cover is faded and labelled so it
+   reads as "not here" at a glance rather than as a book you can open. */
+.ereader-card.is-wishlist .ereader-cover > :not(.ereader-wishlist-label, .ereader-badge) {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+
+.ereader-wishlist-label {
+  position: absolute;
+  left: 50%;
+  bottom: var(--size-4-2);
+  transform: translateX(-50%);
+  padding: 2px var(--size-4-2);
+  border-radius: var(--radius-l);
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+/* A wishlist book opened in the reader. */
+.ereader-reader__no-file {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--size-4-2);
+  max-width: 360px;
+}
+
+.ereader-reader__no-file-icon .svg-icon {
+  width: 40px;
+  height: 40px;
+  color: var(--text-faint);
+}
+
+.ereader-reader__no-file-title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-semibold);
+}
+
+.ereader-reader__no-file-detail {
+  font-size: var(--font-ui-small);
+}
+
+.ereader-reader__no-file-actions {
+  display: flex;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-2);
+}
+
+.ereader-suggestion__detail {
+  display: block;
+  color: var(--text-muted);
+}

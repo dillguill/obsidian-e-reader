@@ -31,9 +31,11 @@ import leaves nothing behind.
 Library and saves a book note with its details and cover but no file. In the
 library it shows faded and labelled *Wishlist*; opening it offers **Add
 file…**, and importing the book later (by drop, inbox or command) fills that
-same note instead of making a second one. **Read later** in a card's menu
-ticks a `read_later` property and puts a bookmark on the cover; filter a
-Bases view on it for a reading queue.
+same note instead of making a second one. **Read later** and **Add to
+wishlist** in a card's menu add a status to the note: a `read-later` or
+`wishlist` tag by default, or values in a list property you choose in
+settings. Read later puts a bookmark on the cover; filter a Bases view on the
+status for a reading queue. Reading progress is tracked separately.
 
 **Reader.** EPUB and PDF, both remembering where you were, with a toolbar
 shaped like Obsidian's own PDF viewer: zoom or text size, a display menu, and

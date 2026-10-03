@@ -11,6 +11,7 @@
 // from an older version, partly hand-edited, or partly corrupt still yields a
 // complete, valid Settings object.
 
+import { type StatusSettings, normalizeStatus } from "../core/status";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
 import { type SpreadMode, isSpreadMode } from "../reader/spread";
 import { clampScale } from "../reader/zoom";
@@ -35,8 +36,6 @@ export interface PropertyNames {
   progress: string;
   lastRead: string;
   furthestRead: string;
-  /** Checkbox marking a book to read later. Written from the library's card menu. */
-  readLater: string;
   /** List of bookmarked positions (locators), written by the reader's bookmark button. */
   bookmarks: string;
 }
@@ -178,6 +177,13 @@ export interface Settings {
   /** Schema version of this object, so a rename can be migrated once. */
   version: number;
   properties: PropertyNames;
+  /** Where read later and wishlist are kept on a book note. */
+  status: StatusSettings;
+  /**
+   * The checkbox property read later used to be, while its notes still have
+   * to be moved over to the status list. Cleared once they have been.
+   */
+  pendingReadLaterMigration?: string;
   /** Reader-configurable highlight types. Never contains `bookmark` — reserved (FR-020a, FR-028a). */
   annotationTypes: AnnotationType[];
   readers: ReaderChoices;
@@ -190,8 +196,12 @@ export interface Settings {
 /**
  * Bump when a saved value's MEANING changes and old data has to be upgraded.
  * 2: the written properties moved to the `reading_` namespace.
+ * 3: read later moved from a checkbox into the status list.
  */
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
+
+/** The read later checkbox's name before version 3, unless the reader had renamed it. */
+const LEGACY_READ_LATER = "read_later";
 
 /**
  * The names those properties had at version 1. Data saved then pinned these
@@ -216,9 +226,9 @@ export const DEFAULT_SETTINGS: Settings = {
     progress: "reading_progress",
     lastRead: "reading_position",
     furthestRead: "furthest_position",
-    readLater: "read_later",
     bookmarks: "bookmarks",
   },
+  status: { useTags: true, property: "shelves", readLater: "read-later", wishlist: "wishlist" },
   annotationTypes: [
     { name: "idea", color: "#ffd76e" },
     { name: "question", color: "#7ec4f5" },
@@ -340,6 +350,36 @@ function mergeFolder(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim().replace(/^\/+|\/+$/g, "") : fallback;
 }
 
+function mergeStatus(saved: Record<string, unknown>): StatusSettings {
+  const from = group(saved, "status");
+  const defaults = DEFAULT_SETTINGS.status;
+  const useTags = mergeBoolean(from["useTags"], defaults.useTags);
+  const value = (key: "property" | "readLater" | "wishlist"): string => {
+    const raw = from[key];
+    return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : defaults[key];
+  };
+  return {
+    useTags,
+    property: value("property"),
+    readLater: normalizeStatus(value("readLater"), useTags),
+    wishlist: normalizeStatus(value("wishlist"), useTags),
+  };
+}
+
+/**
+ * The checkbox property whose notes still need moving into the status list:
+ * the saved name from before version 3, or the one a migration in progress
+ * left behind. Nothing for a fresh install, which has no notes using it.
+ */
+function mergePendingReadLater(saved: Record<string, unknown>, version: number): string | undefined {
+  const pending = saved["pendingReadLaterMigration"];
+  if (typeof pending === "string" && pending.trim() !== "") return pending;
+  if (version >= 3 || Object.keys(saved).length === 0) return undefined;
+  const properties = group(saved, "properties");
+  const name = properties["readLater"];
+  return typeof name === "string" && name.trim() !== "" ? name.trim() : LEGACY_READ_LATER;
+}
+
 function mergeImport(saved: Record<string, unknown>): ImportSettings {
   const from = group(saved, "import");
   const defaults = DEFAULT_SETTINGS.import;
@@ -412,9 +452,12 @@ export function mergeSettings(saved: unknown): Settings {
     import: _import,
     highlights: _highlights,
     reader: _reader,
+    status: _status,
+    pendingReadLaterMigration: _pendingReadLaterMigration,
     ...rest
   } = savedObject;
   const annotationTypes = mergeAnnotationTypes(savedObject.annotationTypes);
+  const pendingReadLaterMigration = mergePendingReadLater(savedObject, version);
   return {
     ...rest,
     version: SETTINGS_VERSION,
@@ -425,5 +468,7 @@ export function mergeSettings(saved: unknown): Settings {
     import: mergeImport(savedObject),
     highlights: mergeHighlights(savedObject),
     reader: mergeReaderPreferences(savedObject, annotationTypes),
+    status: mergeStatus(savedObject),
+    ...(pendingReadLaterMigration === undefined ? {} : { pendingReadLaterMigration }),
   };
 }

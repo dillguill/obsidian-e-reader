@@ -9,6 +9,8 @@
 
 import type { App, Plugin, TFile, TFolder } from "obsidian";
 import { AbstractInputSuggest, Notice, PluginSettingTab, Setting } from "obsidian";
+import { isBookNote } from "../core/book-note";
+import { normalizeStatus } from "../core/status";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
 import {
   DEFAULT_SETTINGS,
@@ -38,7 +40,6 @@ const PROPERTY_FIELDS: { key: keyof PropertyNames; name: string; desc: string }[
   { key: "progress", name: "Progress", desc: "Property the reader writes reading progress into, as a percentage." },
   { key: "lastRead", name: "Last read", desc: "Property the reader writes the current position into." },
   { key: "furthestRead", name: "Furthest read", desc: "Property holding the furthest position reached." },
-  { key: "readLater", name: "Read later", desc: "Checkbox property the library's card menu sets for books you want to read next." },
   { key: "bookmarks", name: "Bookmarks", desc: "List property the reader's bookmark button adds positions to." },
 ];
 
@@ -61,6 +62,7 @@ export class EReaderSettingTab extends PluginSettingTab {
     this.addReaderSection(containerEl);
     this.addSidebarSection(containerEl);
     this.addImportSection(containerEl);
+    this.addStatusSection(containerEl);
     this.addPropertiesSection(containerEl);
     this.addAnnotationTypesSection(containerEl);
     this.addHighlightFormatSection(containerEl);
@@ -339,6 +341,86 @@ export class EReaderSettingTab extends PluginSettingTab {
     }
   }
 
+  // -------------------------------------------------------------- status
+
+  private addStatusSection(containerEl: HTMLElement): void {
+    const status = this.host.settings.status;
+    new Setting(containerEl)
+      .setName("Status")
+      .setDesc(
+        "Read later and wishlist are values in one list on the book note, set from a card's menu. " +
+          "Reading progress is kept separately.",
+      )
+      .setHeading();
+
+    new Setting(containerEl)
+      .setName("Keep statuses in")
+      .setDesc("The note's tags, or a list property of your own.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions({ tags: "Tags", property: "A list property" })
+          .setValue(status.useTags ? "tags" : "property")
+          .onChange((value) => {
+            status.useTags = value === "tags";
+            status.readLater = normalizeStatus(status.readLater, status.useTags);
+            status.wishlist = normalizeStatus(status.wishlist, status.useTags);
+            this.save();
+            this.display();
+          }),
+      );
+
+    if (!status.useTags) {
+      new Setting(containerEl)
+        .setName("Status property")
+        .setDesc(
+          "A list (multitext) property. Pick one your book notes already use or type a new name. " +
+            "A text property will not work: Obsidian shows a list written into it as a mismatch.",
+        )
+        .addText((text) => {
+          new ListPropertySuggest(this.app, text.inputEl, () => this.bookListProperties());
+          text
+            .setPlaceholder(DEFAULT_SETTINGS.status.property)
+            .setValue(status.property)
+            .onChange((value) => {
+              status.property = value.trim() === "" ? DEFAULT_SETTINGS.status.property : value.trim();
+              this.save();
+            });
+        });
+    }
+
+    const valueSetting = (name: string, key: "readLater" | "wishlist"): void => {
+      new Setting(containerEl)
+        .setName(name)
+        .setDesc(status.useTags ? "The tag, without #. Spaces become hyphens." : "The value written into the list.")
+        .addText((text) =>
+          text
+            .setPlaceholder(DEFAULT_SETTINGS.status[key])
+            .setValue(status[key])
+            .onChange((value) => {
+              const next = normalizeStatus(value, status.useTags);
+              status[key] = next === "" ? DEFAULT_SETTINGS.status[key] : next;
+              this.save();
+            }),
+        );
+    };
+    valueSetting("Read later value", "readLater");
+    valueSetting("Wishlist value", "wishlist");
+  }
+
+  /** Properties some book note already holds a list in, which is what Obsidian shows as multitext. */
+  private bookListProperties(): string[] {
+    const { marker, markerValue } = this.host.settings.properties;
+    const names = new Set<string>();
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      if (!frontmatter || !isBookNote(frontmatter, marker, markerValue)) continue;
+      for (const [key, value] of Object.entries(frontmatter)) {
+        if (Array.isArray(value) && key !== "tags") names.add(key);
+      }
+    }
+    return [...names].sort();
+  }
+
   // ---------------------------------------------------- annotation types
 
   private addAnnotationTypesSection(containerEl: HTMLElement): void {
@@ -422,6 +504,32 @@ function uniqueTypeName(existing: string[]): string {
   for (let suffix = 2; ; suffix++) {
     const candidate = `${base} ${suffix}`;
     if (!existing.includes(candidate)) return candidate;
+  }
+}
+
+/** Suggests list properties as a property name is typed. */
+class ListPropertySuggest extends AbstractInputSuggest<string> {
+  constructor(
+    app: App,
+    private readonly input: HTMLInputElement,
+    private readonly names: () => string[],
+  ) {
+    super(app, input);
+  }
+
+  protected getSuggestions(query: string): string[] {
+    const wanted = query.toLowerCase();
+    return this.names().filter((name) => name.toLowerCase().includes(wanted)).slice(0, 20);
+  }
+
+  renderSuggestion(name: string, el: HTMLElement): void {
+    el.setText(name);
+  }
+
+  override selectSuggestion(name: string): void {
+    this.setValue(name);
+    this.input.dispatchEvent(new Event("input"));
+    this.close();
   }
 }
 

@@ -3,6 +3,7 @@ import { FuzzySuggestModal, Modal, Notice, Plugin, Setting, TFile } from "obsidi
 import { findBookForEntry, highlightOfNote } from "./annotations/links";
 import { renameTypeInBook } from "./annotations/store";
 import { isBookNote } from "./core/book-note";
+import { applyStatus } from "./core/status";
 import { ReaderEvents } from "./core/reader-events";
 import { RESERVED_ENTRY_TYPE } from "./core/types";
 import { BookImporter, IMPORTABLE_EXTENSIONS, type ImportResult, type ImportSource } from "./import/importer";
@@ -324,7 +325,37 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       this.registerEvent(this.app.vault.on("create", (file) => this.onInboxCandidate(file)));
       this.registerEvent(this.app.vault.on("modify", (file) => this.onInboxCandidate(file)));
       this.scanInbox();
+      void this.migrateReadLater();
     });
+  }
+
+  /**
+   * Moves read later from the checkbox it used to be into the status list,
+   * once. The marker stays saved until every note is done, so a vault closed
+   * partway through finishes the next time it opens.
+   */
+  private async migrateReadLater(): Promise<void> {
+    const legacy = this.settings.pendingReadLaterMigration;
+    if (legacy === undefined) return;
+    const { status } = this.settings;
+    let moved = 0;
+    for (const note of this.bookNotes()) {
+      if (this.app.metadataCache.getFileCache(note)?.frontmatter?.[legacy] === undefined) continue;
+      await this.app.fileManager.processFrontMatter(note, (frontmatter: Record<string, unknown>) => {
+        const wasOn = frontmatter[legacy] === true;
+        delete frontmatter[legacy];
+        if (wasOn) {
+          applyStatus(frontmatter, status, status.readLater, true);
+          moved++;
+        }
+      });
+    }
+    delete this.settings.pendingReadLaterMigration;
+    await this.saveSettings();
+    if (moved > 0) {
+      const where = status.useTags ? "tags" : `“${status.property}”`;
+      new Notice(`E-Reader: read later is now a status in ${where}. Moved ${moved} ${moved === 1 ? "book" : "books"}.`, 8000);
+    }
   }
 
   /** Imports whatever is already sitting in the inbox. Called at startup and when the inbox setting changes. */

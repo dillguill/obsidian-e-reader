@@ -7,8 +7,8 @@
 // descriptions below, because they genuinely cannot take effect immediately
 // and saying so is better than appearing broken.
 
-import type { App, Plugin } from "obsidian";
-import { Notice, PluginSettingTab, Setting } from "obsidian";
+import type { App, Plugin, TFolder } from "obsidian";
+import { AbstractInputSuggest, Notice, PluginSettingTab, Setting } from "obsidian";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
 import { DEFAULT_SETTINGS, HIGHLIGHT_PALETTE, type PropertyNames, type ReaderChoice, type Settings } from "./settings-model";
 
@@ -18,6 +18,8 @@ export interface SettingsHost {
   saveSettings(): Promise<void>;
   /** Applies the pane toggles right away — detaching a pane that was just turned off. */
   applyPaneSettings(): void;
+  /** Imports whatever already sits in the inbox folder. */
+  scanInbox(): void;
 }
 
 const PROPERTY_FIELDS: { key: keyof PropertyNames; name: string; desc: string }[] = [
@@ -48,9 +50,19 @@ export class EReaderSettingTab extends PluginSettingTab {
     containerEl.empty();
     this.addReaderSection(containerEl);
     this.addSidebarSection(containerEl);
-    this.addCatalogSection(containerEl);
+    this.addImportSection(containerEl);
     this.addPropertiesSection(containerEl);
     this.addAnnotationTypesSection(containerEl);
+  }
+
+  /**
+   * The inbox is scanned when the settings close, not as its folder is
+   * typed: every prefix of "Books/Inbox" is a folder too, and "Books" would
+   * have imported the whole library a keystroke early.
+   */
+  override hide(): void {
+    super.hide();
+    this.host.scanInbox();
   }
 
   private save(): void {
@@ -149,25 +161,67 @@ export class EReaderSettingTab extends PluginSettingTab {
       );
   }
 
-  // ------------------------------------------------------------- catalog
+  // -------------------------------------------------------------- import
 
-  private addCatalogSection(containerEl: HTMLElement): void {
-    new Setting(containerEl).setName("Catalog").setHeading();
+  private addImportSection(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName("Import").setHeading();
+    const settings = this.host.settings.import;
+
+    const folderSetting = (
+      name: string,
+      desc: string,
+      placeholder: string,
+      get: () => string,
+      set: (value: string) => void,
+    ): void => {
+      new Setting(containerEl)
+        .setName(name)
+        .setDesc(desc)
+        .addText((text) => {
+          text
+            .setPlaceholder(placeholder)
+            .setValue(get())
+            .onChange((value) => {
+              set(value.trim().replace(/^\/+|\/+$/g, ""));
+              this.save();
+            });
+          new FolderSuggest(this.app, text.inputEl);
+        });
+    };
+
+    folderSetting(
+      "Book notes folder",
+      "Where a new book's note is created. Empty puts it at the root of the vault.",
+      "Library",
+      () => settings.notesFolder,
+      (value) => (settings.notesFolder = value),
+    );
+    folderSetting(
+      "Book files folder",
+      "Where the EPUB or PDF and its cover are moved. Empty follows Obsidian's own setting for new attachments.",
+      "Obsidian's attachment location",
+      () => settings.filesFolder,
+      (value) => (settings.filesFolder = value),
+    );
+    folderSetting(
+      "Inbox folder",
+      "EPUBs that land here are imported automatically; for PDFs you are asked which are books. Empty turns this off.",
+      "Off",
+      () => settings.inboxFolder,
+      (value) => (settings.inboxFolder = value),
+    );
 
     new Setting(containerEl)
-      .setName("OPDS catalog address")
+      .setName("Look up missing details")
       .setDesc(
-        "An OPDS 1.2 Atom feed to browse and download from. Catalog search is not built yet, so this is " +
-          "recorded and not yet used. Downloads will land wherever this vault's own attachment settings put files.",
+        "Ask Open Library for what a file does not say about itself: author, ISBN, page count, subjects, cover. " +
+          "Sends the title and author, or the ISBN, to openlibrary.org. Never overrides what the file says.",
       )
-      .addText((text) =>
-        text
-          .setPlaceholder("https://example.org/opds")
-          .setValue(this.host.settings.catalog.url)
-          .onChange((value) => {
-            this.host.settings.catalog.url = value.trim();
-            this.save();
-          }),
+      .addToggle((toggle) =>
+        toggle.setValue(settings.lookUpMetadata).onChange((value) => {
+          settings.lookUpMetadata = value;
+          this.save();
+        }),
       );
   }
 
@@ -274,5 +328,33 @@ function uniqueTypeName(existing: string[]): string {
   for (let suffix = 2; ; suffix++) {
     const candidate = `${base} ${suffix}`;
     if (!existing.includes(candidate)) return candidate;
+  }
+}
+
+/** Suggests the vault's folders as a folder path is typed. */
+class FolderSuggest extends AbstractInputSuggest<TFolder> {
+  constructor(
+    app: App,
+    private readonly input: HTMLInputElement,
+  ) {
+    super(app, input);
+  }
+
+  protected getSuggestions(query: string): TFolder[] {
+    const wanted = query.toLowerCase();
+    return this.app.vault
+      .getAllFolders(false)
+      .filter((folder) => folder.path.toLowerCase().includes(wanted))
+      .slice(0, 20);
+  }
+
+  renderSuggestion(folder: TFolder, el: HTMLElement): void {
+    el.setText(folder.path);
+  }
+
+  override selectSuggestion(folder: TFolder): void {
+    this.setValue(folder.path);
+    this.input.dispatchEvent(new Event("input"));
+    this.close();
   }
 }

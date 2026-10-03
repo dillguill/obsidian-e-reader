@@ -16,6 +16,17 @@ reader writes, so a plain `.base` shows them without any setup. Books without
 a cover get one drawn from their title, and right-clicking or long-pressing a
 card opens it, opens its note, or marks it finished or unread.
 
+**Import.** Drop an EPUB or PDF onto the Library, set an inbox folder, or run
+"Import a book from the vault". EPUBs landing in the inbox are imported
+straight away; PDFs, which are as often papers or receipts as books, wait
+until you tick the ones that are books. The
+title, author, language, cover and more are read from the file itself, and
+Open Library can fill in what the file does not say (ISBN, page count,
+subjects, a cover). The note goes to your book notes folder (`Library` by
+default) and the file to wherever Obsidian puts attachments, or a folder you
+choose. A book already in the library is never imported twice, and a failed
+import leaves nothing behind.
+
 **Reader.** EPUB and PDF, both remembering where you were, with a toolbar
 shaped like Obsidian's own PDF viewer: zoom or text size, a display menu, and
 a page box you can type into. PDFs offer fit-to-width, fit-to-height, two-page
@@ -37,8 +48,8 @@ copy or delete it. Each is written into the book note as a callout you can
 read, edit and link to:
 
 ```markdown
-> [!quote] idea
-> ==the spice must flow==
+> [!idea]
+> the spice must flow
 > %%{"id":"h-a1b2c3","created":"2026-08-20T10:04:00Z"}%%
 >
 > Worth comparing to the guild's monopoly argument.
@@ -46,8 +57,9 @@ read, edit and link to:
 ^h-a1b2c3
 ```
 
-The quote is the anchor as well as the display, so editing it by hand edits
-the anchor. Everything outside the plugin's `%%e-reader:begin/end%%` markers
+The callout's type is the highlight's type, so a CSS snippet can give each type
+its own callout style. The quote is the anchor as well as the display, so
+editing it by hand edits the anchor. Everything outside the plugin's `%%e-reader:begin/end%%` markers
 is yours and is never touched. Nothing lives in a sidecar database.
 
 **Outline.** The book's own table of contents, nested, with the current

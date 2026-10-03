@@ -14,7 +14,7 @@
 // pdf.js needs its worker script served from a URL it can spin up a Worker
 // from; there is no vendor/ directory to point at anymore, so the worker's
 // minified source is inlined into main.js as a text asset (an esbuild plugin
-// in esbuild.config.mjs loads pdfjs-dist/build/pdf.worker.min.mjs as a
+// in esbuild.config.mjs loads pdfjs-dist/legacy/build/pdf.worker.min.mjs as a
 // string) and turned into a same-origin blob: URL at runtime instead.
 //
 // No pdfjs type may leak past this module — callers only see
@@ -23,6 +23,7 @@
 import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
+import { mergeHighlightBoxes } from "../highlight-rects";
 import type {
   DisplayOption,
   EngineSelection,
@@ -73,6 +74,7 @@ interface PdfjsDocument {
   getOutline(): Promise<PdfjsOutlineItem[] | null>;
   getDestination(id: string): Promise<unknown[] | null>;
   getPageIndex(ref: unknown): Promise<number>;
+  getMetadata(): Promise<{ info: Record<string, unknown> | null }>;
 }
 
 /**
@@ -118,15 +120,92 @@ export interface PdfEngineOptions extends PdfPreferences {
  */
 let pdfjsPromise: Promise<{ lib: PdfjsModule; workerSource: string }> | null = null;
 
+/**
+ * pdf.js's legacy build, not its default one. The default build calls
+ * JavaScript that Obsidian's runtimes (its Electron, and iOS's WebKit) do not
+ * ship yet — `Map.prototype.getOrInsertComputed`, `Uint8Array.prototype.toHex`
+ * and more — and failed on real PDFs with "is not a function". The legacy
+ * build is the same library with those polyfilled, in the worker too.
+ */
 function loadPdfjs(): Promise<{ lib: PdfjsModule; workerSource: string }> {
   pdfjsPromise ??= (async () => {
     const [lib, worker] = await Promise.all([
-      import("pdfjs-dist") as Promise<unknown>,
-      import("pdfjs-dist/build/pdf.worker.min.mjs"),
+      import("pdfjs-dist/legacy/build/pdf.mjs") as Promise<unknown>,
+      import("pdfjs-dist/legacy/build/pdf.worker.min.mjs"),
     ]);
     return { lib: lib as PdfjsModule, workerSource: worker.default };
   })();
   return pdfjsPromise;
+}
+
+/** Width in CSS pixels a PDF's first page is drawn at to become its cover. */
+const PDF_COVER_WIDTH = 600;
+
+/**
+ * What a PDF says about itself — its info dictionary's Title and Author, and
+ * its page count — plus its first page drawn as a cover. Lives here so pdf.js
+ * stays inside this module; the importer only sees plain values.
+ */
+export async function readPdfMetadata(data: ArrayBuffer): Promise<{
+  title: string | null;
+  authors: string[];
+  subject: string | null;
+  pages: number;
+  cover: ArrayBuffer | null;
+}> {
+  const { lib, workerSource } = await loadPdfjs();
+  const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" }));
+  lib.GlobalWorkerOptions.workerSrc = workerUrl;
+  // pdf.js takes ownership of the buffer it is given, detaching it; the
+  // caller still needs its bytes to write the file.
+  const task = lib.getDocument({ data: data.slice(0) });
+  try {
+    const doc = await task.promise;
+    // A PDF whose info dictionary cannot be read still imports. This has to
+    // be a try, not a .catch: a failure inside getMetadata can throw before
+    // it returns a promise.
+    let info: Record<string, unknown> | null = null;
+    try {
+      info = (await doc.getMetadata()).info;
+    } catch (error) {
+      console.debug("[e-reader] could not read a PDF's info dictionary", error);
+    }
+    const text = (key: string): string | null => {
+      const value = info?.[key];
+      return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+    };
+    const author = text("Author");
+    let cover: ArrayBuffer | null = null;
+    try {
+      const page = await doc.getPage(1);
+      const unscaled = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: PDF_COVER_WIDTH / unscaled.width });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+        cover = blob ? await blob.arrayBuffer() : null;
+      }
+    } catch (error) {
+      console.debug("[e-reader] could not draw a PDF's first page as its cover", error);
+    }
+    return {
+      title: text("Title"),
+      // Info dictionaries hold one string. Several authors are split on
+      // semicolons, "&" and "and" — not commas, which also separate a
+      // surname from its initials ("Tolkien, J. R. R.").
+      authors: author ? author.split(/\s*(?:;|&|\band\b)\s*/).filter((name) => name !== "") : [],
+      subject: text("Subject"),
+      pages: doc.numPages,
+      cover,
+    };
+  } finally {
+    await task.destroy().catch(() => undefined);
+    URL.revokeObjectURL(workerUrl);
+  }
 }
 
 async function resolveDestPage(doc: PdfjsDocument, item: PdfjsOutlineItem): Promise<number | null> {
@@ -614,8 +693,7 @@ export class PdfEngine implements ReaderEngine {
       if (highlight.suffix !== undefined) context.suffix = highlight.suffix;
       const range = rangeForQuote(source, highlight.exact, context);
       if (!range) continue;
-      for (const rect of Array.from(range.getClientRects())) {
-        if (rect.width <= 0 || rect.height <= 0) continue;
+      for (const rect of mergeHighlightBoxes(Array.from(range.getClientRects()))) {
         const box = layerEl.createDiv({ cls: "ereader-hl" });
         // The reader hit-tests these by rect on right-click, so each box has
         // to say which entry it belongs to. epub.js's overlay does the same
@@ -628,8 +706,8 @@ export class PdfEngine implements ReaderEngine {
         box.style.background = highlight.color;
         box.style.left = `${rect.left - pageRect.left}px`;
         box.style.top = `${rect.top - pageRect.top}px`;
-        box.style.width = `${rect.width}px`;
-        box.style.height = `${rect.height}px`;
+        box.style.width = `${rect.right - rect.left}px`;
+        box.style.height = `${rect.bottom - rect.top}px`;
       }
     }
   }

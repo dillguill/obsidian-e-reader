@@ -56,9 +56,10 @@ copy or delete it. Each is written into the book note as a callout you can
 read, edit and link to:
 
 ```markdown
-> [!idea] Idea · [p. 35](obsidian://e-reader?vault=…&id=h-a1b2c3)
+> [!idea]
 > the spice must flow
-> %%{"id":"h-a1b2c3","created":"2026-08-20T10:04:00Z"}%%
+> – [Dune, Book One, p. 35](obsidian://e-reader?vault=…&id=h-a1b2c3)
+> %%{"id":"h-a1b2c3","section":"Book One","created":"2026-08-20T10:04:00Z"}%%
 >
 > Worth comparing to the guild's monopoly argument.
 
@@ -66,7 +67,7 @@ read, edit and link to:
 ```
 
 The callout's type is the highlight's type, so a CSS snippet can give each type
-its own callout style, and the link in its title opens the book at that
+its own callout style, and the source line under the quote opens the book at that
 highlight. The quote is the anchor as well as the display, so editing it by
 hand edits the anchor. Everything outside the plugin's `%%e-reader:begin/end%%`
 markers is yours and is never touched. Nothing lives in a sidecar database.
@@ -74,13 +75,16 @@ markers is yours and is never touched. Nothing lives in a sidecar database.
 **Using a highlight elsewhere.** The book note is the one place highlights
 are kept. From a highlight's menu, in the reader or the Highlights pane:
 
-- **Copy as quote** or **Copy as callout** copies the text with a link back to
-  the highlight, to paste into any note.
+- **Copy as quote** or **Copy as callout** copies the quote with its source
+  line, then your comment, then a separate `[[Book#^id|Link to note]]`.
 - **Copy link** copies `[[Book#^id]]`.
-- **Export as note** creates a note of its own: the quote, a link back, and
-  properties (book, type, page, created; names and folder in settings) that
-  Bases can list. It is a starting point for your own thoughts, not a second
-  copy the plugin keeps in sync.
+- **Export as note** creates a note of its own, named after the book, page and
+  quote, with book, type, chapter, page and created properties (names and
+  folder in settings). Its body is the quote copy by default; set a
+  **Template** in settings to lay it out yourself with `{{highlight}}`,
+  `{{quote}}`, `{{comment}}`, `{{link}}`, `{{source}}`, `{{book}}`,
+  `{{chapter}}`, `{{page}}`, `{{type}}` and `{{created}}`. It is a starting
+  point for your own thoughts, not a second copy the plugin keeps in sync.
 
 **Open in book** (a command, and in an exported note's file menu) opens the
 reader at that highlight. **Rename a highlight type** renames it in settings

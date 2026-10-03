@@ -22,7 +22,8 @@ Whatever the reader has written about this book stays here, untouched.
 
 > [!idea]
 > the spice must flow
-> %%{"id":"h-a1b2c3","prefix":"He said that ","suffix":" and then left.","hint":"epubcfi(/6/4!/4/2/2[ch01]/2/1:0)","created":"2026-08-20T10:04:00Z"}%%
+> – [Dune, Book One](obsidian://e-reader?vault=Vault&id=h-a1b2c3)
+> %%{"id":"h-a1b2c3","created":"2026-08-20T10:04:00Z","prefix":"He said that ","suffix":" and then left.","hint":"epubcfi(/6/4!/4/2/2[ch01]/2/1:0)","section":"Book One"}%%
 >
 > Worth comparing to the guild's monopoly argument.
 
@@ -37,8 +38,9 @@ Whatever the reader has written about this book stays here, untouched.
 2. One callout per entry. The callout's type carries the entry `type` (`> [!idea]`) and its title is left
    empty; `bookmark` is reserved. The pre-0.3.7 form, `> [!quote] <type>` with the quote in `==…==`,
    still parses. Entries are written as callouts. A plain-quote entry (from a 0.3.7 or 0.4.0 beta), which
-   drops the callout header and carries `type` in the anchor JSON instead, still parses. A reader link (`[p. 35](obsidian://e-reader?vault=…&id=<id>)`) may follow the type in the
-   callout title or sit on its own quoted line; it is derived, ignored when parsing and rewritten when
+   drops the callout header and carries `type` in the anchor JSON instead, still parses. Under the quote
+   sits a source line, `– [Book, Chapter, p. 35](obsidian://e-reader?vault=…&id=<id>)` (parts left out
+   when unknown). Betas put a bare reader link in the callout title or on its own quoted line instead; it is derived, ignored when parsing and rewritten when
    serialising. It names only the entry id; the handler finds the note holding that id. Links written by
    0.3.7 betas also carry `file=`, which is honoured while it resolves.
 3. The quote line(s) before the comment are the authoritative anchor **and** the displayed quote. One copy only.
@@ -58,6 +60,7 @@ Whatever the reader has written about this book stays here, untouched.
   "prefix":  "string, optional",
   "suffix":  "string, optional",
   "hint":    "string, optional — CFI for EPUB, page=N&offset=N for PDF",
+  "section": "string, optional — chapter or section from the table of contents",
   "created": "string, required, ISO 8601"
 }
 ```
@@ -103,9 +106,11 @@ anchor. Resolves CHK011.
 
 ## Exported highlight notes (0.4.0)
 
-The book note is the only store. "Export as note" writes a new note whose body is the quote as plain text
-followed by a link to the entry's block (`[[Book#^id|Book, p. 35]]`), with `book`, `highlight`, `page` and
-`created` properties (names configurable). The plugin never reads an exported note back as an entry.
+The book note is the only store. "Export as note" writes a new note named `Book – p. 35 – opening words`.
+Its body is a template (a note chosen in settings, or by default `{{highlight}}`, `{{comment}}`, `{{link}}`):
+the quote with its source line, the comment, then `[[Book#^id|Link to note]]`. It gets `book`, `highlight`,
+`chapter`, `page` and `created` properties (names configurable). The plugin never reads an exported note
+back as an entry.
 
 Betas briefly stored highlights only as notes of their own, with the anchor in a `%%…%%` line (0.3.7) or an
 `anchor` JSON property (0.4.0-beta.1). Those are folded back into the book note's region as callouts when the

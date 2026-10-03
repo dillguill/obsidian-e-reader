@@ -21,7 +21,7 @@ import { RESERVED_ENTRY_TYPE } from "../core/types";
 import type { Settings } from "../settings/settings-model";
 import { addBookmarks, isBookmarkId, listBookmarks, removeBookmark } from "./bookmarks";
 import { type Entry, type MalformedEntry, newEntryId, serializeEntry } from "./entry";
-import { type NoteDetails, jumpLink, linksToBook, listHighlightNotes, withoutEmbed } from "./highlight-notes";
+import { type NoteDetails, attribution, linksToBook, listHighlightNotes, withoutEmbed } from "./highlight-notes";
 import { type LocatedEntry, locateEntries } from "./locate";
 import { findRegion, removeRegion, writeRegion } from "./region";
 
@@ -73,11 +73,12 @@ function buildEntry(draft: EntryDraft, now: Date, random: () => number): Entry {
   if (draft.prefix !== undefined && draft.prefix !== "") anchor.prefix = draft.prefix;
   if (draft.suffix !== undefined && draft.suffix !== "") anchor.suffix = draft.suffix;
   if (draft.hint !== undefined) anchor.hint = draft.hint;
+  if (draft.section !== undefined && draft.section !== "") anchor.section = draft.section;
   return { id, type: draft.type, exact: draft.exact, comment: draft.comment ?? "", anchor };
 }
 
-function blockFor(app: App, entry: Entry, settings: Settings): string {
-  return serializeEntry(entry, jumpLink(app, entry));
+function blockFor(app: App, book: TFile, entry: Entry): string {
+  return serializeEntry(entry, attribution(app, book, entry));
 }
 
 /** Writes a new highlight into the book note, or a bookmark into its bookmarks property. Returns it. */
@@ -95,7 +96,7 @@ export async function addEntry(
     return bookmark as Entry;
   }
   const entry = buildEntry(draft, now, random);
-  const block = blockFor(app, entry, settings);
+  const block = blockFor(app, note, entry);
   await app.vault.process(note, (text) => {
     const region = findRegion(text);
     const body = region === null || region.body === "" ? block : `${region.body}\n\n${block}`;
@@ -134,7 +135,7 @@ async function rewriteRegion(
     const added = options.added ?? [];
     if (findRegion(text) === null && located.entries.length === 0 && added.length === 0) return text;
     const kept = [...mutate(located.entries).map((item) => item.entry), ...added];
-    const body = kept.map((entry) => blockFor(app, entry, settings)).join("\n");
+    const body = kept.map((entry) => blockFor(app, note, entry)).join("\n");
     const preserved = located.malformed
       .map((item) => item.raw)
       .filter((raw) => raw !== "")
@@ -251,4 +252,32 @@ function exportedNotes(app: App, note: TFile, settings: Settings): TFile[] {
     if (linksToBook(app, file as TFile, note, settings.highlights.properties.book)) found.push(file as TFile);
   }
   return found;
+}
+
+/**
+ * Records the chapter or section of highlights saved before it was kept,
+ * from `sectionOf` (the reader's table of contents). Rewrites the region only
+ * when there is something to add. Returns how many were filled in.
+ */
+export async function fillSections(
+  app: App,
+  note: TFile,
+  settings: Settings,
+  sectionOf: (entry: Entry) => Promise<string | undefined>,
+): Promise<number> {
+  const { entries } = await regionEntries(app, note);
+  const found = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.anchor.section !== undefined || !entry.anchor.hint || entry.type === RESERVED_ENTRY_TYPE) continue;
+    const section = await sectionOf(entry);
+    if (section !== undefined && section !== "") found.set(entry.id, section);
+  }
+  if (found.size === 0) return 0;
+  await rewriteRegion(app, note, settings, (located) =>
+    located.map((item) => {
+      const section = found.get(item.entry.id);
+      return section === undefined ? item : { ...item, entry: { ...item.entry, anchor: { ...item.entry.anchor, section } } };
+    }),
+  );
+  return found.size;
 }

@@ -7,7 +7,7 @@
 // descriptions below, because they genuinely cannot take effect immediately
 // and saying so is better than appearing broken.
 
-import type { App, Plugin, TFolder } from "obsidian";
+import type { App, Plugin, TFile, TFolder } from "obsidian";
 import { AbstractInputSuggest, Notice, PluginSettingTab, Setting } from "obsidian";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
 import {
@@ -243,10 +243,28 @@ export class EReaderSettingTab extends PluginSettingTab {
       .setName("Exported highlight notes")
       .setDesc(
         "Highlights are kept in the book note. These settings shape a highlight exported as a note of its own " +
-          "from the Highlights pane: the quote, a link back to it, and properties Bases can list.",
+          "from its menu: the quote, a link back to it, and properties Bases can list.",
       )
       .setHeading();
     const settings = this.host.settings.highlights;
+
+    new Setting(containerEl)
+      .setName("Template")
+      .setDesc(
+        "A note to use as the exported note's body. Placeholders: {{highlight}} (the quote with its source line), " +
+          "{{quote}}, {{comment}}, {{link}} (link to the highlight in the book note), {{source}}, {{book}}, " +
+          "{{chapter}}, {{page}}, {{type}}, {{created}}. Empty uses {{highlight}}, {{comment}}, {{link}}.",
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("Templates/Highlight")
+          .setValue(settings.template)
+          .onChange((value) => {
+            settings.template = value.trim();
+            this.save();
+          });
+        new NoteSuggest(this.app, text.inputEl);
+      });
 
     new Setting(containerEl)
       .setName("Folder")
@@ -275,6 +293,7 @@ export class EReaderSettingTab extends PluginSettingTab {
     const rows: { key: keyof typeof names; name: string; desc: string }[] = [
       { key: "book", name: "Book property", desc: "Link to the book note." },
       { key: "type", name: "Type property", desc: "The highlight's type, such as idea or question." },
+      { key: "section", name: "Chapter property", desc: "The chapter or section, from the book's table of contents." },
       { key: "page", name: "Page property", desc: "The page the highlight is on, where the book has pages." },
       { key: "created", name: "Created property", desc: "When the highlight was made." },
     ];
@@ -429,6 +448,33 @@ class FolderSuggest extends AbstractInputSuggest<TFolder> {
 
   override selectSuggestion(folder: TFolder): void {
     this.setValue(folder.path);
+    this.input.dispatchEvent(new Event("input"));
+    this.close();
+  }
+}
+
+class NoteSuggest extends AbstractInputSuggest<TFile> {
+  constructor(
+    app: App,
+    private readonly input: HTMLInputElement,
+  ) {
+    super(app, input);
+  }
+
+  protected getSuggestions(query: string): TFile[] {
+    const wanted = query.toLowerCase();
+    return this.app.vault
+      .getMarkdownFiles()
+      .filter((file) => file.path.toLowerCase().includes(wanted))
+      .slice(0, 20);
+  }
+
+  renderSuggestion(file: TFile, el: HTMLElement): void {
+    el.setText(file.path);
+  }
+
+  override selectSuggestion(file: TFile): void {
+    this.setValue(file.path);
     this.input.dispatchEvent(new Event("input"));
     this.close();
   }

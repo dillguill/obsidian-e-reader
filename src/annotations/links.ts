@@ -8,7 +8,7 @@
 import type { App, TFile } from "obsidian";
 import type { HighlightSettings } from "../settings/settings-model";
 import { type Entry, quoteLines } from "./entry";
-import { anchorIdOf, bookOf } from "./highlight-notes";
+import { anchorIdOf, attribution, bookOf } from "./highlight-notes";
 
 /** The book note holding the entry `id`. */
 export function findBookForEntry(app: App, id: string, settings: HighlightSettings): TFile | null {
@@ -40,27 +40,25 @@ export function highlightOfNote(app: App, file: TFile, settings: HighlightSettin
   return id !== null && book ? { id, book } : null;
 }
 
-function blockLink(app: App, book: TFile, entry: Entry, label?: string): string {
-  return app.fileManager.generateMarkdownLink(book, "", `#^${entry.id}`, label);
-}
-
-function pageLabel(entry: Entry): string {
-  const hint = entry.anchor.hint;
-  return hint?.kind === "pdf" ? `p. ${hint.page}` : "source";
-}
-
 /** A link to the highlight's block in the book note. */
 export function entryLink(app: App, book: TFile, entry: Entry): string {
-  return blockLink(app, book, entry);
+  return app.fileManager.generateMarkdownLink(book, "", `#^${entry.id}`);
 }
 
-/** The highlight as a plain quote, with a link back to its block. */
-export function entryAsQuote(app: App, book: TFile, entry: Entry): string {
-  return [...quoteLines(entry.exact), `> — ${blockLink(app, book, entry, pageLabel(entry))}`].join("\n");
+/** The separate link back to the highlight in its book note, under a copy or an export. */
+export function noteLink(app: App, book: TFile, entry: Entry, sourcePath = ""): string {
+  return app.fileManager.generateMarkdownLink(book, sourcePath, `#^${entry.id}`, "Link to note");
 }
 
-/** The highlight as a callout typed like the highlight, with a link back to its block in the title. */
-export function entryAsCallout(app: App, book: TFile, entry: Entry): string {
-  const title = `${entry.type.charAt(0).toUpperCase()}${entry.type.slice(1)} · ${blockLink(app, book, entry, pageLabel(entry))}`;
-  return [`> [!${entry.type}] ${title}`, ...quoteLines(entry.exact)].join("\n");
+/** The quote with its attribution line, as a plain quote or as a callout typed like the highlight. */
+export function quoteBlock(app: App, book: TFile, entry: Entry, callout: boolean): string {
+  const lines = callout ? [`> [!${entry.type}]`] : [];
+  if (entry.exact !== "") lines.push(...quoteLines(entry.exact));
+  lines.push(`> ${attribution(app, book, entry)}`);
+  return lines.join("\n");
+}
+
+/** What Copy as quote and Copy as callout put on the clipboard: the block, the comment under it, then the link to the note. */
+export function entryCopy(app: App, book: TFile, entry: Entry, callout: boolean): string {
+  return [quoteBlock(app, book, entry, callout), entry.comment, noteLink(app, book, entry)].filter((part) => part !== "").join("\n\n");
 }

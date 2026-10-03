@@ -42,6 +42,8 @@ export interface AnchorRecord {
   prefix?: string;
   suffix?: string;
   hint?: Locator;
+  /** The chapter or section the passage is in, from the book's table of contents. */
+  section?: string;
   /** ISO 8601 datetime; sort key when anchoring fails. */
   created: string;
 }

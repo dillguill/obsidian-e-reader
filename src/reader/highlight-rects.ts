@@ -44,7 +44,9 @@ export function mergeHighlightBoxes(rects: readonly Box[]): Box[] {
       line.top = Math.min(line.top, rect.top);
       line.bottom = Math.max(line.bottom, rect.bottom);
     } else {
-      lines.push({ ...rect });
+      // Copied field by field: a DOMRect's sides are prototype getters, so
+      // spreading one yields an empty object.
+      lines.push({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
     }
   }
 

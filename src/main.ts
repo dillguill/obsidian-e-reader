@@ -1,7 +1,8 @@
 import type { BasesAllOptions, WorkspaceLeaf } from "obsidian";
 import { FuzzySuggestModal, Modal, Notice, Plugin, Setting, TFile } from "obsidian";
 import { findBookForEntry, highlightOfNote } from "./annotations/links";
-import { renameTypeInBook } from "./annotations/store";
+import { mergeBookInto, renameTypeInBook } from "./annotations/store";
+import { resolveBookAttachment } from "./core/attachment";
 import { isBookNote } from "./core/book-note";
 import { applyStatus } from "./core/status";
 import { ReaderEvents } from "./core/reader-events";
@@ -9,7 +10,8 @@ import { RESERVED_ENTRY_TYPE } from "./core/types";
 import { BookImporter, IMPORTABLE_EXTENSIONS, type ImportResult, type ImportSource } from "./import/importer";
 import { type WishlistPick, chooseBookFile, searchForWishlist } from "./import/modals";
 import { fetchCover } from "./import/open-library";
-import { isInFolder } from "./import/plan";
+import { groupDuplicates, isInFolder } from "./import/plan";
+import { DuplicatesModal } from "./library/duplicates-modal";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
 import { readPdfMetadata } from "./reader/pdf/adapter";
 import { READER_VIEW_TYPE, ReaderView } from "./reader/reader-view";
@@ -281,6 +283,12 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     );
 
     this.addCommand({
+      id: "find-duplicate-books",
+      name: "Find duplicate books",
+      callback: () => this.findDuplicates(),
+    });
+
+    this.addCommand({
       id: "add-to-wishlist",
       name: "Add a book to the wishlist",
       callback: () => searchForWishlist(this.app, (pick) => void this.addToWishlist(pick)),
@@ -489,6 +497,48 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     if (!reader) return;
     revealReader(this.app, reader);
     if (id) await reader.goToEntry(id);
+  }
+
+  /** Lists the books in the library more than once, to merge each into one note. */
+  private findDuplicates(): void {
+    const { attachments } = this.settings.properties;
+    const books = this.importer.bookNotes().map((note) => ({
+      note,
+      hasFile: resolveBookAttachment(this.app, note, attachments) !== null,
+    }));
+    const groups = groupDuplicates(books, (book) => this.importer.identityOf(book.note));
+    new DuplicatesModal(this.app, groups, async (keep, others) => {
+      try {
+        for (const [index, other] of others.entries()) {
+          // The next merge locates highlights from the metadata cache, which
+          // catches up with the last write a moment after it lands.
+          if (index > 0) await this.cacheCaughtUp(keep);
+          await mergeBookInto(this.app, other, keep, this.settings);
+        }
+        new Notice(`Merged into “${keep.basename}”. The other ${others.length === 1 ? "note is" : "notes are"} in the trash.`);
+        return true;
+      } catch (error) {
+        console.error("[e-reader] could not merge duplicate books", error);
+        new Notice(`Could not merge into “${keep.basename}”: ${String(error)}`, 10000);
+        return false;
+      }
+    }).open();
+  }
+
+  /** Resolves once the metadata cache has re-read `file`, or after two seconds if it already had. */
+  private cacheCaughtUp(file: TFile): Promise<void> {
+    return new Promise((resolve) => {
+      const ref = this.app.metadataCache.on("changed", (changed) => {
+        if (changed.path !== file.path) return;
+        finish();
+      });
+      const timer = window.setTimeout(() => finish(), 2000);
+      const finish = (): void => {
+        window.clearTimeout(timer);
+        this.app.metadataCache.offref(ref);
+        resolve();
+      };
+    });
   }
 
   /** Every book note in the vault. */

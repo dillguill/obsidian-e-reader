@@ -24,8 +24,12 @@ title, author, language, cover and more are read from the file itself, and
 Open Library can fill in what the file does not say (ISBN, page count,
 subjects, a cover). The note goes to your book notes folder (`Library` by
 default) and the file to wherever Obsidian puts attachments, or a folder you
-choose. A book already in the library is never imported twice, and a failed
-import leaves nothing behind.
+choose. A book already in the library is never imported twice: the same
+ISBN, or the same title (subtitle aside) by the same author, or by anyone when
+the existing note has no author. A failed import leaves nothing behind.
+**Find duplicate books** lists books that are in the library more than once
+and merges each into the note you keep, moving highlights, properties and
+text and trashing the rest.
 
 **Wishlist and read later.** "Add a book to the wishlist" searches Open
 Library and saves a book note with its details and cover but no file. In the

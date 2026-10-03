@@ -53,13 +53,6 @@ function libraryViewOptions(settings: Settings): BasesAllOptions[] {
       displayName: "Progress property",
       default: `note.${settings.properties.progress}`,
     },
-    {
-      key: "progressDisplay",
-      type: "dropdown",
-      displayName: "Progress display",
-      default: "bar",
-      options: { bar: "Bar", percent: "Percent" },
-    },
   ];
 }
 

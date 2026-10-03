@@ -22,6 +22,7 @@ import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
 import type { EpubFlow } from "../../settings/settings-model";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
+import { watchLongPress } from "../long-press";
 import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine } from "../engine";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
 import { fractionToPercent } from "../progress";
@@ -411,6 +412,7 @@ export class EpubEngine implements ReaderEngine {
       const fireSelectionEnd = (): void => this.selectionEndHandler?.();
       contents.document.addEventListener("mouseup", fireSelectionEnd, options);
       contents.document.addEventListener("touchend", fireSelectionEnd, options);
+      watchLongPress(contents.document, this.listeners?.signal, fireSelectionEnd);
       contents.document.addEventListener("selectionchange", () => this.selectionChangeHandler?.(), options);
       // Clicking into the book moves focus into its iframe, out of reach of
       // the view's Scope, so key presses there are forwarded from here.

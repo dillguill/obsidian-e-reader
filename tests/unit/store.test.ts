@@ -85,10 +85,10 @@ describe("copying and exporting a highlight", () => {
   it("copies it as a quote or a callout, with the note link beside the source and the comment after", async () => {
     const { app, book } = await setup();
     const entry = await addEntry(app, book, { ...draft, comment: "Worth comparing." }, SETTINGS, NOW, random);
-    const source = `> ${SOURCE}${entry.id}) · [[Dune#^${entry.id}|Link to note]]`;
+    const source = `> ${SOURCE}${entry.id}) · [[Dune#^${entry.id}|View in book note]]`;
     const tail = "Worth comparing.";
-    expect(entryCopy(app, book, entry, false)).toBe(`> the spice must flow\n${source}\n\n${tail}`);
-    expect(entryCopy(app, book, entry, true)).toBe(`> [!idea]\n> the spice must flow\n${source}\n\n${tail}`);
+    expect(entryCopy(app, book, entry, false)).toBe(`> the spice must flow\n>\n${source}\n\n${tail}`);
+    expect(entryCopy(app, book, entry, true)).toBe(`> [!idea]\n> the spice must flow\n>\n${source}\n\n${tail}`);
     expect(entryLink(app, book, entry)).toBe(`[[Dune#^${entry.id}]]`);
     expect(findBookForEntry(app, entry.id, SETTINGS.highlights)?.path).toBe(book.path);
   });
@@ -114,7 +114,7 @@ describe("copying and exporting a highlight", () => {
     });
     const text = await app.vault.read(note);
     expect(text.replace(/^---\n[\s\S]*?\n---\n/, "")).toBe(
-      `> the spice must flow\n> ${SOURCE}${entry.id}) · [[Dune#^${entry.id}|Link to note]]\n`,
+      `> the spice must flow\n>\n> ${SOURCE}${entry.id}) · [[Dune#^${entry.id}|View in book note]]\n`,
     );
 
     // The export is not a second copy: the book note still lists it once.
@@ -129,7 +129,7 @@ describe("copying and exporting a highlight", () => {
     const entry = await addEntry(app, book, draft, SETTINGS, NOW, random);
     const note = await exportHighlightNote(app, book, entry, { ...SETTINGS.highlights, template: "Templates/Highlight" });
     expect(app.metadataCache.getFileCache(note)?.frontmatter).toMatchObject({ tags: "reading", book: "[[Dune]]" });
-    expect(await app.vault.read(note)).toContain(`## Dune — Book One\n\nthe spice must flow\n\n[[Dune#^${entry.id}|Link to note]]\n`);
+    expect(await app.vault.read(note)).toContain(`## Dune — Book One\n\nthe spice must flow\n\n[[Dune#^${entry.id}|View in book note]]\n`);
   });
 
   it("fills placeholders, keeps unknown ones and closes up blank lines", () => {

@@ -108,7 +108,7 @@ anchor. Resolves CHK011.
 
 The book note is the only store. "Export as note" writes a new note named after the quote's opening words.
 Its body is a template (a note chosen in settings, or by default `{{highlight}}` then `{{comment}}`): the
-quote whose last line is `– [Book, Chapter, p. 35](obsidian://…) · [[Book#^id|Link to note]]`, then the
+quote whose last line is `– [Book, Chapter, p. 35](obsidian://…) · [[Book#^id|View in book note]]`, then the
 comment. It gets `book`, `highlight`,
 `chapter`, `page` and `created` properties (names configurable). The plugin never reads an exported note
 back as an entry.

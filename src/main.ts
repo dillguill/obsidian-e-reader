@@ -1,12 +1,22 @@
 import type { BasesAllOptions, WorkspaceLeaf } from "obsidian";
-import { Notice, Plugin } from "obsidian";
+import { FuzzySuggestModal, Notice, Plugin, TFile } from "obsidian";
 import { ReaderEvents } from "./core/reader-events";
+import { BookImporter, IMPORTABLE_EXTENSIONS, type ImportResult, type ImportSource } from "./import/importer";
+import { isInFolder } from "./import/plan";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
+import { readPdfMetadata } from "./reader/pdf/adapter";
 import { READER_VIEW_TYPE, ReaderView } from "./reader/reader-view";
 import { HIGHLIGHTS_VIEW_TYPE, HighlightsView } from "./sidebar/highlights-view";
 import { OUTLINE_VIEW_TYPE, OutlineView } from "./sidebar/outline-view";
 import { EReaderSettingTab, type SettingsHost } from "./settings/settings-tab";
 import { type Settings, DEFAULT_SETTINGS, SETTINGS_VERSION, mergeSettings } from "./settings/settings-model";
+
+/**
+ * How long a new file in the inbox must sit unchanged before it is imported.
+ * A sync client or a browser writes a download in pieces, and the vault
+ * reports the file as created at the first of them.
+ */
+const INBOX_SETTLE_MS = 2000;
 
 /** Obsidian's own outline pane. Closed once at startup when the reader asks for it. */
 const NATIVE_OUTLINE_VIEW_TYPE = "outline";
@@ -70,6 +80,11 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
   override settings: Settings = DEFAULT_SETTINGS;
   /** The reader's own event channel, so sidebar panes can follow it without a workspace-wide event name. */
   private readonly readerEvents = new ReaderEvents();
+  private readonly importer = new BookImporter(this.app, () => this.settings, readPdfMetadata);
+  /** Inbox files waiting to settle, by path. */
+  private readonly inboxTimers = new Map<string, number>();
+  /** Inbox files already reported as duplicates this session, so a rescan does not report them again. */
+  private readonly inboxSkipped = new Set<string>();
 
   override async onload(): Promise<void> {
     try {
@@ -127,7 +142,8 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       const registered = this.registerBasesView(LIBRARY_VIEW_TYPE, {
         name: "Library",
         icon: "library",
-        factory: (controller, containerEl) => new LibraryView(controller, containerEl, () => this.settings),
+        factory: (controller, containerEl) =>
+          new LibraryView(controller, containerEl, () => this.settings, (source) => this.importBook(source)),
         options: () => libraryViewOptions(this.settings),
       });
       if (!registered) {
@@ -203,6 +219,25 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     readerCommand("zoom-in", "Zoom in", (view) => view.zoom(1));
     readerCommand("zoom-out", "Zoom out", (view) => view.zoom(-1));
 
+    this.addCommand({
+      id: "import-book",
+      name: "Import a book from the vault",
+      callback: () => new ImportSuggestModal(this, (file) => void this.importBook({ kind: "vault", file })).open(),
+    });
+
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (!(file instanceof TFile) || !IMPORTABLE_EXTENSIONS.has(file.extension)) return;
+        if (this.attachedPaths().has(file.path)) return;
+        menu.addItem((item) =>
+          item
+            .setTitle("Import as book")
+            .setIcon("book-plus")
+            .onClick(() => void this.importBook({ kind: "vault", file })),
+        );
+      }),
+    );
+
     // Closing Obsidian's outline is a single action taken when the vault
     // opens, never a watcher that keeps re-closing it: there is no supported
     // way to disable a core plugin (`app.internalPlugins` is not public API),
@@ -223,7 +258,56 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
         this.app.workspace.detachLeavesOfType(NATIVE_OUTLINE_VIEW_TYPE);
       }
       void this.app.workspace.requestSaveLayout();
+
+      // Registered only once the vault has loaded: before that, every
+      // existing file is reported as created.
+      this.registerEvent(this.app.vault.on("create", (file) => this.onInboxCandidate(file)));
+      this.registerEvent(this.app.vault.on("modify", (file) => this.onInboxCandidate(file)));
+      this.scanInbox();
     });
+  }
+
+  /** Imports whatever is already sitting in the inbox. Called at startup and when the inbox setting changes. */
+  scanInbox(): void {
+    const inbox = this.settings.import.inboxFolder;
+    if (inbox === "") return;
+    for (const file of this.app.vault.getFiles()) this.onInboxCandidate(file);
+  }
+
+  /** Schedules an inbox file for import once it has stopped changing. */
+  private onInboxCandidate(file: unknown): void {
+    if (!(file instanceof TFile) || !IMPORTABLE_EXTENSIONS.has(file.extension)) return;
+    if (!isInFolder(file.path, this.settings.import.inboxFolder) || this.importer.wrote(file.path)) return;
+    if (this.inboxSkipped.has(file.path)) return;
+    const pending = this.inboxTimers.get(file.path);
+    if (pending !== undefined) window.clearTimeout(pending);
+    const timer = window.setTimeout(() => {
+      this.inboxTimers.delete(file.path);
+      // It may have been moved or deleted while settling.
+      if (this.app.vault.getAbstractFileByPath(file.path) !== file) return;
+      void this.importBook({ kind: "vault", file }).then((result) => {
+        if (result?.status === "duplicate") this.inboxSkipped.add(file.path);
+      });
+    }, INBOX_SETTLE_MS);
+    this.inboxTimers.set(file.path, timer);
+    this.registerInterval(timer);
+  }
+
+  /** Runs an import and reports how it went. */
+  async importBook(source: ImportSource): Promise<ImportResult | null> {
+    const name = source.kind === "vault" ? source.file.name : source.name;
+    try {
+      const result = await this.importer.import(source);
+      if (result.status === "imported") new Notice(`Imported “${result.title}”.`);
+      else if (result.status === "duplicate") {
+        new Notice(`“${result.title}” is already in your library, as ${result.existing.basename}. Nothing was changed.`, 8000);
+      } else new Notice(`${name} is not an EPUB or PDF.`);
+      return result;
+    } catch (error) {
+      console.error("[e-reader] import failed", error);
+      new Notice(`Could not import ${name}: ${String(error)}. Nothing was changed.`, 10000);
+      return null;
+    }
   }
 
   /** The type a highlight is written as. Falls back when every type has been removed. */
@@ -231,6 +315,11 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     const active = this.settings.reader.activeAnnotationType;
     if (active !== "") return active;
     return this.settings.annotationTypes[0]?.name ?? "highlight";
+  }
+
+  /** Paths of every file a book note already links. */
+  attachedPaths(): Set<string> {
+    return this.importer.attachedPaths();
   }
 
   /** Closes any pane the reader has just switched off. Called from the settings tab. */
@@ -257,5 +346,31 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+}
+
+/** Picks an EPUB or PDF in the vault that is not yet a book. */
+class ImportSuggestModal extends FuzzySuggestModal<TFile> {
+  constructor(
+    private readonly plugin: EReaderPlugin,
+    private readonly onChoose: (file: TFile) => void,
+  ) {
+    super(plugin.app);
+    this.setPlaceholder("Choose an EPUB or PDF to import");
+  }
+
+  getItems(): TFile[] {
+    const attached = this.plugin.attachedPaths();
+    return this.app.vault
+      .getFiles()
+      .filter((file) => IMPORTABLE_EXTENSIONS.has(file.extension) && !attached.has(file.path));
+  }
+
+  getItemText(file: TFile): string {
+    return file.path;
+  }
+
+  onChooseItem(file: TFile): void {
+    this.onChoose(file);
   }
 }

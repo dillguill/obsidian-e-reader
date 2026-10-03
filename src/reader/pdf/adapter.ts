@@ -73,6 +73,7 @@ interface PdfjsDocument {
   getOutline(): Promise<PdfjsOutlineItem[] | null>;
   getDestination(id: string): Promise<unknown[] | null>;
   getPageIndex(ref: unknown): Promise<number>;
+  getMetadata(): Promise<{ info: Record<string, unknown> | null }>;
 }
 
 /**
@@ -127,6 +128,68 @@ function loadPdfjs(): Promise<{ lib: PdfjsModule; workerSource: string }> {
     return { lib: lib as PdfjsModule, workerSource: worker.default };
   })();
   return pdfjsPromise;
+}
+
+/** Width in CSS pixels a PDF's first page is drawn at to become its cover. */
+const PDF_COVER_WIDTH = 600;
+
+/**
+ * What a PDF says about itself — its info dictionary's Title and Author, and
+ * its page count — plus its first page drawn as a cover. Lives here so pdf.js
+ * stays inside this module; the importer only sees plain values.
+ */
+export async function readPdfMetadata(data: ArrayBuffer): Promise<{
+  title: string | null;
+  authors: string[];
+  subject: string | null;
+  pages: number;
+  cover: ArrayBuffer | null;
+}> {
+  const { lib, workerSource } = await loadPdfjs();
+  const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" }));
+  lib.GlobalWorkerOptions.workerSrc = workerUrl;
+  // pdf.js takes ownership of the buffer it is given, detaching it; the
+  // caller still needs its bytes to write the file.
+  const task = lib.getDocument({ data: data.slice(0) });
+  try {
+    const doc = await task.promise;
+    const { info } = await doc.getMetadata().catch(() => ({ info: null }));
+    const text = (key: string): string | null => {
+      const value = info?.[key];
+      return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+    };
+    const author = text("Author");
+    let cover: ArrayBuffer | null = null;
+    try {
+      const page = await doc.getPage(1);
+      const unscaled = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: PDF_COVER_WIDTH / unscaled.width });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+        cover = blob ? await blob.arrayBuffer() : null;
+      }
+    } catch (error) {
+      console.debug("[e-reader] could not draw a PDF's first page as its cover", error);
+    }
+    return {
+      title: text("Title"),
+      // Info dictionaries hold one string. Several authors are split on
+      // semicolons, "&" and "and" — not commas, which also separate a
+      // surname from its initials ("Tolkien, J. R. R.").
+      authors: author ? author.split(/\s*(?:;|&|\band\b)\s*/).filter((name) => name !== "") : [],
+      subject: text("Subject"),
+      pages: doc.numPages,
+      cover,
+    };
+  } finally {
+    await task.destroy().catch(() => undefined);
+    URL.revokeObjectURL(workerUrl);
+  }
 }
 
 async function resolveDestPage(doc: PdfjsDocument, item: PdfjsOutlineItem): Promise<number | null> {

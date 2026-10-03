@@ -155,7 +155,7 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       ],
       readers: { epub: "plugin", pdf: "default" },
       panes: { outline: false, highlights: true, hideNativeOutline: true },
-      catalog: { url: "https://example.org/opds" },
+      import: { notesFolder: "Books", filesFolder: "Books/files", inboxFolder: "Inbox", lookUpMetadata: false },
       reader: {
         pdfScale: 1.25,
         pdfFit: "none",
@@ -199,14 +199,27 @@ describe("sidebar pane toggles", () => {
   });
 });
 
-describe("catalog settings", () => {
-  it("ships with no catalog configured", () => {
-    expect(DEFAULT_SETTINGS.catalog.url).toBe("");
+describe("import settings", () => {
+  it("ships with notes in Library, files where Obsidian puts attachments, no inbox, and lookup on", () => {
+    expect(DEFAULT_SETTINGS.import).toEqual({
+      notesFolder: "Library",
+      filesFolder: "",
+      inboxFolder: "",
+      lookUpMetadata: true,
+    });
   });
 
-  it("keeps a saved url and ignores a non-string one", () => {
-    expect(mergeSettings({ catalog: { url: "https://example.org/opds" } }).catalog.url).toBe("https://example.org/opds");
-    expect(mergeSettings({ catalog: { url: 42 } }).catalog.url).toBe("");
+  it("trims slashes from saved folders and falls back per-field", () => {
+    expect(mergeSettings({ import: { notesFolder: "/Books/", inboxFolder: 3, lookUpMetadata: "no" } }).import).toEqual({
+      notesFolder: "Books",
+      filesFolder: "",
+      inboxFolder: "",
+      lookUpMetadata: true,
+    });
+  });
+
+  it("drops the old OPDS catalog address", () => {
+    expect(mergeSettings({ catalog: { url: "https://example.org/opds" } })).not.toHaveProperty("catalog");
   });
 });
 

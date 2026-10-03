@@ -679,3 +679,33 @@
 .ereader-outline .tree-item-self.mod-leaf .collapse-icon {
   width: 10px;
 }
+
+/* The offer to jump to the furthest-read position (FR-015b). It floats over
+   the page rather than pushing it down, so accepting or dismissing it does
+   not shift the text the reader has just started on. */
+.ereader-reader__resume {
+  position: absolute;
+  top: var(--size-4-12);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  max-width: calc(100% - var(--size-4-8));
+  padding: var(--size-4-1) var(--size-4-1) var(--size-4-1) var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-l);
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+}
+
+.ereader-reader__resume span {
+  flex: 1 1 auto;
+}
+
+.ereader-reader__resume button {
+  flex: none;
+}

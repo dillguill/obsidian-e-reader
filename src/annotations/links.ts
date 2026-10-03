@@ -45,20 +45,24 @@ export function entryLink(app: App, book: TFile, entry: Entry): string {
   return app.fileManager.generateMarkdownLink(book, "", `#^${entry.id}`);
 }
 
-/** The separate link back to the highlight in its book note, under a copy or an export. */
+/** The link back to the highlight in its book note, which copies and exports carry beside the source. */
 export function noteLink(app: App, book: TFile, entry: Entry, sourcePath = ""): string {
   return app.fileManager.generateMarkdownLink(book, sourcePath, `#^${entry.id}`, "Link to note");
 }
 
-/** The quote with its attribution line, as a plain quote or as a callout typed like the highlight. */
-export function quoteBlock(app: App, book: TFile, entry: Entry, callout: boolean): string {
+/**
+ * The quote, as a plain quote or as a callout typed like the highlight, with
+ * its source line and the link back to the note:
+ * `– [Dune, Book One, p. 35](obsidian://…) · [[Dune#^id|Link to note]]`.
+ */
+export function quoteBlock(app: App, book: TFile, entry: Entry, callout: boolean, sourcePath = ""): string {
   const lines = callout ? [`> [!${entry.type}]`] : [];
   if (entry.exact !== "") lines.push(...quoteLines(entry.exact));
-  lines.push(`> ${attribution(app, book, entry)}`);
+  lines.push(`> ${attribution(app, book, entry)} · ${noteLink(app, book, entry, sourcePath)}`);
   return lines.join("\n");
 }
 
-/** What Copy as quote and Copy as callout put on the clipboard: the block, the comment under it, then the link to the note. */
+/** What Copy as quote and Copy as callout put on the clipboard: the block, then the comment under it. */
 export function entryCopy(app: App, book: TFile, entry: Entry, callout: boolean): string {
-  return [quoteBlock(app, book, entry, callout), entry.comment, noteLink(app, book, entry)].filter((part) => part !== "").join("\n\n");
+  return [quoteBlock(app, book, entry, callout), entry.comment].filter((part) => part !== "").join("\n\n");
 }

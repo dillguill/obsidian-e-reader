@@ -1,8 +1,8 @@
 // Exporting a highlight as a note of its own.
 //
 // The body comes from a template: a note the reader picks, or the built-in
-// layout, which matches Copy as quote (the quote with its attribution line,
-// the comment, then a link back to the highlight in the book note). The
+// layout, which matches Copy as quote (the quote with its source line and a
+// link back to the highlight in the book note, then the comment). The
 // placeholders are filled in and blank lines left by empty ones are closed
 // up. Properties (book, type, chapter, page, created, under names the reader
 // chose) are added on top of any the template itself has, so Bases can list
@@ -19,7 +19,7 @@ import { availablePath, bookTitle, ensureFolder, highlightFolder, sourceLabel } 
 import { noteLink, quoteBlock } from "./links";
 
 /** The layout used when no template is set. */
-export const DEFAULT_EXPORT_TEMPLATE = "{{highlight}}\n\n{{comment}}\n\n{{link}}\n";
+export const DEFAULT_EXPORT_TEMPLATE = "{{highlight}}\n\n{{comment}}\n";
 
 /** Words of the quote that go into an exported note's name. */
 const NAME_WORDS = 6;
@@ -28,7 +28,7 @@ const NAME_WORDS = 6;
 export function templateValues(app: App, book: TFile, entry: Entry, sourcePath: string): Record<string, string> {
   const hint = entry.anchor.hint;
   return {
-    highlight: quoteBlock(app, book, entry, false),
+    highlight: quoteBlock(app, book, entry, false, sourcePath),
     quote: entry.exact,
     comment: entry.comment,
     link: noteLink(app, book, entry, sourcePath),

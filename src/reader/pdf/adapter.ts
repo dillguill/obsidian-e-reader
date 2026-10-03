@@ -23,7 +23,6 @@
 import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
 import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
-import { watchLongPress } from "../long-press";
 import type {
   DisplayOption,
   EngineSelection,
@@ -766,7 +765,6 @@ export class PdfEngine implements ReaderEngine {
     const options = { signal: this.listeners?.signal };
     scrollEl.addEventListener("mouseup", fire, options);
     scrollEl.addEventListener("touchend", fire, options);
-    watchLongPress(scrollEl, this.listeners?.signal, fire);
   }
 
   onSelectionChange(handler: () => void): void {

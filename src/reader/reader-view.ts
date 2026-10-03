@@ -46,11 +46,12 @@ export interface ReaderViewState {
 
 const POSITION_FLUSH_INTERVAL_MS = 2000;
 /**
- * How long a touch selection must hold still before the popup opens. Handles
- * dragged on a touchscreen send no touch events into the page, only a stream
- * of `selectionchange`, so the popup waits for that stream to settle.
+ * How often a touchscreen checks for a selection the popup has not opened
+ * for. iOS takes a long press over and the page hears neither the release
+ * nor, reliably, the selection changing, so on a touchscreen the popup does
+ * not wait for an event at all.
  */
-const TOUCH_SELECTION_SETTLE_MS = 300;
+const TOUCH_SELECTION_POLL_MS = 250;
 const BOOKMARK_TYPE = RESERVED_ENTRY_TYPE;
 
 function isReaderViewState(state: unknown): state is ReaderViewState {
@@ -81,7 +82,6 @@ export class ReaderView extends FileView {
   private lastEntrySignature: string | null = null;
   /** The bar of highlight swatches that opens over a selection. */
   private popup: SelectionPopup | null = null;
-  private selectionSettleTimer: number | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -139,6 +139,9 @@ export class ReaderView extends FileView {
     // Scrolling moves the selection out from under the popup. `scroll` does
     // not bubble, so it is caught on the way down instead.
     this.registerDomEvent(this.contentRoot, "scroll", () => this.repositionPopup(), { capture: true });
+    if (Platform.isMobile) {
+      this.registerInterval(window.setInterval(() => this.pollTouchSelection(), TOUCH_SELECTION_POLL_MS));
+    }
 
     // Keys pressed in the host document — a PDF, or the pane around an EPUB
     // — reach the view through its Scope while it is the active leaf. Presses
@@ -505,20 +508,28 @@ export class ReaderView extends FileView {
   /**
    * The selection changed. Cleared, or different from what the popup was
    * opened for, the popup closes at once; a mouse drag re-opens it on
-   * release, while a touch selection — whose handles fire no release — re-
-   * opens it once the changes stop.
+   * release, and a touchscreen's poll re-opens it.
    */
   private onSelectionChange(): void {
     if (this.popup?.isPressed()) return;
     const selection = this.engine?.getSelection() ?? null;
     const open = this.popup?.current() ?? null;
     if (!selection || (open && open.exact !== selection.exact)) this.popup?.hide();
-    if (!selection || !Platform.isMobile) return;
-    if (this.selectionSettleTimer !== null) window.clearTimeout(this.selectionSettleTimer);
-    this.selectionSettleTimer = window.setTimeout(() => {
-      this.selectionSettleTimer = null;
-      this.openPopupForSelection();
-    }, TOUCH_SELECTION_SETTLE_MS);
+  }
+
+  /** Opens the popup for a touch selection it is not already showing. */
+  private pollTouchSelection(): void {
+    const engine = this.engine;
+    const popup = this.popup;
+    if (!engine || !popup || popup.isPressed()) return;
+    const selection = engine.getSelection();
+    const open = popup.current();
+    if (!selection) {
+      if (open) popup.hide();
+      return;
+    }
+    if (open?.exact === selection.exact) return;
+    this.openPopupForSelection();
   }
 
   private openPopupForSelection(): void {
@@ -543,10 +554,6 @@ export class ReaderView extends FileView {
 
   /** Closes the popup, and with `clearSelection` the selection it was open for too. */
   private closePopup(clearSelection: boolean): void {
-    if (this.selectionSettleTimer !== null) {
-      window.clearTimeout(this.selectionSettleTimer);
-      this.selectionSettleTimer = null;
-    }
     if (clearSelection && this.popup?.current()) this.clearSelection();
     this.popup?.hide();
   }

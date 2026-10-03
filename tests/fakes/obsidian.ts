@@ -186,6 +186,17 @@ function buildFrontmatterLinks(frontmatter: Record<string, unknown>): Frontmatte
   return links;
 }
 
+/** Body wikilinks that are not embeds. Positions are not modelled. */
+function buildLinks(body: string): LinkCache[] {
+  const links: LinkCache[] = [];
+  for (const match of body.matchAll(/(!?)\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)) {
+    if (match[1] === "!") continue;
+    const zero = { line: 0, col: 0, offset: 0 };
+    links.push({ link: match[2] as string, original: match[0], position: { start: zero, end: zero } });
+  }
+  return links;
+}
+
 function stringifyFrontmatter(frontmatter: Record<string, unknown>): string {
   const lines: string[] = [];
   for (const [key, value] of Object.entries(frontmatter)) {
@@ -219,7 +230,14 @@ export interface BlockCache {
   position: Position;
 }
 
+export interface LinkCache {
+  link: string;
+  original: string;
+  position: Position;
+}
+
 export interface CachedMetadata {
+  links?: LinkCache[];
   frontmatterLinks?: FrontmatterLinkCache[];
   frontmatter?: Record<string, unknown>;
   sections?: SectionCache[];
@@ -453,6 +471,7 @@ export class MetadataCache extends Events {
       // cache's do, so the frontmatter is blanked rather than cut off.
       sections: buildSections(blankedFrontmatter(content, body)),
       blocks: buildBlocks(blankedFrontmatter(content, body)),
+      links: buildLinks(body),
     };
   }
 

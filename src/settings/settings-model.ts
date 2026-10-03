@@ -72,39 +72,24 @@ export interface PaneSettings {
   hideNativeOutline: boolean;
 }
 
-/**
- * Where highlights live (src/annotations/store.ts). `book-note` writes them
- * into the book note itself; `notes` gives each highlight a note of its own
- * and leaves the book note alone apart from one embedded Bases view. Both are
- * always read, so changing this only affects highlights written afterwards
- * unless the reader also moves the existing ones.
- */
-export type HighlightMode = "book-note" | "notes";
-
-/** How a highlight is written into the book note: a typed callout, or a plain quote. */
-export type HighlightStyle = "callout" | "quote";
-
-/** The properties a highlight note carries, by the names the reader chose. */
+/** The properties an exported highlight note carries, by the names the reader chose. */
 export interface HighlightNoteProperties {
-  /** Link to the book note. This is what ties a highlight note to its book. */
+  /** Link to the book note. */
   book: string;
   type: string;
   page: string;
-  section: string;
   created: string;
-  /** Where the highlight sits in the book: id, surrounding text and position, as JSON. */
-  anchor: string;
 }
 
+/**
+ * Highlights always live in the book note (src/annotations/store.ts); these
+ * settings only shape a highlight exported as a note of its own, which
+ * embeds the highlight rather than copying it.
+ */
 export interface HighlightSettings {
-  mode: HighlightMode;
-  /** Only used in `book-note` mode. */
-  style: HighlightStyle;
-  /** Write a link that opens the reader at each highlight. */
-  pageLinks: boolean;
-  /** Where highlight notes go. Empty means the vault root. */
+  /** Where exported highlight notes go. Empty means the vault root. */
   folder: string;
-  /** Put each book's highlight notes in a subfolder named after the book. */
+  /** Put each book's exported notes in a subfolder named after the book. */
   subfolderPerBook: boolean;
   properties: HighlightNoteProperties;
 }
@@ -239,12 +224,9 @@ export const DEFAULT_SETTINGS: Settings = {
   panes: { outline: true, highlights: true, hideNativeOutline: false },
   import: { notesFolder: "Library", filesFolder: "", inboxFolder: "", lookUpMetadata: true, ignoredPdfs: [] },
   highlights: {
-    mode: "book-note",
-    style: "callout",
-    pageLinks: true,
     folder: "Highlights",
     subfolderPerBook: true,
-    properties: { book: "book", type: "highlight", page: "page", section: "section", created: "created", anchor: "anchor" },
+    properties: { book: "book", type: "highlight", page: "page", created: "created" },
   },
   reader: {
     pdfScale: 1,
@@ -370,12 +352,6 @@ function mergeImport(saved: Record<string, unknown>): ImportSettings {
 function mergeHighlights(saved: Record<string, unknown>): HighlightSettings {
   const from = group(saved, "highlights");
   const defaults = DEFAULT_SETTINGS.highlights;
-  // Before 0.4.0 a single `format` chose both where and how: callout, quote, or note.
-  const legacy = from["format"];
-  const mode: HighlightMode =
-    from["mode"] === "notes" || from["mode"] === "book-note" ? from["mode"] : legacy === "note" ? "notes" : defaults.mode;
-  const style: HighlightStyle =
-    from["style"] === "callout" || from["style"] === "quote" ? from["style"] : legacy === "quote" ? "quote" : defaults.style;
   const savedProperties = isRecord(from["properties"]) ? from["properties"] : {};
   const properties = { ...defaults.properties };
   for (const key of Object.keys(properties) as (keyof HighlightNoteProperties)[]) {
@@ -383,9 +359,6 @@ function mergeHighlights(saved: Record<string, unknown>): HighlightSettings {
     if (typeof value === "string" && value.trim() !== "") properties[key] = value.trim();
   }
   return {
-    mode,
-    style,
-    pageLinks: mergeBoolean(from["pageLinks"], defaults.pageLinks),
     folder: mergeFolder(from["folder"], defaults.folder),
     subfolderPerBook: mergeBoolean(from["subfolderPerBook"], defaults.subfolderPerBook),
     properties,

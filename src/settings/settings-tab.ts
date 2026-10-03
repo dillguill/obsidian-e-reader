@@ -13,7 +13,6 @@ import { RESERVED_ENTRY_TYPE } from "../core/types";
 import {
   DEFAULT_SETTINGS,
   HIGHLIGHT_PALETTE,
-  type HighlightMode,
   type PropertyNames,
   type ReaderChoice,
   type Settings,
@@ -27,8 +26,6 @@ export interface SettingsHost {
   applyPaneSettings(): void;
   /** Imports whatever already sits in the inbox folder. */
   scanInbox(): void;
-  /** Offers to move existing highlights to where the newly chosen mode keeps them. */
-  offerToMoveHighlights(mode: HighlightMode): void;
   /** Asks for a new name for a highlight type and renames it in every book. */
   renameHighlightType(from: string, onDone: () => void): void;
 }
@@ -242,55 +239,18 @@ export class EReaderSettingTab extends PluginSettingTab {
   // ----------------------------------------------------- highlight format
 
   private addHighlightFormatSection(containerEl: HTMLElement): void {
-    new Setting(containerEl).setName("Highlights").setHeading();
+    new Setting(containerEl)
+      .setName("Exported highlight notes")
+      .setDesc(
+        "Highlights are kept in the book note. These settings shape a highlight exported as a note of its own " +
+          "from the Highlights pane: the quote, a link back to it, and properties Bases can list.",
+      )
+      .setHeading();
     const settings = this.host.settings.highlights;
 
     new Setting(containerEl)
-      .setName("Keep highlights in")
-      .setDesc(
-        "The book note: highlights are written into the book's own note. Notes: each highlight gets a note of its own, " +
-          "with properties, and the book note shows them through an embedded Bases view. Both are always read.",
-      )
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOptions({ "book-note": "The book note", notes: "Notes" })
-          .setValue(settings.mode)
-          .onChange((value) => {
-            settings.mode = value === "notes" ? "notes" : "book-note";
-            this.save();
-            this.host.offerToMoveHighlights(settings.mode);
-            // The settings below depend on the choice.
-            this.display();
-          }),
-      );
-    if (settings.mode === "book-note") {
-      new Setting(containerEl)
-        .setName("Style")
-        .setDesc("A callout named after the highlight's type, so a CSS snippet can style each type; or a plain quote.")
-        .addDropdown((dropdown) =>
-          dropdown
-            .addOptions({ callout: "Callout", quote: "Quote" })
-            .setValue(settings.style)
-            .onChange((value) => {
-              settings.style = value === "quote" ? "quote" : "callout";
-              this.save();
-            }),
-        );
-    }
-    new Setting(containerEl)
-      .setName("Page links")
-      .setDesc("Write a link with each highlight that opens the book at that spot.")
-      .addToggle((toggle) =>
-        toggle.setValue(settings.pageLinks).onChange((value) => {
-          settings.pageLinks = value;
-          this.save();
-        }),
-      );
-    if (settings.mode !== "notes") return;
-
-    new Setting(containerEl)
-      .setName("Highlight notes folder")
-      .setDesc("Where highlight notes are created. Empty puts them at the root of the vault.")
+      .setName("Folder")
+      .setDesc("Where exported highlight notes are created. Empty puts them at the root of the vault.")
       .addText((text) => {
         text
           .setPlaceholder("Highlights")
@@ -303,7 +263,7 @@ export class EReaderSettingTab extends PluginSettingTab {
       });
     new Setting(containerEl)
       .setName("A subfolder per book")
-      .setDesc("Put each book's highlight notes in a folder named after the book.")
+      .setDesc("Put each book's exported notes in a folder named after the book.")
       .addToggle((toggle) =>
         toggle.setValue(settings.subfolderPerBook).onChange((value) => {
           settings.subfolderPerBook = value;
@@ -313,12 +273,10 @@ export class EReaderSettingTab extends PluginSettingTab {
 
     const names = settings.properties;
     const rows: { key: keyof typeof names; name: string; desc: string }[] = [
-      { key: "book", name: "Book property", desc: "Link to the book note. This is how a highlight note is tied to its book." },
+      { key: "book", name: "Book property", desc: "Link to the book note." },
       { key: "type", name: "Type property", desc: "The highlight's type, such as idea or question." },
       { key: "page", name: "Page property", desc: "The page the highlight is on, where the book has pages." },
-      { key: "section", name: "Section property", desc: "The chapter or section, from the book's table of contents." },
       { key: "created", name: "Created property", desc: "When the highlight was made." },
-      { key: "anchor", name: "Anchor property", desc: "Where the highlight sits in the book. Written by the reader; leave it as it is." },
     ];
     for (const row of rows) {
       new Setting(containerEl)

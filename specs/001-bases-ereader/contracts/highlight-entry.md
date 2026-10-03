@@ -36,8 +36,8 @@ Whatever the reader has written about this book stays here, untouched.
 1. Everything outside the `begin`/`end` markers is the reader's and MUST NOT be modified.
 2. One callout per entry. The callout's type carries the entry `type` (`> [!idea]`) and its title is left
    empty; `bookmark` is reserved. The pre-0.3.7 form, `> [!quote] <type>` with the quote in `==…==`,
-   still parses. The "quote" style drops the callout header and carries `type` in the anchor JSON
-   instead. A reader link (`[p. 35](obsidian://e-reader?vault=…&id=<id>)`) may follow the type in the
+   still parses. Entries are written as callouts. A plain-quote entry (from a 0.3.7 or 0.4.0 beta), which
+   drops the callout header and carries `type` in the anchor JSON instead, still parses. A reader link (`[p. 35](obsidian://e-reader?vault=…&id=<id>)`) may follow the type in the
    callout title or sit on its own quoted line; it is derived, ignored when parsing and rewritten when
    serialising. It names only the entry id; the handler finds the note holding that id. Links written by
    0.3.7 betas also carry `file=`, which is honoured while it resolves.
@@ -101,25 +101,15 @@ anchor. Resolves CHK011.
   contract only ever references a whole entry, so the limitation does not bite — but do not later
   introduce sub-entry references expecting them to resolve.
 
-## Highlight notes (notes mode, 0.4.0)
+## Exported highlight notes (0.4.0)
 
-In notes mode a highlight is a note of its own and nothing is written into the region. Its properties,
-under the names chosen in settings:
+The book note is the only store. "Export as note" writes a new note whose body is the quote as plain text
+followed by a link to the entry's block (`[[Book#^id|Book, p. 35]]`), with `book`, `highlight`, `page` and
+`created` properties (names configurable). The plugin never reads an exported note back as an entry.
 
-| Property | Value |
-| --- | --- |
-| `book` | `[[Book note]]`. Ties the note to its book. |
-| `highlight` | The entry type. |
-| `page`, `section` | Where known. |
-| `created` | ISO 8601. |
-| `anchor` | JSON string: `{"id","prefix"?,"suffix"?,"hint"?}`. |
-
-The body is the quote as a blockquote (the authoritative anchor, as in rule 3), then the reader link on its
-own line, then the reader's comment. Notes written by 0.3.7 betas carried the anchor in a `%%…%%` line in the
-quote block; they still parse and are rewritten in this shape when they next change.
-
-The book note embeds `![[Highlights.base#This book]]` once, outside the region. That view filters on
-`note["book"] == this`.
+Betas briefly stored highlights only as notes of their own, with the anchor in a `%%…%%` line (0.3.7) or an
+`anchor` JSON property (0.4.0-beta.1). Those are folded back into the book note's region as callouts when the
+book is opened, and the `![[Highlights.base#This book]]` embed 0.4.0-beta.1 added is removed.
 
 ## Bookmarks (0.4.0)
 

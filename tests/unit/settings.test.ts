@@ -161,12 +161,9 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       panes: { outline: false, highlights: true, hideNativeOutline: true },
       import: { notesFolder: "Books", filesFolder: "Books/files", inboxFolder: "Inbox", lookUpMetadata: false, ignoredPdfs: ["Inbox/receipt.pdf"] },
       highlights: {
-        mode: "notes",
-        style: "quote",
-        pageLinks: false,
         folder: "Notes/Highlights",
         subfolderPerBook: false,
-        properties: { book: "source", type: "kind", page: "p", section: "chapter", created: "made", anchor: "where" },
+        properties: { book: "source", type: "kind", page: "p", created: "made" },
       },
       reader: {
         pdfScale: 1.25,
@@ -378,15 +375,8 @@ describe("pdf fit mode", () => {
     expect(mergeSettings({ reader: { pdfScale: 1 } }).reader.pdfFit).toBe("width");
   });
 
-  it("carries the 0.3.7 highlight format over to a mode and style", () => {
-    const of = (format: string) => {
-      const { mode, style } = mergeSettings({ highlights: { format } }).highlights;
-      return [mode, style];
-    };
-    expect(of("callout")).toEqual(["book-note", "callout"]);
-    expect(of("quote")).toEqual(["book-note", "quote"]);
-    expect(of("note")[0]).toBe("notes");
-    expect(mergeSettings({ highlights: { format: "note" } }).highlights).not.toHaveProperty("format");
-    expect(mergeSettings({}).highlights.pageLinks).toBe(true);
+  it("drops the highlight placement settings earlier betas had", () => {
+    const { highlights } = mergeSettings({ highlights: { format: "note", mode: "notes", style: "quote", pageLinks: false } });
+    expect(highlights).toEqual(DEFAULT_SETTINGS.highlights);
   });
 });

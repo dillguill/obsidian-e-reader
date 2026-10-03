@@ -71,24 +71,20 @@ highlight. The quote is the anchor as well as the display, so editing it by
 hand edits the anchor. Everything outside the plugin's `%%e-reader:begin/end%%`
 markers is yours and is never touched. Nothing lives in a sidecar database.
 
-**Where highlights live.** Settings → Highlights picks one of two places:
+**Using a highlight elsewhere.** The book note is the one place highlights
+are kept. From a highlight's menu, in the reader or the Highlights pane:
 
-- **The book note** (the default), as a callout or a plain `> quote`.
-- **Notes**: each highlight gets a note of its own, with properties you name
-  (book, type, page, section, created, anchor). The body is just the quote, the
-  page link and your comment. The book note gets one embedded Bases view,
-  `![[Highlights.base#This book]]`, listing its highlights, and nothing else.
+- **Copy as quote** or **Copy as callout** copies the text with a link back to
+  the highlight, to paste into any note.
+- **Copy link** copies `[[Book#^id]]`.
+- **Export as note** creates a note of its own: the quote, a link back, and
+  properties (book, type, page, created; names and folder in settings) that
+  Bases can list. It is a starting point for your own thoughts, not a second
+  copy the plugin keeps in sync.
 
-Both are always read, so switching never loses anything. When you switch, the
-plugin offers to move existing highlights across; the commands **Move all
-highlights into highlight notes** and **Move all highlights into book notes**
-do the same later.
-
-To quote a highlight elsewhere, use **Copy link** or **Copy embed** from its
-menu in the reader or the Highlights pane: an embed shows the quote inline and
-links back to where it lives. **Open in book** (a command, and in a highlight
-note's file menu) opens the reader at that highlight. **Rename a highlight
-type** renames it in settings and in every book.
+**Open in book** (a command, and in an exported note's file menu) opens the
+reader at that highlight. **Rename a highlight type** renames it in settings
+and in every book.
 
 **Bookmarks** are a `bookmarks` list property on the book note, one position
 per item.

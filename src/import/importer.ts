@@ -10,6 +10,7 @@
 import type { App, TFile } from "obsidian";
 import { resolveBookAttachment } from "../core/attachment";
 import { isBookNote } from "../core/book-note";
+import { applyStatus } from "../core/status";
 import type { Settings } from "../settings/settings-model";
 import { readEpubMetadata } from "./epub-metadata";
 import { type BookMetadata, fillGaps } from "./metadata";
@@ -125,6 +126,10 @@ export class BookImporter {
       const existing = this.findDuplicate(meta, null);
       if (existing) return { status: "duplicate", existing, title: meta.title };
       const note = await this.write(null, meta);
+      const { status } = this.getSettings();
+      await this.app.fileManager.processFrontMatter(note, (fm: Record<string, unknown>) => {
+        applyStatus(fm, status, status.wishlist, true);
+      });
       return { status: "imported", note, title: meta.title };
     });
   }
@@ -207,6 +212,8 @@ export class BookImporter {
         const current = fm[settings.properties.attachments];
         const list = Array.isArray(current) ? current : isEmpty(current) ? [] : [current];
         fm[settings.properties.attachments] = [...list, link(bookFile)];
+        // The book is here now, so it is no longer one you are waiting for.
+        applyStatus(fm, settings.status, settings.status.wishlist, false);
       });
       return { status: "attached", file: bookFile };
     } catch (error) {

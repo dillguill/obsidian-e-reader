@@ -126,6 +126,7 @@ describe("BookImporter", () => {
       const fm = app.metadataCache.getFileCache(note)?.frontmatter;
       expect(fm).toMatchObject({ type: "book", title: "Piranesi", author: ["Susanna Clarke"] });
       expect(fm?.["attachments"]).toBeUndefined();
+      expect(fm?.["tags"]).toEqual(["wishlist"]);
       const again = await importer.addToWishlist({ title: "Piranesi", authors: ["Susanna Clarke"], subjects: [] });
       expect(again.status).toBe("duplicate");
     });
@@ -143,6 +144,8 @@ describe("BookImporter", () => {
         attachments: ["[[Emma.epub]]"],
         cover: "[[Emma cover.jpg]]",
       });
+      // The book has arrived, so it is no longer on the wishlist.
+      expect(fm?.["tags"]).toBeUndefined();
       expect(app.vault.getAbstractFileByPath("Library/files/Emma.epub")).not.toBeNull();
     });
 

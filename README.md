@@ -76,7 +76,7 @@ markers is yours and is never touched. Nothing lives in a sidecar database.
 are kept. From a highlight's menu, in the reader or the Highlights pane:
 
 - **Copy as quote** or **Copy as callout** copies the quote with its source
-  line and a `[[Book#^id|Link to note]]` beside it, then your comment.
+  line and a `[[Book#^id|View in book note]]` beside it, then your comment.
 - **Copy link** copies `[[Book#^id]]`.
 - **Export as note** creates a note of its own, named after the quote's
   opening words, with book, type, chapter, page and created properties (names and

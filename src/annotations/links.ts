@@ -45,19 +45,22 @@ export function entryLink(app: App, book: TFile, entry: Entry): string {
   return app.fileManager.generateMarkdownLink(book, "", `#^${entry.id}`);
 }
 
+/** The label of the link back to the highlight in its book note. */
+export const NOTE_LINK_LABEL = "View in book note";
+
 /** The link back to the highlight in its book note, which copies and exports carry beside the source. */
 export function noteLink(app: App, book: TFile, entry: Entry, sourcePath = ""): string {
-  return app.fileManager.generateMarkdownLink(book, sourcePath, `#^${entry.id}`, "Link to note");
+  return app.fileManager.generateMarkdownLink(book, sourcePath, `#^${entry.id}`, NOTE_LINK_LABEL);
 }
 
 /**
  * The quote, as a plain quote or as a callout typed like the highlight, with
- * its source line and the link back to the note:
- * `– [Dune, Book One, p. 35](obsidian://…) · [[Dune#^id|Link to note]]`.
+ * a blank quoted line, then its source line and the link back to the note:
+ * `– [Dune, Book One, p. 35](obsidian://…) · [[Dune#^id|View in book note]]`.
  */
 export function quoteBlock(app: App, book: TFile, entry: Entry, callout: boolean, sourcePath = ""): string {
   const lines = callout ? [`> [!${entry.type}]`] : [];
-  if (entry.exact !== "") lines.push(...quoteLines(entry.exact));
+  if (entry.exact !== "") lines.push(...quoteLines(entry.exact), ">");
   lines.push(`> ${attribution(app, book, entry)} · ${noteLink(app, book, entry, sourcePath)}`);
   return lines.join("\n");
 }

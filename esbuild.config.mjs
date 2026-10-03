@@ -17,7 +17,7 @@ const external = ["obsidian", "electron", ...builtin];
 const pdfWorkerAsText = {
   name: "pdf-worker-as-text",
   setup(build) {
-    build.onLoad({ filter: /pdfjs-dist[/\\]build[/\\]pdf\.worker\.min\.mjs$/ }, async (args) => {
+    build.onLoad({ filter: /pdfjs-dist[/\\](?:legacy[/\\])?build[/\\]pdf\.worker\.min\.mjs$/ }, async (args) => {
       const contents = await readFile(args.path, "utf8");
       return { contents, loader: "text" };
     });

@@ -3,6 +3,7 @@ import {
   DEFAULT_PACE_PDF_MS,
   chapterAt,
   chapterFraction,
+  chapterTicks,
   formatDuration,
   nextPace,
   unitsLeft,
@@ -64,6 +65,23 @@ describe("chapter progress", () => {
   it("counts the unit on screen as half read", () => {
     expect(unitsLeft(19, 20)).toBe(0.5);
     expect(unitsLeft(25, 20)).toBe(0);
+  });
+});
+
+describe("chapterTicks", () => {
+  it("marks each top-level chapter after the first along the bar", () => {
+    const starts = [
+      { label: "One", unit: 1, depth: 0 },
+      { label: "One, part A", unit: 5, depth: 1 },
+      { label: "Two", unit: 51, depth: 0 },
+      { label: "Two again", unit: 51, depth: 0 },
+      { label: "Unplaced", unit: null, depth: 0 },
+    ];
+    expect(chapterTicks(starts, 101)).toEqual([0.5]);
+  });
+
+  it("has nothing to mark in a one-unit book", () => {
+    expect(chapterTicks([{ label: "x", unit: 1 }], 1)).toEqual([]);
   });
 });
 

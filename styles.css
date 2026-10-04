@@ -259,30 +259,6 @@
   gap: var(--size-4-1);
 }
 
-.ereader-toolbar__divider {
-  width: var(--border-width);
-  height: var(--icon-size);
-  background-color: var(--background-modifier-border);
-}
-
-/* How far through the book, as a hairline along the toolbar's bottom edge. */
-.ereader-toolbar__track {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
-  pointer-events: none;
-}
-
-.ereader-toolbar__bar {
-  height: 100%;
-  width: 0;
-  background: var(--interactive-accent);
-  opacity: 0.7;
-  transition: width 150ms ease;
-}
-
 /* Immersive reading: the page takes the whole pane. */
 .ereader-reader.is-immersive .ereader-toolbar {
   display: none;
@@ -304,13 +280,6 @@
 
 .is-mobile .ereader-toolbar__page {
   font-size: 16px;
-}
-
-/* A phone has no room for the zoom pair or the display menu: the reading
-   settings panel carries both, and pinching zooms. */
-.is-phone .ereader-toolbar__zoom,
-.is-phone .ereader-toolbar__display {
-  display: none;
 }
 
 .is-phone .ereader-toolbar__button {
@@ -603,10 +572,12 @@
   mix-blend-mode: multiply;
 }
 
-/* "Adapt to theme": the filter goes on the whole page, not just the canvas,
-   so painted highlights invert along with the page they sit on rather than
-   turning black over an inverted one. */
-.theme-dark .ereader-reader__pdf-scroll.is-themed .ereader-reader__pdf-page {
+/* Matching a dark Obsidian theme inverts a PDF's pages, so a white page does
+   not glare out of a dark vault. The filter goes on the whole page, not just
+   the canvas, so painted highlights invert along with the page they sit on
+   rather than turning black over an inverted one. A fixed reading theme
+   (below) overrides this. */
+.theme-dark .ereader-reader__pdf-scroll .ereader-reader__pdf-page {
   filter: invert(1) hue-rotate(180deg);
 }
 
@@ -736,44 +707,6 @@
 /* Keeps leaf labels aligned with collapsible ones, which have a caret. */
 .ereader-outline .tree-item-self.mod-leaf .collapse-icon {
   width: 10px;
-}
-
-/* The offer to jump to the furthest-read position (FR-015b). It floats over
-   the page rather than pushing it down, so accepting or dismissing it does
-   not shift the text the reader has just started on. */
-.ereader-reader__resume {
-  position: absolute;
-  top: var(--size-4-12);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  gap: var(--size-4-2);
-  max-width: calc(100% - var(--size-4-8));
-  padding: var(--size-4-1) var(--size-4-1) var(--size-4-1) var(--size-4-3);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-l);
-  background: var(--background-primary);
-  box-shadow: var(--shadow-s);
-  font-size: var(--font-ui-small);
-  color: var(--text-normal);
-}
-
-.ereader-reader__resume span {
-  flex: 1 1 auto;
-}
-
-.ereader-reader__resume button {
-  flex: none;
-}
-
-.is-mobile .ereader-reader__resume {
-  padding: var(--size-4-2) var(--size-4-2) var(--size-4-2) var(--size-4-3);
-}
-
-.is-mobile .ereader-reader__resume button {
-  min-height: 40px;
 }
 
 /* Read later: a bookmark in the corner opposite the finished check. */
@@ -937,8 +870,8 @@
 }
 
 /* A PDF's page is an image, so a fixed theme filters it rather than
-   recolouring it. These win over "adapt to theme", which only means
-   anything while the reader is matching Obsidian. */
+   recolouring it. These win over the dark-vault inversion above, which only
+   applies while the reader is matching Obsidian. */
 .ereader-reader.ereader-theme-light .ereader-reader__pdf-scroll .ereader-reader__pdf-page {
   filter: none;
 }
@@ -1032,8 +965,7 @@
 }
 
 .ereader-panel__choice:focus-visible,
-.ereader-panel__step:focus-visible,
-.ereader-panel__action:focus-visible {
+.ereader-panel__step:focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: 1px;
 }
@@ -1117,35 +1049,6 @@
   text-align: center;
   font-size: var(--font-ui-small);
   font-variant-numeric: tabular-nums;
-}
-
-.ereader-panel__row.is-action {
-  padding: 0;
-}
-
-.ereader-panel__action {
-  display: flex;
-  align-items: center;
-  gap: var(--size-4-2);
-  width: 100%;
-  padding: var(--size-4-2) 0;
-  border: none;
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-normal);
-  font-size: var(--font-ui-small);
-  text-align: left;
-  cursor: pointer;
-}
-
-.ereader-panel__action > :nth-child(2) {
-  flex: 1 1 auto;
-}
-
-.ereader-panel__action-icon,
-.ereader-panel__action-check {
-  display: flex;
-  color: var(--icon-color);
 }
 
 .is-mobile .ereader-panel__choice,
@@ -1268,20 +1171,37 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The book's progress along the footer's top edge — the only progress bar
+   the reader has — with a tick where each chapter begins. */
 .ereader-footer__track {
   position: absolute;
   top: calc(-1 * var(--border-width));
   left: 0;
   right: 0;
-  height: 2px;
+  height: 3px;
   pointer-events: none;
 }
 
 .ereader-footer__bar {
   height: 100%;
   width: 0;
-  background: var(--text-faint);
+  background: var(--interactive-accent);
+  opacity: 0.7;
   transition: width 150ms ease;
+}
+
+.ereader-footer__ticks {
+  position: absolute;
+  inset: 0;
+}
+
+.ereader-footer__tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--background-primary);
 }
 
 .ereader-footer__chapter {
@@ -1304,9 +1224,10 @@
   color: var(--text-faint);
 }
 
-/* "Back to …" after a jump. Bottom left, clear of the docked selection bar
+/* The chip over the page: "Jump to the furthest you read" on opening a book,
+   "Back to …" after a jump. Bottom left, clear of the docked selection bar
    (centred) and the footer. */
-.ereader-back {
+.ereader-chip {
   position: absolute;
   left: var(--size-4-3);
   bottom: calc(var(--ereader-footer-h, 28px) + var(--size-4-3));
@@ -1320,7 +1241,7 @@
   box-shadow: var(--shadow-s);
 }
 
-.ereader-back__go {
+.ereader-chip__go {
   display: flex;
   align-items: center;
   gap: var(--size-4-1);
@@ -1333,19 +1254,19 @@
   cursor: pointer;
 }
 
-.ereader-back__label {
+.ereader-chip__label {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.ereader-back__icon {
+.ereader-chip__icon {
   display: flex;
   color: var(--icon-color);
 }
 
-.is-mobile .ereader-back__go,
-.is-mobile .ereader-back__dismiss {
+.is-mobile .ereader-chip__go,
+.is-mobile .ereader-chip__dismiss {
   min-height: 40px;
 }
 

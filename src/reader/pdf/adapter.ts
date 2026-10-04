@@ -110,7 +110,6 @@ export interface PdfPreferences {
   scale: number;
   fit: PdfFit;
   spread: SpreadMode;
-  adaptToTheme: boolean;
 }
 
 export interface PdfEngineOptions extends PdfPreferences {
@@ -269,7 +268,6 @@ export class PdfEngine implements ReaderEngine {
   private spread: SpreadMode;
   /** Watches the pane so a fit survives a resize or a device rotation. */
   private resizeObserver: ResizeObserver | null = null;
-  private themed: boolean;
   private highlights: readonly PaintedHighlight[] = [];
   /**
    * Owns every listener this engine attaches. Aborting it in `destroy()` is
@@ -285,7 +283,6 @@ export class PdfEngine implements ReaderEngine {
     this.renderScale = clampScale(options.scale);
     this.fit = options.fit;
     this.spread = options.spread;
-    this.themed = options.adaptToTheme;
   }
 
   async open(path: string, container: HTMLElement): Promise<void> {
@@ -305,7 +302,6 @@ export class PdfEngine implements ReaderEngine {
 
     this.container = container;
     this.scrollEl = container.createDiv({ cls: "ereader-reader__pdf-scroll" });
-    this.scrollEl.toggleClass("is-themed", this.themed);
 
     const first = await this.doc.getPage(1);
     const unscaled = first.getViewport({ scale: 1 });
@@ -573,7 +569,7 @@ export class PdfEngine implements ReaderEngine {
       {
         section: "zoom",
         id: "fit-width",
-        label: "Fit width",
+        label: "Width",
         icon: "move-horizontal",
         checked: this.fit === "width",
         apply: () => this.setFit("width"),
@@ -581,7 +577,7 @@ export class PdfEngine implements ReaderEngine {
       {
         section: "zoom",
         id: "fit-height",
-        label: "Fit height",
+        label: "Height",
         icon: "move-vertical",
         checked: this.fit === "height",
         apply: () => this.setFit("height"),
@@ -589,7 +585,7 @@ export class PdfEngine implements ReaderEngine {
       {
         section: "zoom",
         id: "actual-size",
-        label: "Actual size",
+        label: "Page",
         icon: "scan",
         // The whole page in view, which is pdf.js's `page-fit` rather than
         // its `page-actual`. A true 100% is still reachable by stepping the
@@ -599,22 +595,9 @@ export class PdfEngine implements ReaderEngine {
         checked: this.fit === "page",
         apply: () => this.setFit("page"),
       },
-      spreadOption("single", "Single page", "rectangle-vertical"),
-      spreadOption("odd", "Two pages (odd)", "columns-2"),
-      spreadOption("even", "Two pages (even)", "columns-2"),
-      {
-        section: "appearance",
-        id: "adapt-to-theme",
-        label: "Adapt to theme",
-        icon: "palette",
-        checked: this.themed,
-        apply: () => {
-          this.themed = !this.themed;
-          this.scrollEl?.toggleClass("is-themed", this.themed);
-          this.savePreferences();
-          this.changeHandler?.();
-        },
-      },
+      spreadOption("single", "One", "rectangle-vertical"),
+      spreadOption("odd", "Two, odd left", "columns-2"),
+      spreadOption("even", "Two, even left", "columns-2"),
     ];
   }
 
@@ -655,7 +638,6 @@ export class PdfEngine implements ReaderEngine {
       scale: this.renderScale,
       fit: this.fit,
       spread: this.spread,
-      adaptToTheme: this.themed,
     });
   }
 
@@ -758,8 +740,8 @@ export class PdfEngine implements ReaderEngine {
 
   refreshTheme(): void {
     // A PDF renders in the host document, so it already follows the vault's
-    // theme; the only theme-derived thing here is the invert filter, which is
-    // pure CSS keyed off `.theme-dark`.
+    // theme; the only theme-derived things here are the page filters, which
+    // are pure CSS keyed off `.theme-dark` and the reading theme's class.
   }
 
   // --------------------------------------------------------------- rest

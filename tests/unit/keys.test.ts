@@ -11,6 +11,13 @@ const press = (key: string, modifiers: Partial<Record<"shiftKey" | "altKey" | "c
 });
 
 describe("keyAction", () => {
+  it("searches on Cmd-F or Ctrl-F, but not with other modifiers", () => {
+    expect(keyAction(press("f", { metaKey: true }))).toBe("search");
+    expect(keyAction(press("F", { ctrlKey: true }))).toBe("search");
+    expect(keyAction(press("f", { ctrlKey: true, shiftKey: true }))).toBeNull();
+    expect(keyAction(press("f"))).toBeNull();
+  });
+
   it("turns forward on Right and PageDown", () => {
     expect(keyAction(press("ArrowRight"))).toBe("next");
     expect(keyAction(press("PageDown"))).toBe("next");

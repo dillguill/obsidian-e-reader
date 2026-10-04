@@ -6,7 +6,7 @@
 // the engine, which forwards presses from inside an EPUB's section iframes —
 // key events do not cross an iframe boundary, so the Scope never sees those.
 
-export type KeyAction = "next" | "prev" | "dismiss";
+export type KeyAction = "next" | "prev" | "dismiss" | "search";
 
 /** The parts of a KeyboardEvent the mapping reads. */
 export interface KeyPress {
@@ -18,12 +18,17 @@ export interface KeyPress {
 }
 
 /**
- * Left/Right and PageUp/PageDown turn the page; Escape dismisses. Up/Down and
+ * Left/Right and PageUp/PageDown turn the page; Escape dismisses; Cmd/Ctrl-F
+ * searches the book. Up/Down and
  * Space are left to the platform, since in a scrolled book they already
  * scroll. Any modifier means the press belongs to something else — Shift
  * extends a selection, and the rest are hotkeys.
  */
 export function keyAction(press: KeyPress): KeyAction | null {
+  // Cmd-F on a Mac, Ctrl-F elsewhere: searching the book rather than the app.
+  if ((press.ctrlKey || press.metaKey) && !press.altKey && !press.shiftKey && press.key.toLowerCase() === "f") {
+    return "search";
+  }
   if (press.altKey || press.ctrlKey || press.metaKey) return null;
   if (press.key === "Escape") return "dismiss";
   if (press.shiftKey) return null;

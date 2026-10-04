@@ -13,7 +13,7 @@
 // FileView.setState drive; do the actual book loading from `onLoadFile`.
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
-import { FileView, Menu, Notice, Platform, Scope, TFile, setIcon } from "obsidian";
+import { FileView, Menu, Notice, Platform, Scope, TFile, debounce, setIcon, setTooltip } from "obsidian";
 import { addEntry, fillSections, foldHighlightNotes, listEntries, migrateBookmarks, removeEntry, setEntryType } from "../annotations/store";
 import { linksToBook } from "../annotations/highlight-notes";
 import { addCopyItems } from "../annotations/entry-menu";
@@ -34,8 +34,31 @@ import { highlightColor } from "./highlight-style";
 import { isTypingTarget, keyAction } from "./keys";
 import { type PopupPlacement, SelectionPopup } from "./selection-popup";
 import { ReaderToolbar } from "./toolbar";
-import { toolbarState } from "./toolbar-model";
-import { stepScale } from "./zoom";
+import { progressLabel, toolbarState } from "./toolbar-model";
+import { MAX_SCALE, MIN_SCALE, stepScale } from "./zoom";
+import { AppearancePanel, type PanelRow } from "./appearance-panel";
+import { SearchPanel } from "./search-panel";
+import type { SearchHit } from "./search";
+import {
+  BOOK_FONTS,
+  FONT_LABELS,
+  LINE_SPACINGS,
+  LINE_SPACING_LABELS,
+  MARGINS,
+  MARGIN_LABELS,
+  READING_THEMES,
+  type ReadingTheme,
+  THEME_LABELS,
+  type Typography,
+} from "./typography";
+import {
+  type ChapterStart,
+  chapterAt,
+  chapterFraction,
+  formatDuration,
+  nextPace,
+  unitsLeft,
+} from "./reading-time";
 
 export const READER_VIEW_TYPE = "ereader-reader";
 
@@ -64,6 +87,17 @@ const BOOKMARK_TYPE = RESERVED_ENTRY_TYPE;
 const SELECTION_DISMISS_MS = 600;
 /** The middle share of the page whose tap shows or hides the toolbar on a touchscreen. */
 const CHROME_TAP_ZONE = 1 / 3;
+/** The painted mark on the search result being looked at. */
+const SEARCH_MARK_ID = "ereader-search-hit";
+const SEARCH_MARK_COLOR = "#ff9f1a";
+/** The learned reading pace is saved this long after it last changed. */
+const PACE_SAVE_DELAY_MS = 30_000;
+const THEME_CLASSES: Record<ReadingTheme, string> = {
+  auto: "",
+  light: "ereader-theme-light",
+  sepia: "ereader-theme-sepia",
+  dark: "ereader-theme-dark",
+};
 
 function isReaderViewState(state: unknown): state is ReaderViewState {
   return typeof state === "object" && state !== null;
@@ -96,6 +130,22 @@ export class ReaderView extends FileView {
   private popup: SelectionPopup | null = null;
   /** When a selection was last seen in the book, for telling a dismissing tap apart. */
   private selectionSeenAt = 0;
+  private search: SearchPanel | null = null;
+  private appearance: AppearancePanel | null = null;
+  /** The search result being looked at, painted over the page alongside the highlights. */
+  private searchMark: PaintedHighlight | null = null;
+  private footer: { el: HTMLElement; chapterEl: HTMLElement; chapterLeftEl: HTMLElement; bookEl: HTMLElement; barEl: HTMLElement } | null = null;
+  /** Which engine is open, for the pace the time-left estimates use. */
+  private format: "epub" | "pdf" | null = null;
+  /** The contents placed on the page/location scale, rebuilt when that scale changes. */
+  private chapterStarts: { total: number; starts: ChapterStart[] } | null = null;
+  /** Where the reader last stood, and when, for learning their pace from page turns. */
+  private paceAnchor: { unit: number; at: number } | null = null;
+  /** The way back from a jump: a contents entry, a link, a search result. */
+  private backChip: { el: HTMLElement; target: Locator } | null = null;
+  /** A jump's starting point, until the jump is seen to have landed somewhere else. */
+  private pendingBack: { target: Locator; at: number } | null = null;
+  private readonly savePace = debounce(() => this.saveSettings(), PACE_SAVE_DELAY_MS, true);
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -144,7 +194,22 @@ export class ReaderView extends FileView {
       toggleBookmark: () => void this.toggleBookmark(),
       turnPage: (direction) => void this.turnPage(direction),
       openContents: () => this.openContents(),
+      toggleSearch: () => this.toggleSearch(),
+      toggleAppearance: (anchorEl) => {
+        this.search?.hide();
+        this.measureChrome();
+        this.appearance?.toggle(() => this.appearanceRows(), anchorEl);
+      },
     });
+
+    this.search = new SearchPanel(this.contentRoot, this, {
+      search: (query, handlers, signal) => this.engine?.search(query, handlers, signal) ?? Promise.resolve(),
+      label: (hit) => this.searchLabel(hit),
+      open: (hit) => void this.openSearchHit(hit),
+      closed: () => void this.clearSearchMark(),
+    });
+    this.appearance = new AppearancePanel(this.contentRoot, this);
+    this.footer = this.buildFooter(this.contentRoot);
     this.toolbar.setVisible(false);
 
     this.popup = new SelectionPopup(this.contentRoot, this, {
@@ -168,6 +233,7 @@ export class ReaderView extends FileView {
     for (const key of ["ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Escape"]) {
       scope.register([], key, (event) => (this.handleKey(event) ? false : true));
     }
+    scope.register(["Mod"], "f", (event) => (this.handleKey(event) ? false : true));
 
     this.registerInterval(
       window.setInterval(() => {
@@ -210,6 +276,7 @@ export class ReaderView extends FileView {
 
   override async onUnloadFile(file: TFile): Promise<void> {
     this.closePopup(false);
+    this.resetBookChrome();
     await this.flushPosition(true);
     this.engine?.destroy();
     this.engine = null;
@@ -224,6 +291,7 @@ export class ReaderView extends FileView {
 
   override async onClose(): Promise<void> {
     this.closePopup(false);
+    this.savePace.run();
     await this.flushPosition(true);
     this.engine?.destroy();
     this.engine = null;
@@ -306,6 +374,7 @@ export class ReaderView extends FileView {
     this.closePopup(false);
     this.toolbar?.setVisible(false);
     root.removeClass("is-immersive");
+    this.resetBookChrome();
     this.clearViewport();
 
     // Opening an .epub straight from the file explorer gives us the book
@@ -339,8 +408,12 @@ export class ReaderView extends FileView {
 
     let engine: ReaderEngine;
     try {
-      engine = attachment.extension === "epub" ? this.newEpubEngine() : this.newPdfEngine();
+      this.format = attachment.extension === "epub" ? "epub" : "pdf";
+      this.applyTheme();
+      engine = this.format === "epub" ? this.newEpubEngine() : this.newPdfEngine();
       const viewport = root.createDiv({ cls: "ereader-reader__viewport" });
+      // Above the footer, which lives for the life of the view.
+      if (this.footer) root.insertBefore(viewport, this.footer.el);
       await engine.open(attachment.path, viewport);
     } catch (error) {
       console.error("[e-reader] failed to open book", error);
@@ -362,8 +435,11 @@ export class ReaderView extends FileView {
     engine.onSelectionEnd(() => this.onSelectionEnd());
     engine.onSelectionChange(() => this.onSelectionChange());
     engine.onKeyDown((event) => this.handleKey(event));
+    engine.onLinkFollowed(() => this.recordJump());
     engine.onChange(() => {
       this.dropJumpOfferIfReached();
+      this.settleBack();
+      this.trackPace();
       this.updateToolbar();
       this.repositionPopup();
     });
@@ -384,6 +460,11 @@ export class ReaderView extends FileView {
     this.lastFlushAt = Date.now();
     this.announcePosition();
     this.updateToolbar();
+    // The chapter in the footer needs the contents, which for an EPUB means
+    // loading every section the contents name — so it arrives when it is ready.
+    void this.outline().then(() => {
+      if (this.engine === engine) this.updateToolbar();
+    });
     if (file.extension === "md") {
       // Bookmarks written into the note before 0.4.0 move to the bookmarks
       // property, highlights betas kept in notes of their own move back into
@@ -425,14 +506,13 @@ export class ReaderView extends FileView {
     return createEpubEngine(this.app, {
       textScale: preferences.epubTextScale,
       flow: preferences.epubFlow,
-      lineSpacing: preferences.epubLineSpacing,
-      margins: preferences.epubMargins,
+      spread: preferences.epubSpread,
+      typography: this.typography(),
       onPreferencesChanged: (next) => {
         const reader = this.getSettings().reader;
         reader.epubTextScale = next.textScale;
         reader.epubFlow = next.flow;
-        reader.epubLineSpacing = next.lineSpacing;
-        reader.epubMargins = next.margins;
+        reader.epubSpread = next.spread;
         this.saveSettings();
       },
     });
@@ -480,8 +560,14 @@ export class ReaderView extends FileView {
     else new Notice("E-Reader: that highlight is no longer in this book's notes.");
   }
 
-  /** Scrolls this reader to `locator`. Used by the sidebar panes. */
-  async goToLocator(locator: Locator): Promise<void> {
+  /**
+   * Scrolls this reader to `locator`. Used by the sidebar panes, which are
+   * jumps the reader may want to come back from, so the place left behind is
+   * offered as "Back" unless `record` is false.
+   */
+  async goToLocator(locator: Locator, record = true): Promise<void> {
+    if (record) this.recordJump();
+    this.paceAnchor = null;
     try {
       await this.engine?.goTo(locator);
       this.announcePosition();
@@ -489,6 +575,8 @@ export class ReaderView extends FileView {
     } catch (error) {
       console.error("[e-reader] failed to navigate to a locator", error);
     }
+    this.settleBack();
+    this.pendingBack = null;
   }
 
   /** The current selection in the rendered document, or null. */
@@ -505,16 +593,7 @@ export class ReaderView extends FileView {
    */
   private displayOptions(): DisplayOption[] {
     const engineOptions = this.engine?.displayOptions() ?? [];
-    // A phone's toolbar has no room for the zoom pair (styles.css hides it),
-    // so the menu carries it instead.
-    const zoomOptions: DisplayOption[] = Platform.isPhone
-      ? [
-          { section: "zoom", id: "zoom-in", label: "Zoom in", icon: "zoom-in", checked: false, apply: () => this.zoom(1) },
-          { section: "zoom", id: "zoom-out", label: "Zoom out", icon: "zoom-out", checked: false, apply: () => this.zoom(-1) },
-        ]
-      : [];
     return [
-      ...zoomOptions,
       ...engineOptions,
       {
         section: "appearance",
@@ -523,6 +602,19 @@ export class ReaderView extends FileView {
         icon: "highlighter",
         checked: this.getSettings().reader.showHighlights,
         apply: () => this.toggleHighlights(),
+      },
+      {
+        section: "appearance",
+        id: "show-footer",
+        label: "Show time left and progress",
+        icon: "clock",
+        checked: this.getSettings().reader.showFooter,
+        apply: () => {
+          const reader = this.getSettings().reader;
+          reader.showFooter = !reader.showFooter;
+          this.saveSettings();
+          this.updateToolbar();
+        },
       },
     ];
   }
@@ -543,6 +635,7 @@ export class ReaderView extends FileView {
       }),
     );
     this.toolbar.setContentsAvailable(this.getSettings().panes.outline);
+    this.updateFooter();
   }
 
   /** Steps the zoom (PDF) or text size (EPUB). Used by the toolbar and the zoom commands. */
@@ -554,7 +647,11 @@ export class ReaderView extends FileView {
   }
 
   private async goToPage(page: number): Promise<void> {
+    this.recordJump();
+    this.paceAnchor = null;
     await this.engine?.goToPage(page);
+    this.settleBack();
+    this.pendingBack = null;
     this.announcePosition();
     this.updateToolbar();
   }
@@ -585,8 +682,20 @@ export class ReaderView extends FileView {
       void this.turnPage(action === "next" ? 1 : -1);
       return true;
     }
+    if (action === "search") {
+      this.openSearch();
+      return true;
+    }
     if (action === "dismiss" && this.popup?.current()) {
       this.closePopup(true);
+      return true;
+    }
+    if (action === "dismiss" && this.appearance?.isOpen()) {
+      this.appearance.hide();
+      return true;
+    }
+    if (action === "dismiss" && this.search?.isOpen()) {
+      this.search.hide();
       return true;
     }
     return false;
@@ -692,6 +801,8 @@ export class ReaderView extends FileView {
     if (!note || !engine) {
       this.entries = [];
       this.lastEntrySignature = null;
+      // A bare book file has no highlights, but a search result is still marked.
+      if (engine) await engine.paintHighlights(this.searchMark ? [this.searchMark] : []).catch(() => undefined);
       this.updateToolbar();
       return;
     }
@@ -708,7 +819,9 @@ export class ReaderView extends FileView {
     const palette = this.getSettings()
       .annotationTypes.map((type) => `${type.name}:${type.color}`)
       .join(",");
-    const signature = `${showHighlights}\u0000${palette}\u0000${entries
+    const mark = this.searchMark;
+    const markSignature = mark ? `${mark.exact}\u0001${mark.prefix ?? ""}\u0001${JSON.stringify(mark.hint ?? null)}` : "";
+    const signature = `${showHighlights}\u0000${palette}\u0000${markSignature}\u0000${entries
       .map((entry) => [entry.id, entry.type, entry.exact, entry.anchor.prefix ?? "", entry.anchor.suffix ?? ""].join("\u0001"))
       .join("\u0002")}`;
     if (signature === this.lastEntrySignature) return;
@@ -729,6 +842,7 @@ export class ReaderView extends FileView {
             ...(entry.anchor.hint === undefined ? {} : { hint: entry.anchor.hint }),
           }))
       : [];
+    if (mark) painted.push(mark);
     try {
       await engine.paintHighlights(painted);
     } catch (error) {
@@ -751,6 +865,353 @@ export class ReaderView extends FileView {
     await this.refreshEntries();
   }
 
+  // -------------------------------------------------------------- search
+
+  private openSearch(): void {
+    if (!this.engine) return;
+    this.appearance?.hide();
+    // Results are labelled with their chapter, which needs the contents.
+    void this.outline();
+    this.measureChrome();
+    this.search?.open();
+  }
+
+  private toggleSearch(): void {
+    if (this.search?.isOpen()) this.search.hide();
+    else this.openSearch();
+  }
+
+  /** `Page 12` for a PDF; the chapter for an EPUB, whose locations mean nothing to a reader. */
+  private searchLabel(hit: SearchHit): string {
+    if (hit.locator.kind === "pdf") return `Page ${hit.locator.page}`;
+    return this.chapterTitleAt(hit.locator) ?? "";
+  }
+
+  private chapterTitleAt(locator: Locator): string | null {
+    if (!this.cachedOutline) return null;
+    const rows = rowsFromOutline(this.cachedOutline);
+    return rows[activeRowIndex(rows, locator)]?.label.trim() || null;
+  }
+
+  private async openSearchHit(hit: SearchHit): Promise<void> {
+    this.recordJump();
+    this.searchMark = {
+      id: SEARCH_MARK_ID,
+      type: "search",
+      exact: hit.exact,
+      prefix: hit.prefix,
+      suffix: hit.suffix,
+      hint: hit.locator,
+      color: SEARCH_MARK_COLOR,
+    };
+    await this.goToLocator(hit.locator, false);
+    await this.repaint();
+    // A PDF locator only names the page; the mark says where on it.
+    if (hit.locator.kind === "pdf") this.scrollMarkIntoView();
+  }
+
+  private async clearSearchMark(): Promise<void> {
+    if (!this.searchMark) return;
+    this.searchMark = null;
+    await this.repaint();
+  }
+
+  private async repaint(): Promise<void> {
+    this.lastEntrySignature = null;
+    await this.refreshEntries();
+  }
+
+  /** The page may still be drawing, and is painted as it finishes, so this looks for a moment. */
+  private scrollMarkIntoView(attempt = 0): void {
+    const mark = this.contentRoot?.querySelector<HTMLElement>(`.ereader-hl[data-id="${SEARCH_MARK_ID}"]`);
+    if (mark) {
+      mark.scrollIntoView({ block: "center" });
+      return;
+    }
+    if (attempt < 10) window.setTimeout(() => this.scrollMarkIntoView(attempt + 1), 100);
+  }
+
+  // ---------------------------------------------------------- appearance
+
+  private typography(): Typography {
+    const reader = this.getSettings().reader;
+    return {
+      font: reader.epubFont,
+      lineSpacing: reader.epubLineSpacing,
+      margins: reader.epubMargins,
+      justify: reader.epubJustify,
+      hyphenate: reader.epubHyphenate,
+    };
+  }
+
+  /**
+   * The reading theme is a set of colour variables on the reader's root (see
+   * styles.css), which the toolbar, the panels and a PDF's page filter read
+   * directly. An EPUB's sections are iframes and read them once, so they are
+   * restyled too.
+   */
+  private applyTheme(): void {
+    const root = this.contentRoot;
+    if (!root) return;
+    const theme = this.getSettings().reader.readingTheme;
+    for (const cls of Object.values(THEME_CLASSES)) if (cls !== "") root.removeClass(cls);
+    if (THEME_CLASSES[theme] !== "") root.addClass(THEME_CLASSES[theme]);
+    this.engine?.refreshTheme();
+  }
+
+  private changeTypography(change: () => void): void {
+    change();
+    this.saveSettings();
+    this.engine?.setTypography(this.typography());
+  }
+
+  private appearanceRows(): PanelRow[] {
+    const reader = this.getSettings().reader;
+    const rows: PanelRow[] = [
+      {
+        kind: "choice",
+        label: "Theme",
+        options: READING_THEMES.map((theme) => ({ value: theme, label: THEME_LABELS[theme], cls: `ereader-swatch is-${theme}` })),
+        value: reader.readingTheme,
+        onChange: (value) => {
+          reader.readingTheme = value as ReadingTheme;
+          this.saveSettings();
+          this.applyTheme();
+        },
+      },
+    ];
+    const engine = this.engine;
+    if (engine) {
+      const scale = engine.scale();
+      rows.push({
+        kind: "stepper",
+        label: this.format === "epub" ? "Text size" : "Zoom",
+        valueLabel: `${Math.round(scale * 100)}%`,
+        canDecrease: scale > MIN_SCALE,
+        canIncrease: scale < MAX_SCALE,
+        onStep: (direction) => this.zoom(direction),
+      });
+    }
+    if (this.format === "epub") {
+      rows.push(
+        {
+          kind: "choice",
+          label: "Font",
+          options: BOOK_FONTS.map((font) => ({ value: font, label: FONT_LABELS[font], cls: `ereader-font is-${font}` })),
+          value: reader.epubFont,
+          onChange: (value) => this.changeTypography(() => (reader.epubFont = value as Typography["font"])),
+        },
+        {
+          kind: "choice",
+          label: "Line spacing",
+          options: LINE_SPACINGS.map((spacing) => ({ value: spacing, label: LINE_SPACING_LABELS[spacing] })),
+          value: reader.epubLineSpacing,
+          onChange: (value) => this.changeTypography(() => (reader.epubLineSpacing = value as Typography["lineSpacing"])),
+        },
+        {
+          kind: "choice",
+          label: "Margins",
+          options: MARGINS.map((margins) => ({ value: margins, label: MARGIN_LABELS[margins] })),
+          value: reader.epubMargins,
+          onChange: (value) => this.changeTypography(() => (reader.epubMargins = value as Typography["margins"])),
+        },
+        {
+          kind: "toggle",
+          label: "Justify text",
+          value: reader.epubJustify,
+          onChange: (value) => this.changeTypography(() => (reader.epubJustify = value)),
+        },
+        {
+          kind: "toggle",
+          label: "Hyphenate",
+          value: reader.epubHyphenate,
+          onChange: (value) => this.changeTypography(() => (reader.epubHyphenate = value)),
+        },
+      );
+    }
+    // A phone's toolbar has no room for the display menu, so its items are here.
+    if (Platform.isPhone) {
+      for (const option of this.displayOptions()) {
+        rows.push({ kind: "action", label: option.label, icon: option.icon, checked: option.checked, onClick: () => option.apply() });
+      }
+    }
+    return rows;
+  }
+
+  // -------------------------------------------------------------- footer
+
+  private buildFooter(root: HTMLElement): NonNullable<ReaderView["footer"]> {
+    const el = root.createDiv({ cls: "ereader-footer" });
+    const barEl = el.createDiv({ cls: "ereader-footer__track", attr: { "aria-hidden": "true" } }).createDiv({ cls: "ereader-footer__bar" });
+    const chapterEl = el.createSpan({ cls: "ereader-footer__chapter" });
+    const rightEl = el.createDiv({ cls: "ereader-footer__right" });
+    const chapterLeftEl = rightEl.createSpan({ cls: "ereader-footer__chapter-left" });
+    const bookEl = rightEl.createSpan({ cls: "ereader-footer__book" });
+    el.hide();
+    return { el, chapterEl, chapterLeftEl, bookEl, barEl };
+  }
+
+  /**
+   * The line under the page: the chapter, the time left in it, and how far
+   * through the book. Time is units left × the pace learned from the
+   * reader's own page turns (reading-time.ts).
+   */
+  private updateFooter(): void {
+    const footer = this.footer;
+    if (!footer) return;
+    const engine = this.engine;
+    const pages = engine?.pageState() ?? null;
+    if (!engine || !pages || !this.getSettings().reader.showFooter) {
+      footer.el.hide();
+      return;
+    }
+    footer.el.show();
+    const pace = this.pace();
+    const chapter = chapterAt(this.chapterStartsFor(engine, pages.total), pages.current, pages.total);
+    const bookLeft = formatDuration(unitsLeft(pages.current, pages.total + 1) * pace);
+    const percent = progressLabel(pages, engine.progress());
+    footer.chapterEl.setText(chapter?.label ?? "");
+    footer.bookEl.setText(percent);
+    if (chapter) {
+      const fraction = chapterFraction(chapter, pages.current);
+      footer.chapterLeftEl.setText(`${formatDuration(unitsLeft(pages.current, chapter.end) * pace)} left in chapter`);
+      footer.barEl.setCssStyles({ width: `${fraction * 100}%` });
+      setTooltip(footer.el, `${Math.round(fraction * 100)}% through this chapter · about ${bookLeft} left in the book`, { placement: "top" });
+    } else {
+      footer.chapterLeftEl.setText(`${bookLeft} left in book`);
+      footer.barEl.setCssStyles({ width: "0" });
+      setTooltip(footer.el, `${percent} through the book`, { placement: "top" });
+    }
+  }
+
+  /** The contents placed on the page/location scale; empty until the contents are read. */
+  private chapterStartsFor(engine: ReaderEngine, total: number): ChapterStart[] {
+    if (this.chapterStarts?.total === total) return this.chapterStarts.starts;
+    if (!this.cachedOutline) return [];
+    const starts = rowsFromOutline(this.cachedOutline).map((row) => ({
+      label: row.label,
+      unit: row.target.kind === "book" ? engine.pageNumberFor(row.target.locator) : null,
+    }));
+    this.chapterStarts = { total, starts };
+    return starts;
+  }
+
+  private pace(): number {
+    const reader = this.getSettings().reader;
+    return this.format === "pdf" ? reader.pacePdfMs : reader.paceEpubMs;
+  }
+
+  /** Learns the reader's pace from each step forward; a jump resets the anchor instead. */
+  private trackPace(): void {
+    const unit = this.engine?.pageState()?.current;
+    if (unit === undefined) return;
+    const anchor = this.paceAnchor;
+    if (anchor?.unit === unit) return;
+    const now = Date.now();
+    this.paceAnchor = { unit, at: now };
+    if (!anchor) return;
+    const next = nextPace(this.pace(), anchor.unit, unit, now - anchor.at);
+    if (next === null) return;
+    const reader = this.getSettings().reader;
+    if (this.format === "pdf") reader.pacePdfMs = next;
+    else reader.paceEpubMs = next;
+    this.savePace();
+  }
+
+  // ---------------------------------------------------------------- back
+
+  /**
+   * Remembers where the reader is before a jump — a contents entry, a typed
+   * page, a link, a search result — so the place can be offered back. A jump
+   * made while "Back" is already showing keeps the first place: that is the
+   * one the reader was reading at.
+   */
+  private recordJump(): void {
+    this.paceAnchor = null;
+    if (this.backChip) return;
+    const from = this.engine?.currentLocator();
+    if (from) this.pendingBack = { target: from, at: Date.now() };
+  }
+
+  /** Shows "Back" once a jump has landed somewhere else; a jump to the same page offers nothing. */
+  private settleBack(): void {
+    const pending = this.pendingBack;
+    const engine = this.engine;
+    if (this.backChip && engine) {
+      const here = engine.pageState()?.current;
+      if (here !== undefined && engine.pageNumberFor(this.backChip.target) === here) this.closeBackChip();
+    }
+    if (!pending || !engine) return;
+    // A link that went nowhere leaves its record behind; it must not turn the
+    // next ordinary page turn into a "Back".
+    if (Date.now() - pending.at > 3000) {
+      this.pendingBack = null;
+      return;
+    }
+    const here = engine.pageState()?.current;
+    const there = engine.pageNumberFor(pending.target);
+    if (here === undefined || there === null || here === there) return;
+    this.pendingBack = null;
+    this.showBackChip(pending.target);
+  }
+
+  private showBackChip(target: Locator): void {
+    const root = this.contentRoot;
+    if (!root || this.backChip) return;
+    this.measureChrome();
+    const chip = root.createDiv({ cls: "ereader-back" });
+    const go = chip.createEl("button", { cls: "ereader-back__go" });
+    setIcon(go.createSpan({ cls: "ereader-back__icon" }), "undo-2");
+    go.createSpan({ cls: "ereader-back__label", text: this.backLabel(target) });
+    go.addEventListener("click", () => {
+      this.closeBackChip();
+      void this.goToLocator(target, false);
+    });
+    const dismiss = chip.createEl("button", { cls: "clickable-icon ereader-back__dismiss", attr: { "aria-label": "Dismiss" } });
+    setIcon(dismiss, "x");
+    dismiss.addEventListener("click", () => this.closeBackChip());
+    this.backChip = { el: chip, target };
+  }
+
+  private backLabel(target: Locator): string {
+    if (target.kind === "pdf") return `Back to page ${target.page}`;
+    const title = this.chapterTitleAt(target);
+    return title ? `Back to ${title}` : "Back";
+  }
+
+  private closeBackChip(): void {
+    this.backChip?.el.remove();
+    this.backChip = null;
+  }
+
+  /**
+   * Publishes the toolbar's and footer's heights for the panels and the back
+   * chip to sit clear of. Both depend on the theme, on whether the toolbar's
+   * buttons wrap, and on whether either is showing at all.
+   */
+  private measureChrome(): void {
+    const root = this.contentRoot;
+    if (!root) return;
+    const toolbar = root.querySelector<HTMLElement>(".ereader-toolbar");
+    root.setCssProps({
+      "--ereader-toolbar-h": `${toolbar?.offsetHeight ?? 0}px`,
+      "--ereader-footer-h": `${this.footer?.el.offsetHeight ?? 0}px`,
+    });
+  }
+
+  /** Everything that belongs to one open book, cleared when it closes or another opens. */
+  private resetBookChrome(): void {
+    this.search?.reset();
+    this.searchMark = null;
+    this.appearance?.hide();
+    this.chapterStarts = null;
+    this.paceAnchor = null;
+    this.pendingBack = null;
+    this.closeBackChip();
+    this.footer?.el.hide();
+    this.savePace.run();
+  }
+
   // ---------------------------------------------------------- immersive
 
   /**
@@ -762,6 +1223,7 @@ export class ReaderView extends FileView {
     if (!root) return;
     root.toggleClass("is-immersive", !root.hasClass("is-immersive"));
     this.closeJumpOffer();
+    this.measureChrome();
   }
 
   /**
@@ -847,6 +1309,12 @@ export class ReaderView extends FileView {
    * asking about whatever sits under the release.
    */
   private showEntryMenuAt(position: { x: number; y: number }): void {
+    // A tap inside an EPUB never reaches the host document, where the
+    // settings panel listens for presses outside it, so it is closed here.
+    if (this.appearance?.isOpen()) {
+      this.appearance.hide();
+      return;
+    }
     if (this.engine?.getSelection()) return;
     const entry = this.entryAt(position);
     const note = this.bookNote();

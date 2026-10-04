@@ -64,7 +64,6 @@ export interface ToolbarState {
    */
   canGoBack: boolean;
   canGoForward: boolean;
-  progressLabel: string;
   /** 0–1, for the bar along the toolbar's edge. 0 when unknown. */
   progressFraction: number;
 }
@@ -81,7 +80,6 @@ export function toolbarState(inputs: ToolbarInputs): ToolbarState {
     bookmarked: inputs.bookmarked,
     canGoBack: inputs.pages === null || inputs.pages.current > 1,
     canGoForward: inputs.pages === null || inputs.pages.current < inputs.pages.total,
-    progressLabel: progressLabel(inputs.pages, inputs.progress),
     progressFraction:
       inputs.pages === null || !Number.isFinite(inputs.progress) ? 0 : Math.min(1, Math.max(0, inputs.progress / 100)),
   };

@@ -51,8 +51,11 @@ import {
   THEME_LABELS,
   type Typography,
 } from "./typography";
+import { ScrollChrome } from "./gestures";
+import { rememberPdfView } from "../settings/settings-model";
 import {
   type ChapterStart,
+  adjacentChapter,
   chapterAt,
   chapterFraction,
   chapterTicks,
@@ -127,6 +130,8 @@ const CHROME_TAP_ZONE = 1 / 3;
 /** The painted mark on the search result being looked at. */
 const SEARCH_MARK_ID = "ereader-search-hit";
 const SEARCH_MARK_COLOR = "#ff9f1a";
+/** On a desktop with auto-hide on, the bars hide after the pointer has been still this long. */
+const CHROME_IDLE_MS = 2500;
 /** The learned reading pace is saved this long after it last changed. */
 const PACE_SAVE_DELAY_MS = 30_000;
 const THEME_CLASSES: Record<ReadingTheme, string> = {
@@ -135,6 +140,11 @@ const THEME_CLASSES: Record<ReadingTheme, string> = {
   sepia: "ereader-theme-sepia",
   dark: "ereader-theme-dark",
 };
+
+/** Space on a button or switch presses it; it is not the reader asking for the next page. */
+function isControl(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.closest("button, [role='button'], [role='switch'], [role='radio']") !== null;
+}
 
 function isReaderViewState(state: unknown): state is ReaderViewState {
   return typeof state === "object" && state !== null;
@@ -196,6 +206,12 @@ export class ReaderView extends FileView {
   /** A jump's starting point, until the jump is seen to have landed somewhere else. */
   private pendingBack: { target: Locator; at: number } | null = null;
   private readonly savePace = debounce(() => this.saveSettings(), PACE_SAVE_DELAY_MS, true);
+  /** On a touchscreen, the bars follow the direction the page is scrolled. */
+  private readonly scrollChrome = new ScrollChrome();
+  /** The scroller `scrollChrome` last measured, so a different one starts it afresh. */
+  private scrollChromeEl: EventTarget | null = null;
+  /** The desktop's countdown to hiding the bars. */
+  private idleTimer: number | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -258,6 +274,7 @@ export class ReaderView extends FileView {
     this.appearance = new AppearancePanel(this.contentRoot, this);
     this.footer = this.buildFooter(this.contentRoot);
     this.toolbar.setVisible(false);
+    this.watchChrome(this.contentRoot);
 
     this.popup = new SelectionPopup(this.contentRoot, this, {
       highlight: (type, selection) => void this.highlightFromPopup(type, selection),
@@ -268,7 +285,15 @@ export class ReaderView extends FileView {
     });
     // Scrolling moves the selection out from under the popup. `scroll` does
     // not bubble, so it is caught on the way down instead.
-    this.registerDomEvent(this.contentRoot, "scroll", () => this.repositionPopup(), { capture: true });
+    this.registerDomEvent(
+      this.contentRoot,
+      "scroll",
+      (event: Event) => {
+        this.repositionPopup();
+        this.followScroll(event.target);
+      },
+      { capture: true },
+    );
     if (Platform.isMobile) {
       this.registerInterval(window.setInterval(() => this.pollTouchSelection(), TOUCH_SELECTION_POLL_MS));
     }
@@ -277,8 +302,10 @@ export class ReaderView extends FileView {
     // — reach the view through its Scope while it is the active leaf. Presses
     // inside an EPUB's iframes arrive through the engine instead.
     const scope = this.scope ?? (this.scope = new Scope(this.app.scope));
-    for (const key of ["ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Escape"]) {
-      scope.register([], key, (event) => (this.handleKey(event) ? false : true));
+    // Any modifiers: keyAction decides, so Shift-arrows (chapters) and
+    // Shift-Space reach it too, and a press it does not take carries on.
+    for (const key of ["ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Escape", " "]) {
+      scope.register(null, key, (event) => (this.handleKey(event) ? false : true));
     }
     scope.register(["Mod"], "f", (event) => (this.handleKey(event) ? false : true));
 
@@ -304,6 +331,17 @@ export class ReaderView extends FileView {
     // An EPUB renders inside iframes that inherit none of the vault's CSS, so
     // a theme switch has to be pushed into them.
     this.registerEvent(this.app.workspace.on("css-change", () => this.engine?.refreshTheme()));
+    // A PDF's remembered zoom follows it when it is renamed or moved.
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        const reader = this.getSettings().reader;
+        const view = reader.pdfBooks[oldPath];
+        if (!view) return;
+        delete reader.pdfBooks[oldPath];
+        reader.pdfBooks[file.path] = view;
+        this.saveSettings();
+      }),
+    );
 
     if (this.file) await this.loadBook(this.file);
   }
@@ -338,6 +376,8 @@ export class ReaderView extends FileView {
 
   override async onClose(): Promise<void> {
     this.closePopup(false);
+    if (this.idleTimer !== null) window.clearTimeout(this.idleTimer);
+    this.idleTimer = null;
     this.savePace.run();
     await this.flushPosition(true);
     this.engine?.destroy();
@@ -421,6 +461,9 @@ export class ReaderView extends FileView {
     this.closePopup(false);
     this.toolbar?.setVisible(false);
     root.removeClass("is-immersive");
+    root.removeClass("is-epub", "is-pdf");
+    this.scrollChrome.reset();
+    this.scrollChromeEl = null;
     this.resetBookChrome();
     this.clearViewport();
 
@@ -456,15 +499,30 @@ export class ReaderView extends FileView {
     let engine: ReaderEngine;
     try {
       this.format = attachment.extension === "epub" ? "epub" : "pdf";
+      root.addClass(`is-${this.format}`);
       this.applyTheme();
-      engine = this.format === "epub" ? this.newEpubEngine() : this.newPdfEngine();
+      engine = this.format === "epub" ? this.newEpubEngine() : this.newPdfEngine(file.path);
       const viewport = root.createDiv({ cls: "ereader-reader__viewport" });
       // Above the footer, which lives for the life of the view.
       if (this.footer) root.insertBefore(viewport, this.footer.el);
-      await engine.open(attachment.path, viewport);
+      // The bars are in place before the page is laid out, so it is laid out
+      // once, clear of them.
+      this.toolbar?.setVisible(true);
+      this.showFooterPlaceholder();
+      this.measureChrome();
+      // A large book takes a moment to read and lay out; say that it is coming.
+      const loading = root.createDiv({ cls: "ereader-reader__loading", attr: { "aria-label": "Opening book" } });
+      loading.createDiv({ cls: "ereader-reader__spinner" });
+      try {
+        await engine.open(attachment.path, viewport);
+      } finally {
+        loading.remove();
+      }
     } catch (error) {
       console.error("[e-reader] failed to open book", error);
       this.clearViewport();
+      this.toolbar?.setVisible(false);
+      this.footer?.el.hide();
       root.createDiv({ cls: "ereader-reader__empty", text: `Could not open ${attachment.name}: ${String(error)}` });
       new Notice(`E-Reader: could not open ${attachment.name}`);
       return;
@@ -491,6 +549,7 @@ export class ReaderView extends FileView {
       this.repositionPopup();
     });
     this.toolbar?.setVisible(true);
+    this.noteActivity();
 
     const properties = this.getSettings().properties;
     const restored = this.readStoredLocator(file, properties.lastRead);
@@ -530,17 +589,23 @@ export class ReaderView extends FileView {
     await this.refreshEntries();
   }
 
-  private newPdfEngine(): ReaderEngine {
+  /**
+   * A PDF opens at the zoom, fit and spreads it was last read at, and one
+   * never opened before at the last ones used on any PDF.
+   */
+  private newPdfEngine(path: string): ReaderEngine {
     const preferences = this.getSettings().reader;
+    const view = preferences.pdfBooks[path] ?? { scale: preferences.pdfScale, fit: preferences.pdfFit, spread: preferences.pdfSpread };
     return createPdfEngine(this.app, {
-      scale: preferences.pdfScale,
-      fit: preferences.pdfFit,
-      spread: preferences.pdfSpread,
+      scale: view.scale,
+      fit: view.fit,
+      spread: view.spread,
       onPreferencesChanged: (next) => {
         const reader = this.getSettings().reader;
         reader.pdfScale = next.scale;
         reader.pdfFit = next.fit;
         reader.pdfSpread = next.spread;
+        reader.pdfBooks = rememberPdfView(reader.pdfBooks, path, next);
         this.saveSettings();
       },
     });
@@ -648,6 +713,24 @@ export class ReaderView extends FileView {
         checked: this.getSettings().reader.showHighlights,
         apply: () => this.toggleHighlights(),
       },
+      ...(Platform.isMobile
+        ? []
+        : [
+            {
+              section: "appearance" as const,
+              id: "auto-hide-chrome",
+              label: "Hide toolbar while reading",
+              icon: "eye-off",
+              checked: this.getSettings().reader.autoHideChrome,
+              apply: () => {
+                const reader = this.getSettings().reader;
+                reader.autoHideChrome = !reader.autoHideChrome;
+                this.saveSettings();
+                if (!reader.autoHideChrome) this.setChromeHidden(false);
+                this.noteActivity();
+              },
+            },
+          ]),
       {
         section: "appearance",
         id: "show-footer",
@@ -718,6 +801,20 @@ export class ReaderView extends FileView {
     this.updateToolbar();
   }
 
+  /** To the start of the next chapter, or of this or the previous one. Used by Shift-arrows and the chapter commands. */
+  async goToChapter(direction: 1 | -1): Promise<void> {
+    const engine = this.engine;
+    const pages = engine?.pageState();
+    if (!engine || !pages) return;
+    await this.outline();
+    const starts = this.chapterStartsFor(engine, pages.total);
+    const index = adjacentChapter(starts, pages.current, direction);
+    const target = index === null ? null : rowsFromOutline(this.cachedOutline ?? [])[index]?.target;
+    if (target?.kind !== "book") return;
+    this.closePopup(false);
+    await this.goToLocator(target.locator, false);
+  }
+
   /**
    * Applies a key press from either route — the view's Scope or an EPUB's
    * iframe. Returns whether it was taken, so the caller suppresses the
@@ -728,6 +825,17 @@ export class ReaderView extends FileView {
     const action = keyAction(event);
     if (action === "next" || action === "prev") {
       void this.turnPage(action === "next" ? 1 : -1);
+      return true;
+    }
+    // A scrolled PDF's own Space, a screenful, reads better than jumping a
+    // whole page that may be taller than the pane.
+    if ((action === "advance" || action === "retreat") && this.format === "epub" && !isControl(event.target)) {
+      void this.turnPage(action === "advance" ? 1 : -1);
+      return true;
+    }
+    // Shift-arrows extend a selection when there is one.
+    if ((action === "next-chapter" || action === "prev-chapter") && !this.engine?.getSelection()) {
+      void this.goToChapter(action === "next-chapter" ? 1 : -1);
       return true;
     }
     if (action === "search") {
@@ -1095,6 +1203,13 @@ export class ReaderView extends FileView {
     const rightEl = el.createDiv({ cls: "ereader-footer__right" });
     const chapterLeftEl = rightEl.createSpan({ cls: "ereader-footer__chapter-left" });
     const bookEl = rightEl.createSpan({ cls: "ereader-footer__book" });
+    // A tap switches the time left between the chapter and the whole book.
+    el.addEventListener("click", () => {
+      const reader = this.getSettings().reader;
+      reader.footerTime = reader.footerTime === "chapter" ? "book" : "chapter";
+      this.saveSettings();
+      this.updateFooter();
+    });
     el.hide();
     return { el, chapterEl, chapterLeftEl, bookEl, barEl, ticksEl, ticksFor: null };
   }
@@ -1109,8 +1224,12 @@ export class ReaderView extends FileView {
     if (!footer) return;
     const engine = this.engine;
     const pages = engine?.pageState() ?? null;
-    if (!engine || !pages || !this.getSettings().reader.showFooter) {
+    if (!engine || !this.getSettings().reader.showFooter) {
       footer.el.hide();
+      return;
+    }
+    if (!pages) {
+      this.showFooterPlaceholder();
       return;
     }
     footer.el.show();
@@ -1130,14 +1249,33 @@ export class ReaderView extends FileView {
         footer.ticksEl.createDiv({ cls: "ereader-footer__tick" }).setCssStyles({ left: `${at * 100}%` });
       }
     }
-    if (chapter) {
+    const switchHint = "Tap to switch between the chapter and the book";
+    if (chapter && this.getSettings().reader.footerTime === "chapter") {
       const fraction = chapterFraction(chapter, pages.current);
       footer.chapterLeftEl.setText(`${formatDuration(unitsLeft(pages.current, chapter.end) * pace)} left in chapter`);
-      setTooltip(footer.el, `${Math.round(fraction * 100)}% through this chapter · about ${bookLeft} left in the book`, { placement: "top" });
+      setTooltip(footer.el, `${Math.round(fraction * 100)}% through this chapter · about ${bookLeft} left in the book. ${switchHint}`, { placement: "top" });
     } else {
       footer.chapterLeftEl.setText(`${bookLeft} left in book`);
-      setTooltip(footer.el, `${percent} through the book`, { placement: "top" });
+      setTooltip(footer.el, chapter ? `${percent} through the book. ${switchHint}` : `${percent} through the book`, { placement: "top" });
     }
+  }
+
+  /**
+   * The footer before there is anything to put in it: while the book opens,
+   * and while an EPUB's pages are counted in the background. Showing it at
+   * once also means its height is known before the page is laid out.
+   */
+  private showFooterPlaceholder(): void {
+    const footer = this.footer;
+    if (!footer || !this.getSettings().reader.showFooter) return;
+    footer.el.show();
+    footer.chapterEl.setText("");
+    footer.chapterLeftEl.setText("Calculating time left…");
+    footer.bookEl.setText("");
+    footer.barEl.setCssStyles({ width: "0" });
+    footer.ticksEl.empty();
+    footer.ticksFor = null;
+    setTooltip(footer.el, "Counting the pages in this book", { placement: "top" });
   }
 
   /** The contents placed on the page/location scale; empty until the contents are read. */
@@ -1281,14 +1419,78 @@ export class ReaderView extends FileView {
   // ---------------------------------------------------------- immersive
 
   /**
-   * Hides the toolbar to give the page the whole pane, or brings it back.
-   * Not remembered: a book always opens with its controls showing.
+   * Hides the toolbar and footer to give the page the whole pane, or brings
+   * them back. Not remembered: a book always opens with its controls showing.
    */
   toggleChrome(): void {
     const root = this.contentRoot;
     if (!root) return;
-    root.toggleClass("is-immersive", !root.hasClass("is-immersive"));
-    this.measureChrome();
+    this.setChromeHidden(!root.hasClass("is-immersive"));
+  }
+
+  private setChromeHidden(hidden: boolean): void {
+    const root = this.contentRoot;
+    if (!root || root.hasClass("is-immersive") === hidden) return;
+    // Bars hidden under an open panel would leave it floating over nothing.
+    if (hidden && (this.search?.isOpen() || this.appearance?.isOpen())) return;
+    root.toggleClass("is-immersive", hidden);
+  }
+
+  /**
+   * Keeps the heights the page and the panels keep clear of up to date. The
+   * bars float over the page (see styles.css), so their size changing — the
+   * toolbar showing, the footer turned on, a narrow pane wrapping them — is
+   * the one thing that moves the page.
+   */
+  private watchChrome(root: HTMLElement): void {
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(() => this.measureChrome());
+      const toolbarEl = root.querySelector<HTMLElement>(".ereader-toolbar");
+      if (toolbarEl) observer.observe(toolbarEl);
+      if (this.footer) observer.observe(this.footer.el);
+      this.register(() => observer.disconnect());
+    }
+    if (Platform.isMobile) return;
+    // A desktop's bars can hide themselves once the pointer is still, and
+    // come back when it moves, or reaches the top of the pane.
+    this.registerDomEvent(root, "mousemove", () => this.noteActivity());
+    const reveal = root.createDiv({ cls: "ereader-reader__reveal" });
+    this.registerDomEvent(reveal, "mouseenter", () => this.noteActivity());
+  }
+
+  /** The pointer moved: show the bars, and on a desktop with auto-hide on, start the countdown to hiding them. */
+  private noteActivity(): void {
+    if (Platform.isMobile || !this.getSettings().reader.autoHideChrome) return;
+    this.setChromeHidden(false);
+    if (this.idleTimer !== null) window.clearTimeout(this.idleTimer);
+    this.idleTimer = window.setTimeout(() => {
+      this.idleTimer = null;
+      const root = this.contentRoot;
+      if (!root || !this.engine || !this.getSettings().reader.autoHideChrome) return;
+      // Not while the pointer rests on a bar, or something in one has focus.
+      const bars = [root.querySelector(".ereader-toolbar"), this.footer?.el];
+      if (bars.some((el) => el?.matches(":hover") || el?.contains(root.doc.activeElement))) {
+        this.noteActivity();
+        return;
+      }
+      this.setChromeHidden(true);
+    }, CHROME_IDLE_MS);
+  }
+
+  /**
+   * On a touchscreen, scrolling down into the book hides the bars and
+   * scrolling back up shows them. Only the page's own scroller counts, not a
+   * panel's list.
+   */
+  private followScroll(target: EventTarget | null): void {
+    if (!Platform.isMobile || !(target instanceof HTMLElement) || !this.engine) return;
+    if (!target.closest(".ereader-reader__viewport")) return;
+    if (target !== this.scrollChromeEl) {
+      this.scrollChromeEl = target;
+      this.scrollChrome.reset();
+    }
+    const action = this.scrollChrome.update(target.scrollTop, target.clientHeight);
+    if (action) this.setChromeHidden(action === "hide");
   }
 
   /**
@@ -1509,7 +1711,7 @@ export class ReaderView extends FileView {
     // Saving a highlight with painting switched off looks exactly like it
     // failing: the entry lands in the note and nothing appears on the page.
     if (type !== BOOKMARK_TYPE && !this.getSettings().reader.showHighlights) {
-      new Notice("E-Reader: highlight saved. Turn on “Show saved highlights” in the display menu to see it in the book.");
+      new Notice("E-Reader: highlight saved. Turn on “Show saved highlights” in reading settings (Aa) to see it in the book.");
     }
     try {
       const page = hint ? (this.engine?.pageNumberFor(hint) ?? undefined) : undefined;

@@ -54,7 +54,8 @@ fit-to-width, fit-to-height and two-page spreads, and are inverted to match a
 dark vault; EPUBs
 offer scrolled or paginated reading (two pages side by side on a wide pane, or
 always one), tap the edge of a page to turn it, and render in your vault's own
-theme rather than whatever the book shipped with. The reader reports the book
+theme rather than whatever the book shipped with. A PDF remembers its own zoom,
+fit and spreads, so a scanned textbook and a novel can each keep theirs. The reader reports the book
 note as its file, so Obsidian's own Properties pane and everything else that
 follows the active file work on it unchanged.
 
@@ -72,17 +73,23 @@ leaves a **Back to …** button that returns you to where you were reading.
 
 Under the page, a footer shows the chapter, the time left in it, and how far
 through the book you are, with a progress bar marked where each chapter
-starts. The time is learned from how fast you actually turn pages. Turn it off
-in reading settings. Opening a book you had read further in elsewhere offers
+starts. Tap it to switch the time left between the chapter and the whole book.
+The time is learned from how fast you actually turn pages. Turn it off in
+reading settings. Opening a book you had read further in elsewhere offers
 to jump to the furthest page you reached.
 
-Pinch zooms on a touchscreen. On any touchscreen a tap in the
-middle of the page hides the toolbar for distraction-free reading and brings
-it back.
+Pinch zooms on a touchscreen, and a sideways swipe turns a paginated EPUB's
+page. On any touchscreen a tap in the middle of the page hides the toolbar and
+footer for distraction-free reading and brings them back, and they also slide
+away as you scroll down and return as you scroll up. On a desktop, **Hide
+toolbar while reading** in reading settings hides them once the pointer is
+still; move it, or move it to the top of the pane, to bring them back.
 
-The left and right arrow keys and Page Up/Page Down turn the page, and **Next
-page**, **Previous page**, **Zoom in**, **Zoom out** and **Show or hide the
-reader toolbar** are commands you can bind to any hotkey.
+The left and right arrow keys and Page Up/Page Down turn the page (Space and
+Shift-Space too in an EPUB), and Shift with an arrow key goes to the next or
+previous chapter. **Next page**, **Previous page**, **Next chapter**,
+**Previous chapter**, **Zoom in**, **Zoom out** and **Show or hide the reader
+toolbar** are commands you can bind to any hotkey.
 
 **Highlights and notes.** Select text and a small bar opens beside it: tap a
 colour to highlight as that type, or copy the text. Right-click works too, and

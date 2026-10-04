@@ -33,6 +33,7 @@ import type {
 } from "../engine";
 import { findMatches, hitFromText, yieldToUi } from "../search";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
+import { swipeDirection } from "../gestures";
 import { fractionToPercent } from "../progress";
 import { type Typography, marginPadding, typographyCss } from "../typography";
 import { clampScale } from "../zoom";
@@ -482,6 +483,7 @@ export class EpubEngine implements ReaderEngine {
     // covers everything in the pane that is NOT the section's iframe.
     this.addScrollIntentListeners(container);
     this.addPinchListeners(container);
+    this.addSwipeListeners(container, () => false);
     this.watchForResize(container);
     await rendition.display();
 
@@ -710,6 +712,39 @@ export class EpubEngine implements ReaderEngine {
 
     this.addScrollIntentListeners(doc);
     this.addPinchListeners(doc);
+    this.addSwipeListeners(doc, () => {
+      const selection = contents.window.getSelection();
+      return selection !== null && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed;
+    });
+  }
+
+  /**
+   * Swipe sideways to turn a paginated page, the way every reading app does.
+   * A single finger only, and never while it is dragging out a selection.
+   */
+  private addSwipeListeners(target: Document | HTMLElement, selecting: () => boolean): void {
+    const signal = this.listeners?.signal;
+    let start: { x: number; y: number; at: number } | null = null;
+    target.addEventListener(
+      "touchstart",
+      ((event: TouchEvent) => {
+        const touch = event.touches.length === 1 ? event.touches[0] : undefined;
+        start = touch ? { x: touch.clientX, y: touch.clientY, at: Date.now() } : null;
+      }) as EventListener,
+      { passive: true, signal },
+    );
+    target.addEventListener(
+      "touchend",
+      ((event: TouchEvent) => {
+        const from = start;
+        start = null;
+        const touch = event.changedTouches[0];
+        if (!from || !touch || this.flowMode !== "paginated" || event.touches.length > 0 || selecting()) return;
+        const direction = swipeDirection(touch.clientX - from.x, touch.clientY - from.y, Date.now() - from.at);
+        if (direction) void this.turn(direction);
+      }) as EventListener,
+      { passive: true, signal },
+    );
   }
 
   /** Pinch to change text size, applied when the fingers lift. */

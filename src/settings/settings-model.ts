@@ -151,6 +151,17 @@ export interface ReaderPreferences {
   readingTheme: ReadingTheme;
   /** The line under the page with the chapter, time left and percentage. */
   showFooter: boolean;
+  /** Whether the footer's time left is for the chapter or the whole book; a tap on it switches. */
+  footerTime: FooterTime;
+  /** On a desktop, hide the toolbar and footer once the pointer has been still for a moment. */
+  autoHideChrome: boolean;
+  /**
+   * Zoom, fit and spreads per PDF, by the path of the file the reader has
+   * open: a scanned textbook and a novel want different ones. The top-level
+   * `pdfScale`, `pdfFit` and `pdfSpread` are the last ones used, which a PDF
+   * opened for the first time starts from.
+   */
+  pdfBooks: Record<string, PdfView>;
   /**
    * How long the reader takes over one unit, learned as they read, for the
    * time-left estimates: an EPUB location (about 1,600 characters) or a PDF
@@ -196,6 +207,43 @@ export type EpubSpread = "auto" | "none";
  * re-applied whenever the pane is resized or the device rotated.
  */
 export type PdfFit = "none" | "width" | "height" | "page";
+export type FooterTime = "chapter" | "book";
+
+export interface PdfView {
+  scale: number;
+  fit: PdfFit;
+  spread: SpreadMode;
+}
+
+/** The most PDFs whose view is remembered; the least recently changed ones are dropped first. */
+export const MAX_REMEMBERED_PDFS = 200;
+
+/**
+ * Records `view` as `path`'s, moving it to the end so the oldest entries are
+ * the ones {@link MAX_REMEMBERED_PDFS} drops.
+ */
+export function rememberPdfView(books: Record<string, PdfView>, path: string, view: PdfView): Record<string, PdfView> {
+  const next: Record<string, PdfView> = {};
+  const keys = Object.keys(books).filter((key) => key !== path);
+  for (const key of keys.slice(Math.max(0, keys.length - (MAX_REMEMBERED_PDFS - 1)))) {
+    const kept = books[key];
+    if (kept) next[key] = kept;
+  }
+  next[path] = { ...view };
+  return next;
+}
+
+function mergePdfBooks(value: unknown): Record<string, PdfView> {
+  const books: Record<string, PdfView> = {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return books;
+  for (const [path, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const view = raw as Record<string, unknown>;
+    if (typeof view["scale"] !== "number" || !Number.isFinite(view["scale"]) || !isPdfFit(view["fit"]) || !isSpreadMode(view["spread"])) continue;
+    books[path] = { scale: clampScale(view["scale"]), fit: view["fit"], spread: view["spread"] };
+  }
+  return books;
+}
 
 /** One reader-configurable highlight kind and the colour it is painted in. */
 export interface AnnotationType {
@@ -291,6 +339,9 @@ export const DEFAULT_SETTINGS: Settings = {
     epubSpread: "auto",
     readingTheme: "auto",
     showFooter: true,
+    footerTime: "chapter",
+    autoHideChrome: false,
+    pdfBooks: {},
     paceEpubMs: DEFAULT_PACE_EPUB_MS,
     pacePdfMs: DEFAULT_PACE_PDF_MS,
     showHighlights: true,
@@ -486,6 +537,9 @@ function mergeReaderPreferences(saved: Record<string, unknown>, types: Annotatio
     epubSpread: from["epubSpread"] === "none" || from["epubSpread"] === "auto" ? from["epubSpread"] : defaults.epubSpread,
     readingTheme: isReadingTheme(from["readingTheme"]) ? from["readingTheme"] : defaults.readingTheme,
     showFooter: mergeBoolean(from["showFooter"], defaults.showFooter),
+    footerTime: from["footerTime"] === "book" || from["footerTime"] === "chapter" ? from["footerTime"] : defaults.footerTime,
+    autoHideChrome: mergeBoolean(from["autoHideChrome"], defaults.autoHideChrome),
+    pdfBooks: mergePdfBooks(from["pdfBooks"]),
     paceEpubMs: mergePace(from["paceEpubMs"], defaults.paceEpubMs),
     pacePdfMs: mergePace(from["pacePdfMs"], defaults.pacePdfMs),
     showHighlights: mergeBoolean(from["showHighlights"], defaults.showHighlights),

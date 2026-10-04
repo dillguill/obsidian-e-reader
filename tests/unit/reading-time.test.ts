@@ -4,6 +4,7 @@ import {
   chapterAt,
   chapterFraction,
   chapterTicks,
+  adjacentChapter,
   formatDuration,
   nextPace,
   unitsLeft,
@@ -65,6 +66,28 @@ describe("chapter progress", () => {
   it("counts the unit on screen as half read", () => {
     expect(unitsLeft(19, 20)).toBe(0.5);
     expect(unitsLeft(25, 20)).toBe(0);
+  });
+});
+
+describe("adjacentChapter", () => {
+  const starts = [
+    { label: "One", unit: 1 },
+    { label: "One, part A", unit: 5, depth: 1 },
+    { label: "Two", unit: 10 },
+    { label: "Unplaced", unit: null },
+    { label: "Three", unit: 20 },
+  ];
+
+  it("goes to the next top-level chapter", () => {
+    expect(adjacentChapter(starts, 3, 1)).toBe(2);
+    expect(adjacentChapter(starts, 10, 1)).toBe(4);
+    expect(adjacentChapter(starts, 25, 1)).toBeNull();
+  });
+
+  it("goes back to this chapter's start, or the one before from its start", () => {
+    expect(adjacentChapter(starts, 14, -1)).toBe(2);
+    expect(adjacentChapter(starts, 10, -1)).toBe(0);
+    expect(adjacentChapter(starts, 1, -1)).toBeNull();
   });
 });
 

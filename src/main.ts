@@ -250,6 +250,8 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     };
     readerCommand("next-page", "Next page", (view) => view.turnPage(1));
     readerCommand("previous-page", "Previous page", (view) => view.turnPage(-1));
+    readerCommand("next-chapter", "Next chapter", (view) => view.goToChapter(1));
+    readerCommand("previous-chapter", "Previous chapter", (view) => view.goToChapter(-1));
     readerCommand("zoom-in", "Zoom in", (view) => view.zoom(1));
     readerCommand("zoom-out", "Zoom out", (view) => view.zoom(-1));
     readerCommand("toggle-toolbar", "Show or hide the reader toolbar", (view) => Promise.resolve(view.toggleChrome()));

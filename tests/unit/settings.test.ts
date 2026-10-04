@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_SETTINGS, SETTINGS_VERSION, mergeSettings } from "../../src/settings/settings-model";
+import { DEFAULT_SETTINGS, MAX_REMEMBERED_PDFS, SETTINGS_VERSION, mergeSettings, rememberPdfView } from "../../src/settings/settings-model";
 import { RESERVED_ENTRY_TYPE } from "../../src/core/types";
 import { MAX_SCALE, MIN_SCALE } from "../../src/reader/zoom";
 import { DEFAULT_PACE_EPUB_MS, DEFAULT_PACE_PDF_MS } from "../../src/reader/reading-time";
@@ -180,6 +180,9 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         epubSpread: "none",
         readingTheme: "sepia",
         showFooter: false,
+        footerTime: "book",
+        autoHideChrome: true,
+        pdfBooks: { "Books/Scan.pdf": { scale: 1.5, fit: "none", spread: "odd" } },
         paceEpubMs: 50000,
         pacePdfMs: 90000,
         showHighlights: false,
@@ -244,6 +247,26 @@ describe("import settings", () => {
   });
 });
 
+describe("per-PDF views", () => {
+  const view = { scale: 1.2, fit: "none" as const, spread: "single" as const };
+
+  it("drops a saved view that is not one", () => {
+    const merged = mergeSettings({ reader: { pdfBooks: { "a.pdf": view, "b.pdf": { scale: "big" }, "c.pdf": null } } });
+    expect(merged.reader.pdfBooks).toEqual({ "a.pdf": view });
+  });
+
+  it("moves a changed book to the end and forgets the oldest past the limit", () => {
+    let books = {};
+    for (let i = 0; i < MAX_REMEMBERED_PDFS; i++) books = rememberPdfView(books, `${i}.pdf`, view);
+    books = rememberPdfView(books, "0.pdf", { ...view, scale: 2 });
+    books = rememberPdfView(books, "new.pdf", view);
+    const keys = Object.keys(books);
+    expect(keys).toHaveLength(MAX_REMEMBERED_PDFS);
+    expect(keys[0]).toBe("2.pdf");
+    expect(keys.slice(-2)).toEqual(["0.pdf", "new.pdf"]);
+  });
+});
+
 describe("remembered reader preferences", () => {
   it("defaults to actual size, single pages, scrolled text, and highlights shown", () => {
     expect(DEFAULT_SETTINGS.reader).toEqual({
@@ -260,6 +283,9 @@ describe("remembered reader preferences", () => {
       epubSpread: "auto",
       readingTheme: "auto",
       showFooter: true,
+      footerTime: "chapter",
+      autoHideChrome: false,
+      pdfBooks: {},
       paceEpubMs: DEFAULT_PACE_EPUB_MS,
       pacePdfMs: DEFAULT_PACE_PDF_MS,
       showHighlights: true,

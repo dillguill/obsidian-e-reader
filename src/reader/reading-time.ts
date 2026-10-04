@@ -96,6 +96,25 @@ export function chapterTicks(starts: readonly ChapterStart[], total: number): nu
   return [...units].sort((a, b) => a - b).map((unit) => (unit - 1) / (total - 1));
 }
 
+/**
+ * The top-level chapter to move to from unit `current`, as an index into
+ * `starts`: the next one that starts after it, or going back, the last one
+ * that starts before it — the start of this chapter when the reader is part
+ * way in, and the one before when they are already at its start.
+ */
+export function adjacentChapter(starts: readonly ChapterStart[], current: number, direction: 1 | -1): number | null {
+  let found: number | null = null;
+  starts.forEach((entry, index) => {
+    if ((entry.depth ?? 0) !== 0 || entry.unit === null) return;
+    if (direction === 1 && entry.unit > current) {
+      if (found === null || entry.unit < (starts[found]?.unit ?? Infinity)) found = index;
+    } else if (direction === -1 && entry.unit < current) {
+      if (found === null || entry.unit >= (starts[found]?.unit ?? -Infinity)) found = index;
+    }
+  });
+  return found;
+}
+
 /** 0–1 through a chapter. */
 export function chapterFraction(chapter: ChapterSpan, current: number): number {
   const length = chapter.end - chapter.start;

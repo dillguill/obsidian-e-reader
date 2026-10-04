@@ -31,10 +31,22 @@ export function clampPageInput(raw: string, total: number): number | null {
   return Math.min(total, Math.max(1, Math.round(parsed)));
 }
 
+/**
+ * `42%`. Empty until the engine can place the reader in the whole book, since
+ * an EPUB reports 0 until its location index is built and a 0% that jumps to
+ * 37% a few seconds later reads as a bug.
+ */
+export function progressLabel(pages: PageState | null, progress: number): string {
+  if (pages === null || !Number.isFinite(progress)) return "";
+  return `${Math.round(Math.min(100, Math.max(0, progress)))}%`;
+}
+
 export interface ToolbarInputs {
   pages: PageState | null;
   scale: number;
   bookmarked: boolean;
+  /** 0–100 through the whole book. */
+  progress: number;
 }
 
 export interface ToolbarState {
@@ -46,6 +58,15 @@ export interface ToolbarState {
   /** Bounds a typed entry. 0 when the engine cannot yet say how long the book is. */
   pageTotal: number;
   bookmarked: boolean;
+  /**
+   * Whether the page buttons can move. Only the ends of a known page range
+   * disable them: a book that cannot yet say where it is still turns.
+   */
+  canGoBack: boolean;
+  canGoForward: boolean;
+  progressLabel: string;
+  /** 0–1, for the bar along the toolbar's edge. 0 when unknown. */
+  progressFraction: number;
 }
 
 export function toolbarState(inputs: ToolbarInputs): ToolbarState {
@@ -58,5 +79,10 @@ export function toolbarState(inputs: ToolbarInputs): ToolbarState {
     pageLabel: pageLabel(inputs.pages),
     pageTotal: inputs.pages?.total ?? 0,
     bookmarked: inputs.bookmarked,
+    canGoBack: inputs.pages === null || inputs.pages.current > 1,
+    canGoForward: inputs.pages === null || inputs.pages.current < inputs.pages.total,
+    progressLabel: progressLabel(inputs.pages, inputs.progress),
+    progressFraction:
+      inputs.pages === null || !Number.isFinite(inputs.progress) ? 0 : Math.min(1, Math.max(0, inputs.progress / 100)),
   };
 }

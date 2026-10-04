@@ -765,6 +765,8 @@ export class PdfEngine implements ReaderEngine {
     scrollEl.addEventListener(
       "click",
       (event: MouseEvent) => {
+        // Following a link is not a tap on the page.
+        if (event.target instanceof Element && event.target.closest("a[href]")) return;
         this.tapHandler?.({ x: event.clientX, y: event.clientY });
       },
       { signal: this.listeners?.signal },

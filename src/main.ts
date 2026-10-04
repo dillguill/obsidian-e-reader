@@ -130,7 +130,14 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     this.registerView(
       READER_VIEW_TYPE,
       (leaf) =>
-        new ReaderView(leaf, () => this.settings, () => void this.saveSettings(), this.readerEvents, (note) => this.attachFile(note)),
+        new ReaderView(
+          leaf,
+          () => this.settings,
+          () => void this.saveSettings(),
+          this.readerEvents,
+          (note) => this.attachFile(note),
+          () => void this.revealPane(OUTLINE_VIEW_TYPE),
+        ),
     );
     // Both panes are registered whatever the settings say: `registerView` has
     // no public counterpart to undo it, so the toggles gate the commands and
@@ -245,6 +252,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     readerCommand("previous-page", "Previous page", (view) => view.turnPage(-1));
     readerCommand("zoom-in", "Zoom in", (view) => view.zoom(1));
     readerCommand("zoom-out", "Zoom out", (view) => view.zoom(-1));
+    readerCommand("toggle-toolbar", "Show or hide the reader toolbar", (view) => Promise.resolve(view.toggleChrome()));
 
     this.addCommand({
       id: "import-book",

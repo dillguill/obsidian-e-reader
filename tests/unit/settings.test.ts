@@ -172,6 +172,8 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         pdfAdaptToTheme: true,
         epubTextScale: 1.1,
         epubFlow: "paginated",
+        epubLineSpacing: "relaxed",
+        epubMargins: "wide",
         showHighlights: false,
         activeAnnotationType: "question",
       },
@@ -243,6 +245,8 @@ describe("remembered reader preferences", () => {
       pdfAdaptToTheme: false,
       epubTextScale: 1,
       epubFlow: "scrolled",
+      epubLineSpacing: "normal",
+      epubMargins: "normal",
       showHighlights: true,
       activeAnnotationType: DEFAULT_SETTINGS.annotationTypes[0]?.name,
     });
@@ -267,6 +271,12 @@ describe("remembered reader preferences", () => {
     const merged = mergeSettings({ reader: { pdfSpread: "triple", epubFlow: "sideways" } });
     expect(merged.reader.pdfSpread).toBe("single");
     expect(merged.reader.epubFlow).toBe("scrolled");
+  });
+
+  it("falls back for an unrecognised line spacing or margin", () => {
+    const merged = mergeSettings({ reader: { epubLineSpacing: "double", epubMargins: 3 } });
+    expect(merged.reader.epubLineSpacing).toBe("normal");
+    expect(merged.reader.epubMargins).toBe("normal");
   });
 });
 

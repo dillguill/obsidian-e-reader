@@ -14,6 +14,7 @@
 import { type StatusSettings, normalizeStatus } from "../core/status";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
 import { type SpreadMode, isSpreadMode } from "../reader/spread";
+import { type LineSpacing, type Margins, isLineSpacing, isMargins } from "../reader/typography";
 import { clampScale } from "../reader/zoom";
 
 /**
@@ -128,6 +129,10 @@ export interface ReaderPreferences {
   /** Text size for reflowable books, as a multiplier of the book's own size. */
   epubTextScale: number;
   epubFlow: EpubFlow;
+  /** Line spacing for reflowable books; "normal" leaves it to the book. */
+  epubLineSpacing: LineSpacing;
+  /** Space either side of a reflowable book's text. */
+  epubMargins: Margins;
   /** Whether saved highlights are painted into the document. */
   showHighlights: boolean;
   /**
@@ -253,6 +258,8 @@ export const DEFAULT_SETTINGS: Settings = {
     pdfAdaptToTheme: false,
     epubTextScale: 1,
     epubFlow: "scrolled",
+    epubLineSpacing: "normal",
+    epubMargins: "normal",
     showHighlights: true,
     activeAnnotationType: "idea",
   },
@@ -435,6 +442,8 @@ function mergeReaderPreferences(saved: Record<string, unknown>, types: Annotatio
     pdfAdaptToTheme: mergeBoolean(from["pdfAdaptToTheme"], defaults.pdfAdaptToTheme),
     epubTextScale: mergeScale(from["epubTextScale"], defaults.epubTextScale),
     epubFlow: from["epubFlow"] === "paginated" || from["epubFlow"] === "scrolled" ? from["epubFlow"] : defaults.epubFlow,
+    epubLineSpacing: isLineSpacing(from["epubLineSpacing"]) ? from["epubLineSpacing"] : defaults.epubLineSpacing,
+    epubMargins: isMargins(from["epubMargins"]) ? from["epubMargins"] : defaults.epubMargins,
     showHighlights: mergeBoolean(from["showHighlights"], defaults.showHighlights),
     activeAnnotationType: mergeActiveType(from["activeAnnotationType"], types),
   };

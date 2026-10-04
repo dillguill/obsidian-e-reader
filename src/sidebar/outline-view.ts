@@ -255,27 +255,24 @@ export class OutlineView extends ItemView {
    * `.tree-item-children` rather than from arithmetic here.
    */
   private buildTree(scope: Component, file: TFile, visible: OutlineRow[]): void {
-    const stack: { depth: number; containerEl: HTMLElement; parent: RenderedRow | null }[] = [
-      { depth: -1, containerEl: this.listEl as HTMLElement, parent: null },
-    ];
+    const stack: { depth: number; parent: RenderedRow | null }[] = [{ depth: -1, parent: null }];
 
     visible.forEach((row, index) => {
       while (stack.length > 1 && (stack[stack.length - 1] as { depth: number }).depth >= row.depth) stack.pop();
-      const top = stack[stack.length - 1] as { containerEl: HTMLElement; parent: RenderedRow | null };
+      const parent = (stack[stack.length - 1] as { parent: RenderedRow | null }).parent;
+      // Every child goes into its parent's `.tree-item-children`, which is
+      // created by the first one to arrive. Appending to the parent's item
+      // instead left the second and later siblings outside that container,
+      // so only the first child of a heading was indented.
+      const containerEl = parent ? this.childrenOf(scope, parent) : (this.listEl as HTMLElement);
 
-      const itemEl = top.containerEl.createDiv({ cls: "tree-item" });
+      const itemEl = containerEl.createDiv({ cls: "tree-item" });
       const selfEl = itemEl.createDiv({ cls: "tree-item-self is-clickable" });
-      const iconEl = selfEl.createDiv({ cls: "tree-item-icon collapse-icon" });
+      selfEl.createDiv({ cls: "tree-item-icon collapse-icon" });
       selfEl.createDiv({ cls: "tree-item-inner", text: row.label });
 
       const rendered: RenderedRow = { row, key: `${row.depth}:${index}:${row.label}`, selfEl, childrenEl: null, itemEl };
       this.rendered.push(rendered);
-
-      // A row is collapsible only once something nests under it, which is
-      // only knowable when that child arrives — hence the deferred wiring.
-      if (top.parent && top.parent.childrenEl === null) {
-        this.makeCollapsible(scope, top.parent, iconEl);
-      }
 
       selfEl.tabIndex = 0;
       scope.registerDomEvent(selfEl, "click", () => void this.openRow(file, row));
@@ -285,24 +282,23 @@ export class OutlineView extends ItemView {
         void this.openRow(file, row);
       });
 
-      stack.push({ depth: row.depth, containerEl: itemEl, parent: rendered });
+      stack.push({ depth: row.depth, parent: rendered });
     });
 
-    // The children containers are created lazily above; anything that never
-    // got one is a leaf and keeps an empty icon slot for alignment.
+    // Anything that never got a children container is a leaf and keeps an
+    // empty icon slot for alignment.
     for (const item of this.rendered) {
       if (item.childrenEl === null) item.selfEl.addClass("mod-leaf");
     }
   }
 
-  private makeCollapsible(scope: Component, parent: RenderedRow, _childIcon: HTMLElement): void {
+  /**
+   * The row's `.tree-item-children`, created — and the row made collapsible —
+   * when its first child arrives, since only then is it known to have any.
+   */
+  private childrenOf(scope: Component, parent: RenderedRow): HTMLElement {
+    if (parent.childrenEl) return parent.childrenEl;
     const childrenEl = parent.itemEl.createDiv({ cls: "tree-item-children" });
-    // The child element was appended to itemEl before this container existed,
-    // so move everything after the header row inside it.
-    const nodes = Array.from(parent.itemEl.children).filter(
-      (node) => node !== parent.selfEl && node !== childrenEl,
-    );
-    for (const node of nodes) childrenEl.appendChild(node);
     parent.childrenEl = childrenEl;
 
     parent.selfEl.addClass("mod-collapsible");
@@ -314,6 +310,7 @@ export class OutlineView extends ItemView {
         this.toggleCollapsed(parent);
       });
     }
+    return childrenEl;
   }
 
   private toggleCollapsed(item: RenderedRow): void {

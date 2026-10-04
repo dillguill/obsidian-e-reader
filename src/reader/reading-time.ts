@@ -48,6 +48,8 @@ export interface ChapterStart {
   label: string;
   /** The unit it starts at, or null when the engine cannot place it yet. */
   unit: number | null;
+  /** 0 for a top-level entry. Only top-level entries get a tick on the progress bar. */
+  depth?: number;
 }
 
 export interface ChapterSpan {
@@ -77,6 +79,21 @@ export function chapterAt(starts: readonly ChapterStart[], current: number, tota
   const chapter = placed[index] as { label: string; unit: number };
   const next = placed.slice(index + 1).find((entry) => entry.unit > chapter.unit);
   return { label: chapter.label, start: chapter.unit, end: next ? next.unit : total + 1 };
+}
+
+/**
+ * Where each top-level chapter starts along the book's progress bar, as
+ * 0–1. The first chapter's start is the start of the bar and gets no tick, and
+ * two chapters starting on the same unit get one.
+ */
+export function chapterTicks(starts: readonly ChapterStart[], total: number): number[] {
+  if (total <= 1) return [];
+  const units = new Set<number>();
+  for (const entry of starts) {
+    if ((entry.depth ?? 0) !== 0 || entry.unit === null || entry.unit <= 1 || entry.unit > total) continue;
+    units.add(entry.unit);
+  }
+  return [...units].sort((a, b) => a - b).map((unit) => (unit - 1) / (total - 1));
 }
 
 /** 0–1 through a chapter. */

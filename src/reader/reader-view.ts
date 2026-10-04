@@ -34,7 +34,7 @@ import { highlightColor } from "./highlight-style";
 import { isTypingTarget, keyAction } from "./keys";
 import { type PopupPlacement, SelectionPopup } from "./selection-popup";
 import { ReaderToolbar } from "./toolbar";
-import { progressLabel, toolbarState } from "./toolbar-model";
+import { progressLabel, targetFromInput, toolbarState } from "./toolbar-model";
 import { MAX_SCALE, MIN_SCALE, stepScale } from "./zoom";
 import { AppearancePanel, type PanelRow } from "./appearance-panel";
 import { SearchPanel } from "./search-panel";
@@ -55,12 +55,49 @@ import {
   type ChapterStart,
   chapterAt,
   chapterFraction,
+  chapterTicks,
   formatDuration,
   nextPace,
   unitsLeft,
 } from "./reading-time";
 
 export const READER_VIEW_TYPE = "ereader-reader";
+
+/** What the reading-settings panel calls each group of the engine's options. */
+const OPTION_GROUP_LABELS: Record<DisplayOption["section"], string> = {
+  zoom: "Fit",
+  spread: "Pages",
+  layout: "Layout",
+  appearance: "",
+};
+
+/**
+ * The engines describe their options as a flat list of checked items in
+ * sections. In the panel, a section of several items is one choice among
+ * them, and an item on its own is a switch.
+ */
+function optionRows(options: readonly DisplayOption[]): PanelRow[] {
+  const rows: PanelRow[] = [];
+  const sections = [...new Set(options.map((option) => option.section))];
+  for (const section of sections) {
+    const group = options.filter((option) => option.section === section);
+    if (group.length === 1 || section === "appearance") {
+      for (const option of group) {
+        rows.push({ kind: "toggle", label: option.label, value: option.checked, onChange: () => option.apply() });
+      }
+      continue;
+    }
+    rows.push({
+      kind: "choice",
+      label: OPTION_GROUP_LABELS[section],
+      options: group.map((option) => ({ value: option.id, label: option.label })),
+      // A PDF stepped off every fit by the zoom control has none selected.
+      value: group.find((option) => option.checked)?.id ?? "",
+      onChange: (id) => group.find((option) => option.id === id)?.apply(),
+    });
+  }
+  return rows;
+}
 
 export interface ReaderViewState {
   /** The book note's path. FileView reads this and calls `loadFile` itself. */
@@ -108,7 +145,6 @@ export class ReaderView extends FileView {
   private contentRoot: HTMLElement | null = null;
   private toolbar: ReaderToolbar | null = null;
   private lastWritten: ReadingPosition | null = null;
-  private jumpOffer: { el: HTMLElement; target: Locator } | null = null;
   private lastFlushAt = 0;
   private loadToken = 0;
   /** The open book's table of contents. Built once per book — for an EPUB it
@@ -134,15 +170,29 @@ export class ReaderView extends FileView {
   private appearance: AppearancePanel | null = null;
   /** The search result being looked at, painted over the page alongside the highlights. */
   private searchMark: PaintedHighlight | null = null;
-  private footer: { el: HTMLElement; chapterEl: HTMLElement; chapterLeftEl: HTMLElement; bookEl: HTMLElement; barEl: HTMLElement } | null = null;
+  private footer: {
+    el: HTMLElement;
+    chapterEl: HTMLElement;
+    chapterLeftEl: HTMLElement;
+    bookEl: HTMLElement;
+    barEl: HTMLElement;
+    ticksEl: HTMLElement;
+    /** The chapter list the ticks were last drawn for. */
+    ticksFor: ChapterStart[] | null;
+  } | null = null;
   /** Which engine is open, for the pace the time-left estimates use. */
   private format: "epub" | "pdf" | null = null;
   /** The contents placed on the page/location scale, rebuilt when that scale changes. */
   private chapterStarts: { total: number; starts: ChapterStart[] } | null = null;
   /** Where the reader last stood, and when, for learning their pace from page turns. */
   private paceAnchor: { unit: number; at: number } | null = null;
-  /** The way back from a jump: a contents entry, a link, a search result. */
-  private backChip: { el: HTMLElement; target: Locator } | null = null;
+  /**
+   * The one floating chip over the page: on opening, the offer to jump on to
+   * the furthest place read; after a jump, the way back to where the reader
+   * was. Both are the same kind of thing — a place to go — so they share a
+   * look and a slot, and a jump replaces the offer with the way back.
+   */
+  private chip: { el: HTMLElement; kind: "resume" | "back"; target: Locator } | null = null;
   /** A jump's starting point, until the jump is seen to have landed somewhere else. */
   private pendingBack: { target: Locator; at: number } | null = null;
   private readonly savePace = debounce(() => this.saveSettings(), PACE_SAVE_DELAY_MS, true);
@@ -187,10 +237,7 @@ export class ReaderView extends FileView {
     // `loadBook` empties and rebuilds; rebuilding it per book would drop the
     // listeners with it.
     this.toolbar = new ReaderToolbar(this.contentRoot, this, {
-      zoomIn: () => void this.zoom(1),
-      zoomOut: () => void this.zoom(-1),
-      goToPage: (page) => void this.goToPage(page),
-      displayOptions: () => this.displayOptions(),
+      goToPage: (value) => void this.goToPage(value),
       toggleBookmark: () => void this.toggleBookmark(),
       turnPage: (direction) => void this.turnPage(direction),
       openContents: () => this.openContents(),
@@ -328,7 +375,7 @@ export class ReaderView extends FileView {
   }
 
   private clearViewport(): void {
-    this.closeJumpOffer();
+    this.closeChip();
     this.viewportEl()?.remove();
     this.contentRoot?.querySelector(".ereader-reader__empty")?.remove();
   }
@@ -489,13 +536,11 @@ export class ReaderView extends FileView {
       scale: preferences.pdfScale,
       fit: preferences.pdfFit,
       spread: preferences.pdfSpread,
-      adaptToTheme: preferences.pdfAdaptToTheme,
       onPreferencesChanged: (next) => {
         const reader = this.getSettings().reader;
         reader.pdfScale = next.scale;
         reader.pdfFit = next.fit;
         reader.pdfSpread = next.spread;
-        reader.pdfAdaptToTheme = next.adaptToTheme;
         this.saveSettings();
       },
     });
@@ -584,7 +629,7 @@ export class ReaderView extends FileView {
     return this.engine?.getSelection() ?? null;
   }
 
-  // ------------------------------------------------------------- toolbar
+  // ------------------------------------------------------------- options
 
   /**
    * The engine's own options plus the reader-level ones. Whether saved
@@ -629,7 +674,6 @@ export class ReaderView extends FileView {
     this.toolbar.update(
       toolbarState({
         pages: engine.pageState(),
-        scale: engine.scale(),
         bookmarked: this.currentBookmark() !== null,
         progress: engine.progress(),
       }),
@@ -646,10 +690,14 @@ export class ReaderView extends FileView {
     this.updateToolbar();
   }
 
-  private async goToPage(page: number): Promise<void> {
+  /** A value typed into the toolbar's box: a page, or a percentage through a reflowable book. */
+  private async goToPage(value: number): Promise<void> {
+    const engine = this.engine;
+    const pages = engine?.pageState();
+    if (!engine || !pages) return;
     this.recordJump();
     this.paceAnchor = null;
-    await this.engine?.goToPage(page);
+    await engine.goToPage(targetFromInput(value, pages));
     this.settleBack();
     this.pendingBack = null;
     this.announcePosition();
@@ -992,6 +1040,8 @@ export class ReaderView extends FileView {
         onStep: (direction) => this.zoom(direction),
       });
     }
+    const options = this.displayOptions();
+    rows.push(...optionRows(options.filter((option) => option.section !== "appearance")));
     if (this.format === "epub") {
       rows.push(
         {
@@ -1029,12 +1079,7 @@ export class ReaderView extends FileView {
         },
       );
     }
-    // A phone's toolbar has no room for the display menu, so its items are here.
-    if (Platform.isPhone) {
-      for (const option of this.displayOptions()) {
-        rows.push({ kind: "action", label: option.label, icon: option.icon, checked: option.checked, onClick: () => option.apply() });
-      }
-    }
+    rows.push(...optionRows(options.filter((option) => option.section === "appearance")));
     return rows;
   }
 
@@ -1042,13 +1087,16 @@ export class ReaderView extends FileView {
 
   private buildFooter(root: HTMLElement): NonNullable<ReaderView["footer"]> {
     const el = root.createDiv({ cls: "ereader-footer" });
-    const barEl = el.createDiv({ cls: "ereader-footer__track", attr: { "aria-hidden": "true" } }).createDiv({ cls: "ereader-footer__bar" });
+    // How far through the book, with a tick where each chapter starts.
+    const trackEl = el.createDiv({ cls: "ereader-footer__track", attr: { "aria-hidden": "true" } });
+    const barEl = trackEl.createDiv({ cls: "ereader-footer__bar" });
+    const ticksEl = trackEl.createDiv({ cls: "ereader-footer__ticks" });
     const chapterEl = el.createSpan({ cls: "ereader-footer__chapter" });
     const rightEl = el.createDiv({ cls: "ereader-footer__right" });
     const chapterLeftEl = rightEl.createSpan({ cls: "ereader-footer__chapter-left" });
     const bookEl = rightEl.createSpan({ cls: "ereader-footer__book" });
     el.hide();
-    return { el, chapterEl, chapterLeftEl, bookEl, barEl };
+    return { el, chapterEl, chapterLeftEl, bookEl, barEl, ticksEl, ticksFor: null };
   }
 
   /**
@@ -1067,19 +1115,27 @@ export class ReaderView extends FileView {
     }
     footer.el.show();
     const pace = this.pace();
-    const chapter = chapterAt(this.chapterStartsFor(engine, pages.total), pages.current, pages.total);
+    const starts = this.chapterStartsFor(engine, pages.total);
+    const chapter = chapterAt(starts, pages.current, pages.total);
     const bookLeft = formatDuration(unitsLeft(pages.current, pages.total + 1) * pace);
-    const percent = progressLabel(pages, engine.progress());
+    const progress = engine.progress();
+    const percent = progressLabel(pages, progress);
     footer.chapterEl.setText(chapter?.label ?? "");
     footer.bookEl.setText(percent);
+    footer.barEl.setCssStyles({ width: `${Math.min(100, Math.max(0, progress))}%` });
+    if (footer.ticksFor !== starts) {
+      footer.ticksFor = starts;
+      footer.ticksEl.empty();
+      for (const at of chapterTicks(starts, pages.total)) {
+        footer.ticksEl.createDiv({ cls: "ereader-footer__tick" }).setCssStyles({ left: `${at * 100}%` });
+      }
+    }
     if (chapter) {
       const fraction = chapterFraction(chapter, pages.current);
       footer.chapterLeftEl.setText(`${formatDuration(unitsLeft(pages.current, chapter.end) * pace)} left in chapter`);
-      footer.barEl.setCssStyles({ width: `${fraction * 100}%` });
       setTooltip(footer.el, `${Math.round(fraction * 100)}% through this chapter · about ${bookLeft} left in the book`, { placement: "top" });
     } else {
       footer.chapterLeftEl.setText(`${bookLeft} left in book`);
-      footer.barEl.setCssStyles({ width: "0" });
       setTooltip(footer.el, `${percent} through the book`, { placement: "top" });
     }
   }
@@ -1091,6 +1147,7 @@ export class ReaderView extends FileView {
     const starts = rowsFromOutline(this.cachedOutline).map((row) => ({
       label: row.label,
       unit: row.target.kind === "book" ? engine.pageNumberFor(row.target.locator) : null,
+      depth: row.depth,
     }));
     this.chapterStarts = { total, starts };
     return starts;
@@ -1128,7 +1185,7 @@ export class ReaderView extends FileView {
    */
   private recordJump(): void {
     this.paceAnchor = null;
-    if (this.backChip) return;
+    if (this.chip?.kind === "back") return;
     const from = this.engine?.currentLocator();
     if (from) this.pendingBack = { target: from, at: Date.now() };
   }
@@ -1137,9 +1194,10 @@ export class ReaderView extends FileView {
   private settleBack(): void {
     const pending = this.pendingBack;
     const engine = this.engine;
-    if (this.backChip && engine) {
+    const chip = this.chip;
+    if (chip?.kind === "back" && engine) {
       const here = engine.pageState()?.current;
-      if (here !== undefined && engine.pageNumberFor(this.backChip.target) === here) this.closeBackChip();
+      if (here !== undefined && engine.pageNumberFor(chip.target) === here) this.closeChip();
     }
     if (!pending || !engine) return;
     // A link that went nowhere leaves its record behind; it must not turn the
@@ -1156,21 +1214,29 @@ export class ReaderView extends FileView {
   }
 
   private showBackChip(target: Locator): void {
+    if (this.chip?.kind === "back") return;
+    this.showChip("back", target, "undo-2", this.backLabel(target));
+  }
+
+  /** Puts a place to go in the chip slot, replacing whatever was there. */
+  private showChip(kind: "resume" | "back", target: Locator, icon: string, label: string): void {
     const root = this.contentRoot;
-    if (!root || this.backChip) return;
+    if (!root) return;
+    this.closeChip();
     this.measureChrome();
-    const chip = root.createDiv({ cls: "ereader-back" });
-    const go = chip.createEl("button", { cls: "ereader-back__go" });
-    setIcon(go.createSpan({ cls: "ereader-back__icon" }), "undo-2");
-    go.createSpan({ cls: "ereader-back__label", text: this.backLabel(target) });
+    const chip = root.createDiv({ cls: "ereader-chip" });
+    const go = chip.createEl("button", { cls: "ereader-chip__go" });
+    setIcon(go.createSpan({ cls: "ereader-chip__icon" }), icon);
+    go.createSpan({ cls: "ereader-chip__label", text: label });
     go.addEventListener("click", () => {
-      this.closeBackChip();
-      void this.goToLocator(target, false);
+      this.closeChip();
+      // Taking the resume offer is a jump like any other, with a way back.
+      void this.goToLocator(target, kind === "resume");
     });
-    const dismiss = chip.createEl("button", { cls: "clickable-icon ereader-back__dismiss", attr: { "aria-label": "Dismiss" } });
+    const dismiss = chip.createEl("button", { cls: "clickable-icon ereader-chip__dismiss", attr: { "aria-label": "Dismiss" } });
     setIcon(dismiss, "x");
-    dismiss.addEventListener("click", () => this.closeBackChip());
-    this.backChip = { el: chip, target };
+    dismiss.addEventListener("click", () => this.closeChip());
+    this.chip = { el: chip, kind, target };
   }
 
   private backLabel(target: Locator): string {
@@ -1179,9 +1245,9 @@ export class ReaderView extends FileView {
     return title ? `Back to ${title}` : "Back";
   }
 
-  private closeBackChip(): void {
-    this.backChip?.el.remove();
-    this.backChip = null;
+  private closeChip(): void {
+    this.chip?.el.remove();
+    this.chip = null;
   }
 
   /**
@@ -1207,7 +1273,7 @@ export class ReaderView extends FileView {
     this.chapterStarts = null;
     this.paceAnchor = null;
     this.pendingBack = null;
-    this.closeBackChip();
+    this.closeChip();
     this.footer?.el.hide();
     this.savePace.run();
   }
@@ -1222,7 +1288,6 @@ export class ReaderView extends FileView {
     const root = this.contentRoot;
     if (!root) return;
     root.toggleClass("is-immersive", !root.hasClass("is-immersive"));
-    this.closeJumpOffer();
     this.measureChrome();
   }
 
@@ -1488,39 +1553,20 @@ export class ReaderView extends FileView {
    * offer, or reading on past that point, writes nothing.
    */
   private offerJump(target: Locator): void {
-    const root = this.contentRoot;
-    if (!root || !this.engine) return;
-    this.closeJumpOffer();
-    const page = this.engine.pageNumberFor(target);
-    const bar = root.createDiv({ cls: "ereader-reader__resume" });
-    bar.createSpan({ text: page === null ? "You read further in this book." : `You read up to page ${page}.` });
-    const jump = bar.createEl("button", { cls: "mod-cta", text: "Jump there" });
-    jump.addEventListener("click", () => {
-      this.closeJumpOffer();
-      void this.goToLocator(target);
-    });
-    const dismiss = bar.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Dismiss" } });
-    setIcon(dismiss, "x");
-    dismiss.addEventListener("click", () => this.closeJumpOffer());
-    // Just under the toolbar, whose height depends on the theme and whether
-    // its buttons wrap.
-    const toolbarEl = root.querySelector<HTMLElement>(".ereader-toolbar");
-    if (toolbarEl) bar.style.top = `${toolbarEl.offsetHeight + 8}px`;
-    this.jumpOffer = { el: bar, target };
-  }
-
-  private closeJumpOffer(): void {
-    this.jumpOffer?.el.remove();
-    this.jumpOffer = null;
+    if (!this.engine) return;
+    const title = target.kind === "pdf" ? null : this.chapterTitleAt(target);
+    const label =
+      target.kind === "pdf" ? `Jump to page ${target.page}, the furthest you read` : title ? `Jump to ${title}, the furthest you read` : "Jump to the furthest you read";
+    this.showChip("resume", target, "fast-forward", label);
   }
 
   /** Reading on to the offered place makes the offer moot. */
   private dropJumpOfferIfReached(): void {
-    const offer = this.jumpOffer;
+    const offer = this.chip;
     const current = this.engine?.currentLocator();
-    if (!offer || !current) return;
+    if (offer?.kind !== "resume" || !current) return;
     const order = compareLocators(current, offer.target);
-    if (order !== null && order >= 0) this.closeJumpOffer();
+    if (order !== null && order >= 0) this.closeChip();
   }
 
   private currentPosition(): ReadingPosition | null {

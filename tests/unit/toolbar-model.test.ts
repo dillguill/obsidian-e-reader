@@ -1,14 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { MAX_SCALE, MIN_SCALE } from "../../src/reader/zoom";
-import { clampPageInput, pageLabel, pageValue, progressLabel, toolbarState } from "../../src/reader/toolbar-model";
+import {
+  clampPageInput,
+  pageLabel,
+  pageValue,
+  progressLabel,
+  targetFromInput,
+  toolbarState,
+} from "../../src/reader/toolbar-model";
+
+const pdfPages = { current: 12, total: 340, unit: "page" as const };
+const epubLocations = { current: 148, total: 2310, unit: "location" as const };
 
 describe("pageLabel", () => {
   it("reads `of N` for a fixed-page book", () => {
-    expect(pageLabel({ current: 12, total: 340, unit: "page" })).toBe("of 340");
+    expect(pageLabel(pdfPages)).toBe("of 340");
   });
 
-  it("reads the same for a reflowable book's location index", () => {
-    expect(pageLabel({ current: 148, total: 2310, unit: "location" })).toBe("of 2310");
+  // Locations are epub.js's own index and mean nothing to a reader.
+  it("reads `%` for a reflowable book", () => {
+    expect(pageLabel(epubLocations)).toBe("%");
   });
 
   it("is empty when the engine cannot say where it is yet", () => {
@@ -17,12 +27,16 @@ describe("pageLabel", () => {
 });
 
 describe("pageValue", () => {
-  it("is the current number as a string", () => {
-    expect(pageValue({ current: 12, total: 340, unit: "page" })).toBe("12");
+  it("is the current page for a fixed-page book", () => {
+    expect(pageValue(pdfPages, 3)).toBe("12");
+  });
+
+  it("is the rounded percentage for a reflowable book", () => {
+    expect(pageValue(epubLocations, 6.4)).toBe("6");
   });
 
   it("is empty with no page state, so the box shows nothing rather than 0", () => {
-    expect(pageValue(null)).toBe("");
+    expect(pageValue(null, 0)).toBe("");
   });
 });
 
@@ -35,10 +49,11 @@ describe("clampPageInput", () => {
     expect(clampPageInput("  12 ", 340)).toBe(12);
   });
 
-  it("clamps below 1 and above the total rather than refusing", () => {
+  it("clamps below the minimum and above the maximum rather than refusing", () => {
     expect(clampPageInput("0", 340)).toBe(1);
     expect(clampPageInput("-5", 340)).toBe(1);
     expect(clampPageInput("9999", 340)).toBe(340);
+    expect(clampPageInput("0", 100, 0)).toBe(0);
   });
 
   it("rounds a fractional entry", () => {
@@ -56,26 +71,20 @@ describe("clampPageInput", () => {
   });
 });
 
+describe("targetFromInput", () => {
+  it("passes a page number through", () => {
+    expect(targetFromInput(40, pdfPages)).toBe(40);
+  });
+
+  it("turns a percentage into a location", () => {
+    expect(targetFromInput(0, epubLocations)).toBe(1);
+    expect(targetFromInput(100, epubLocations)).toBe(2310);
+    expect(targetFromInput(50, epubLocations)).toBe(1156);
+  });
+});
+
 describe("toolbarState", () => {
-  const base = {
-    pages: { current: 12, total: 340, unit: "page" as const },
-    scale: 1,
-    bookmarked: false,
-    progress: 4,
-  };
-
-  it("enables both zoom buttons in the middle of the range", () => {
-    const state = toolbarState(base);
-    expect(state.canZoomIn).toBe(true);
-    expect(state.canZoomOut).toBe(true);
-  });
-
-  it("disables zoom out at the minimum and zoom in at the maximum", () => {
-    expect(toolbarState({ ...base, scale: MIN_SCALE }).canZoomOut).toBe(false);
-    expect(toolbarState({ ...base, scale: MIN_SCALE }).canZoomIn).toBe(true);
-    expect(toolbarState({ ...base, scale: MAX_SCALE }).canZoomIn).toBe(false);
-    expect(toolbarState({ ...base, scale: MAX_SCALE }).canZoomOut).toBe(true);
-  });
+  const base = { pages: pdfPages, bookmarked: false, progress: 4 };
 
   it("disables the page box until the engine reports a page state", () => {
     expect(toolbarState(base).pageEnabled).toBe(true);
@@ -86,14 +95,15 @@ describe("toolbarState", () => {
     const state = toolbarState(base);
     expect(state.pageValue).toBe("12");
     expect(state.pageLabel).toBe("of 340");
+    expect(state.pageName).toBe("Page");
   });
 
   // The page box is a number input whose `max` bounds a typed entry, and
-  // clampPageInput reads that same total back off it. Without a total the box
-  // would reject every entry it was given.
-  it("reports the total so the page box can bound what is typed into it", () => {
-    expect(toolbarState(base).pageTotal).toBe(340);
-    expect(toolbarState({ ...base, pages: null }).pageTotal).toBe(0);
+  // clampPageInput reads that same bound back off it.
+  it("bounds a page box by the page count and a percentage box by 0–100", () => {
+    expect(toolbarState(base)).toMatchObject({ pageMax: 340, pageMin: 1 });
+    expect(toolbarState({ ...base, pages: epubLocations })).toMatchObject({ pageMax: 100, pageMin: 0, pageName: "Percent" });
+    expect(toolbarState({ ...base, pages: null }).pageMax).toBe(0);
   });
 
   it("passes the bookmark toggle through", () => {
@@ -104,21 +114,14 @@ describe("toolbarState", () => {
   it("disables the page buttons only at the ends of a known range", () => {
     expect(toolbarState(base).canGoBack).toBe(true);
     expect(toolbarState(base).canGoForward).toBe(true);
-    const first = toolbarState({ ...base, pages: { current: 1, total: 340, unit: "page" } });
-    expect(first.canGoBack).toBe(false);
-    const last = toolbarState({ ...base, pages: { current: 340, total: 340, unit: "page" } });
-    expect(last.canGoForward).toBe(false);
+    expect(toolbarState({ ...base, pages: { current: 1, total: 340, unit: "page" } }).canGoBack).toBe(false);
+    expect(toolbarState({ ...base, pages: { current: 340, total: 340, unit: "page" } }).canGoForward).toBe(false);
   });
 
   it("keeps the page buttons usable while the engine cannot say where it is", () => {
     const state = toolbarState({ ...base, pages: null });
     expect(state.canGoBack).toBe(true);
     expect(state.canGoForward).toBe(true);
-  });
-
-  it("reports progress as a fraction for the bar", () => {
-    expect(toolbarState({ ...base, progress: 42 }).progressFraction).toBeCloseTo(0.42);
-    expect(toolbarState({ ...base, pages: null }).progressFraction).toBe(0);
   });
 });
 

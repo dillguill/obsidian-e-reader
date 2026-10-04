@@ -8,7 +8,6 @@
 // settings, and rebuilds them after every change.
 
 import type { Component } from "obsidian";
-import { setIcon } from "obsidian";
 
 export interface ChoiceOption<T extends string> {
   value: T;
@@ -33,8 +32,7 @@ export type PanelRow =
       canDecrease: boolean;
       canIncrease: boolean;
       onStep(direction: 1 | -1): void | Promise<void>;
-    }
-  | { kind: "action"; label: string; icon: string; checked: boolean; onClick(): void | Promise<void> };
+    };
 
 export class AppearancePanel {
   private readonly el: HTMLElement;
@@ -86,7 +84,7 @@ export class AppearancePanel {
     this.el.empty();
     for (const row of rows) {
       const rowEl = this.el.createDiv({ cls: `ereader-panel__row is-${row.kind}` });
-      if (row.kind !== "action") rowEl.createDiv({ cls: "ereader-panel__label", text: row.label });
+      rowEl.createDiv({ cls: "ereader-panel__label", text: row.label });
       switch (row.kind) {
         case "choice": {
           const group = rowEl.createDiv({ cls: "ereader-panel__choices", attr: { role: "radiogroup", "aria-label": row.label } });
@@ -125,15 +123,6 @@ export class AppearancePanel {
           const more = group.createEl("button", { cls: "ereader-panel__step is-large", text: "A+", attr: { "aria-label": `Larger ${row.label.toLowerCase()}` } });
           more.disabled = !row.canIncrease;
           more.addEventListener("click", () => this.change(() => row.onStep(1)));
-          break;
-        }
-        case "action": {
-          const button = rowEl.createEl("button", { cls: "ereader-panel__action" });
-          setIcon(button.createSpan({ cls: "ereader-panel__action-icon" }), row.icon);
-          button.createSpan({ text: row.label });
-          const check = button.createSpan({ cls: "ereader-panel__action-check" });
-          if (row.checked) setIcon(check, "check");
-          button.addEventListener("click", () => this.change(() => row.onClick()));
           break;
         }
       }

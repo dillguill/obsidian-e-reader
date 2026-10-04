@@ -580,8 +580,8 @@ export class EpubEngine implements ReaderEngine {
         this.changeHandler?.();
       },
     });
-    // "by chapter" is not decoration: one section renders at a time, so the
-    // reader should not expect one continuous scroll through the whole book.
+    // Scrolled flow holds one chapter at a time (scrolled-doc), continuing
+    // into the next as the reader scrolls past its end.
     // Spreads only exist in paginated flow; scrolled always shows one column.
     const spreadOption: DisplayOption[] =
       this.flowMode === "paginated"
@@ -602,7 +602,7 @@ export class EpubEngine implements ReaderEngine {
           ]
         : [];
     return [
-      flowOption("scrolled", "Scrolled (by chapter)", "move-vertical"),
+      flowOption("scrolled", "Scrolled", "move-vertical"),
       flowOption("paginated", "Paginated", "book-open"),
       ...spreadOption,
     ];

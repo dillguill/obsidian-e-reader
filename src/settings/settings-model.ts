@@ -135,7 +135,6 @@ export interface ReaderPreferences {
   pdfScale: number;
   pdfFit: PdfFit;
   pdfSpread: SpreadMode;
-  pdfAdaptToTheme: boolean;
   /** Text size for reflowable books, as a multiplier of the book's own size. */
   epubTextScale: number;
   epubFlow: EpubFlow;
@@ -282,7 +281,6 @@ export const DEFAULT_SETTINGS: Settings = {
     pdfScale: 1,
     pdfFit: "width",
     pdfSpread: "single",
-    pdfAdaptToTheme: false,
     epubTextScale: 1,
     epubFlow: "scrolled",
     epubLineSpacing: "normal",
@@ -478,7 +476,6 @@ function mergeReaderPreferences(saved: Record<string, unknown>, types: Annotatio
     pdfScale: mergeScale(from["pdfScale"], defaults.pdfScale),
     pdfFit: isPdfFit(from["pdfFit"]) ? from["pdfFit"] : defaults.pdfFit,
     pdfSpread: isSpreadMode(from["pdfSpread"]) ? from["pdfSpread"] : defaults.pdfSpread,
-    pdfAdaptToTheme: mergeBoolean(from["pdfAdaptToTheme"], defaults.pdfAdaptToTheme),
     epubTextScale: mergeScale(from["epubTextScale"], defaults.epubTextScale),
     epubFlow: from["epubFlow"] === "paginated" || from["epubFlow"] === "scrolled" ? from["epubFlow"] : defaults.epubFlow,
     epubLineSpacing: isLineSpacing(from["epubLineSpacing"]) ? from["epubLineSpacing"] : defaults.epubLineSpacing,

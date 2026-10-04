@@ -47,10 +47,11 @@ settings. Read later puts a bookmark on the cover; filter a Bases view on the
 status for a reading queue. Reading progress is tracked separately.
 
 **Reader.** EPUB and PDF, both remembering where you were, with a toolbar
-shaped like Obsidian's own PDF viewer: zoom or text size, a display menu,
-previous and next page buttons around a page box you can type into, search,
-reading settings, and a button that opens the contents. PDFs offer
-fit-to-width, fit-to-height, two-page spreads and a dark-theme mode; EPUBs
+that is the same on desktop and phone: previous and next page buttons around a
+page box you can type into (a page number for PDFs, a percentage for EPUBs),
+then search, reading settings and a button that opens the contents. PDFs offer
+fit-to-width, fit-to-height and two-page spreads, and are inverted to match a
+dark vault; EPUBs
 offer scrolled or paginated reading (two pages side by side on a wide pane, or
 always one), tap the edge of a page to turn it, and render in your vault's own
 theme rather than whatever the book shipped with. The reader reports the book
@@ -58,7 +59,8 @@ note as its file, so Obsidian's own Properties pane and everything else that
 follows the active file work on it unchanged.
 
 **Reading settings** (the **Aa** button) choose a theme for the page — match
-Obsidian, Light, Sepia or Dark — and, for EPUBs, the font (the book's own, your
+Obsidian, Light, Sepia or Dark — the zoom or text size, the layout (PDF fit
+and spreads, EPUB flow and two-page spreads) and, for EPUBs, the font (the book's own, your
 Obsidian font, a serif or a sans), text size, line spacing, margins,
 justification and hyphenation.
 
@@ -69,11 +71,12 @@ Jumping anywhere — a search result, a contents entry, a link, a typed page —
 leaves a **Back to …** button that returns you to where you were reading.
 
 Under the page, a footer shows the chapter, the time left in it, and how far
-through the book you are. The time is learned from how fast you actually turn
-pages. Turn it off from the display menu.
+through the book you are, with a progress bar marked where each chapter
+starts. The time is learned from how fast you actually turn pages. Turn it off
+in reading settings. Opening a book you had read further in elsewhere offers
+to jump to the furthest page you reached.
 
-On a phone the toolbar keeps the page buttons and moves zoom and the display
-menu into reading settings (pinch still zooms). On any touchscreen a tap in the
+Pinch zooms on a touchscreen. On any touchscreen a tap in the
 middle of the page hides the toolbar for distraction-free reading and brings
 it back.
 

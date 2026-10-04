@@ -31,6 +31,9 @@ export interface ToolbarCallbacks {
   /** Read fresh each time the menu opens, so the ticks reflect the current state. */
   displayOptions(): DisplayOption[];
   toggleBookmark(): void;
+  turnPage(direction: 1 | -1): void;
+  /** Opens the book's contents in the outline pane. */
+  openContents(): void;
 }
 
 /**
@@ -39,7 +42,7 @@ export interface ToolbarCallbacks {
  * which would declare the order up front, is not in the public API — so the
  * options are sorted into this order before being added.
  */
-const SECTIONS: DisplayOption["section"][] = ["zoom", "spread", "layout", "appearance"];
+const SECTIONS: DisplayOption["section"][] = ["zoom", "spread", "layout", "spacing", "margins", "appearance"];
 
 export class ReaderToolbar {
   private readonly rootEl: HTMLElement;
@@ -48,6 +51,11 @@ export class ReaderToolbar {
   private readonly pageInputEl: HTMLInputElement;
   private readonly pageCountEl: HTMLElement;
   private readonly bookmarkEl: HTMLElement;
+  private readonly prevEl: HTMLElement;
+  private readonly nextEl: HTMLElement;
+  private readonly progressEl: HTMLElement;
+  private readonly progressBarEl: HTMLElement;
+  private readonly contentsEl: HTMLElement;
   /** The last value the box was given, restored when a typed entry is not a number. */
   private lastPageValue = "";
 
@@ -55,19 +63,26 @@ export class ReaderToolbar {
     this.rootEl = parentEl.createDiv({ cls: "ereader-toolbar" });
     const leftEl = this.rootEl.createDiv({ cls: "ereader-toolbar__group" });
 
-    this.zoomOutEl = this.addButton(leftEl, component, "zoom-out", "Zoom out", () => callbacks.zoomOut());
-    leftEl.createDiv({ cls: "ereader-toolbar__divider" });
-    this.zoomInEl = this.addButton(leftEl, component, "zoom-in", "Zoom in", () => callbacks.zoomIn());
+    // On a phone the zoom pair is hidden by styles.css — pinching does the
+    // same, and the display menu carries both — to leave room for the page
+    // buttons, which a touchscreen has no other way to reach.
+    const zoomEl = leftEl.createDiv({ cls: "ereader-toolbar__group ereader-toolbar__zoom" });
+    this.zoomOutEl = this.addButton(zoomEl, component, "zoom-out", "Zoom out", () => callbacks.zoomOut());
+    zoomEl.createDiv({ cls: "ereader-toolbar__divider" });
+    this.zoomInEl = this.addButton(zoomEl, component, "zoom-in", "Zoom in", () => callbacks.zoomIn());
     this.addButton(leftEl, component, "chevron-down", "Display options", (event) => {
       this.showDisplayOptions(event, callbacks.displayOptions());
     });
 
-    leftEl.createDiv({ cls: "ereader-toolbar__spacer" });
-    this.pageInputEl = leftEl.createEl("input", {
+    const pageEl = this.rootEl.createDiv({ cls: "ereader-toolbar__group ereader-toolbar__pages" });
+    this.prevEl = this.addButton(pageEl, component, "chevron-left", "Previous page", () => callbacks.turnPage(-1));
+    this.pageInputEl = pageEl.createEl("input", {
       cls: "ereader-toolbar__page",
-      attr: { type: "number", min: "1", "aria-label": "Page" },
+      attr: { type: "number", min: "1", inputmode: "numeric", "aria-label": "Page" },
     });
-    this.pageCountEl = leftEl.createSpan({ cls: "ereader-toolbar__count" });
+    this.pageCountEl = pageEl.createSpan({ cls: "ereader-toolbar__count" });
+    this.nextEl = this.addButton(pageEl, component, "chevron-right", "Next page", () => callbacks.turnPage(1));
+    this.progressEl = pageEl.createSpan({ cls: "ereader-toolbar__progress" });
 
     component.registerDomEvent(this.pageInputEl, "click", () => this.pageInputEl.select());
     component.registerDomEvent(this.pageInputEl, "change", () => {
@@ -83,7 +98,12 @@ export class ReaderToolbar {
     // Highlighting has no button here: selecting text opens the selection
     // popup (selection-popup.ts), which is where the types live.
     const rightEl = this.rootEl.createDiv({ cls: "ereader-toolbar__group" });
+    this.contentsEl = this.addButton(rightEl, component, "list", "Contents", () => callbacks.openContents());
     this.bookmarkEl = this.addButton(rightEl, component, "bookmark", "Bookmark this page", () => callbacks.toggleBookmark());
+
+    // How far through the book, along the toolbar's bottom edge.
+    const trackEl = this.rootEl.createDiv({ cls: "ereader-toolbar__track", attr: { "aria-hidden": "true" } });
+    this.progressBarEl = trackEl.createDiv({ cls: "ereader-toolbar__bar" });
   }
 
   private addButton(
@@ -134,9 +154,18 @@ export class ReaderToolbar {
     this.lastPageValue = state.pageValue;
     this.pageCountEl.setText(state.pageLabel);
 
+    this.prevEl.toggleClass("is-disabled", !state.canGoBack);
+    this.nextEl.toggleClass("is-disabled", !state.canGoForward);
+    this.progressEl.setText(state.progressLabel);
+    this.progressBarEl.setCssStyles({ width: `${state.progressFraction * 100}%` });
 
     this.bookmarkEl.toggleClass("is-active", state.bookmarked);
     setTooltip(this.bookmarkEl, state.bookmarked ? "Remove this bookmark" : "Bookmark this page");
+  }
+
+  /** The contents button follows the outline pane's own toggle in settings. */
+  setContentsAvailable(available: boolean): void {
+    this.contentsEl.toggle(available);
   }
 
   /** Hidden whenever there is no book to act on — a failed open, or no file. */

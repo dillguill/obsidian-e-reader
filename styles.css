@@ -241,6 +241,7 @@
    behind them, so the handful of layout rules is restated rather than
    borrowed. The generic chrome (`clickable-icon`) still is Obsidian's. */
 .ereader-toolbar {
+  position: relative;
   flex: 0 0 auto;
   background: var(--background-primary);
   border-bottom: var(--border-width) solid var(--background-modifier-border);
@@ -264,8 +265,69 @@
   background-color: var(--background-modifier-border);
 }
 
-.ereader-toolbar__spacer {
-  width: var(--size-4-3);
+.ereader-toolbar__progress {
+  min-width: 4ch;
+  white-space: nowrap;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* How far through the book, as a hairline along the toolbar's bottom edge. */
+.ereader-toolbar__track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  pointer-events: none;
+}
+
+.ereader-toolbar__bar {
+  height: 100%;
+  width: 0;
+  background: var(--interactive-accent);
+  opacity: 0.7;
+  transition: width 150ms ease;
+}
+
+/* Immersive reading: the page takes the whole pane. */
+.ereader-reader.is-immersive .ereader-toolbar {
+  display: none;
+}
+
+/* A fingertip needs a bigger target than a pointer, and the page box's text
+   has to be at least 16px or iOS zooms the whole app in when it is focused. */
+.is-mobile .ereader-toolbar {
+  padding: var(--size-4-1) var(--size-4-2);
+}
+
+.is-mobile .ereader-toolbar__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+}
+
+.is-mobile .ereader-toolbar__page {
+  font-size: 16px;
+}
+
+/* A phone has no room for the zoom pair (the display menu carries it, and
+   pinching does the same) or for the percentage (the bar shows it). */
+.is-phone .ereader-toolbar__zoom,
+.is-phone .ereader-toolbar__progress {
+  display: none;
+}
+
+.is-phone .ereader-toolbar,
+.is-phone .ereader-toolbar__group {
+  gap: 0;
+}
+
+.is-phone .ereader-toolbar__page {
+  width: 6ch;
 }
 
 .ereader-toolbar__page {
@@ -710,6 +772,14 @@
   flex: none;
 }
 
+.is-mobile .ereader-reader__resume {
+  padding: var(--size-4-2) var(--size-4-2) var(--size-4-2) var(--size-4-3);
+}
+
+.is-mobile .ereader-reader__resume button {
+  min-height: 40px;
+}
+
 /* Read later: a bookmark in the corner opposite the finished check. */
 .ereader-badge.is-read-later {
   right: auto;
@@ -767,6 +837,8 @@
 
 .ereader-reader__no-file-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: var(--size-4-2);
   margin-top: var(--size-4-2);
 }

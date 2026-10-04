@@ -47,17 +47,22 @@ settings. Read later puts a bookmark on the cover; filter a Bases view on the
 status for a reading queue. Reading progress is tracked separately.
 
 **Reader.** EPUB and PDF, both remembering where you were, with a toolbar
-shaped like Obsidian's own PDF viewer: zoom or text size, a display menu, and
-a page box you can type into. PDFs offer fit-to-width, fit-to-height, two-page
-spreads and a dark-theme mode; EPUBs offer scrolled or paginated reading, tap
-the edge of a page to turn it, and render in your vault's own theme rather
-than whatever the book shipped with. The reader reports the book note as its
+shaped like Obsidian's own PDF viewer: zoom or text size, a display menu,
+previous and next page buttons around a page box you can type into, how far
+through the book you are, and a button that opens the contents. PDFs offer
+fit-to-width, fit-to-height, two-page spreads and a dark-theme mode; EPUBs
+offer scrolled or paginated reading, line spacing and margins, tap the edge of
+a page to turn it, and render in your vault's own theme rather than whatever
+the book shipped with. On a phone the toolbar trades the zoom buttons for the
+page buttons (pinch, or the display menu, still zooms), and on any touchscreen
+a tap in the middle of the page hides the toolbar for distraction-free reading
+and brings it back. The reader reports the book note as its
 file, so Obsidian's own Properties pane and everything else that follows the
 active file work on it unchanged.
 
 The left and right arrow keys and Page Up/Page Down turn the page, and **Next
-page**, **Previous page**, **Zoom in** and **Zoom out** are commands you can
-bind to any hotkey.
+page**, **Previous page**, **Zoom in**, **Zoom out** and **Show or hide the
+reader toolbar** are commands you can bind to any hotkey.
 
 **Highlights and notes.** Select text and a small bar opens beside it: tap a
 colour to highlight as that type, or copy the text. Right-click works too, and

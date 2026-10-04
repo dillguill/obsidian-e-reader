@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MAX_SCALE, MIN_SCALE } from "../../src/reader/zoom";
-import { clampPageInput, pageLabel, pageValue, toolbarState } from "../../src/reader/toolbar-model";
+import { clampPageInput, pageLabel, pageValue, progressLabel, toolbarState } from "../../src/reader/toolbar-model";
 
 describe("pageLabel", () => {
   it("reads `of N` for a fixed-page book", () => {
@@ -61,6 +61,7 @@ describe("toolbarState", () => {
     pages: { current: 12, total: 340, unit: "page" as const },
     scale: 1,
     bookmarked: false,
+    progress: 4,
   };
 
   it("enables both zoom buttons in the middle of the range", () => {
@@ -98,5 +99,39 @@ describe("toolbarState", () => {
   it("passes the bookmark toggle through", () => {
     expect(toolbarState({ ...base, bookmarked: true }).bookmarked).toBe(true);
     expect(toolbarState(base).bookmarked).toBe(false);
+  });
+
+  it("disables the page buttons only at the ends of a known range", () => {
+    expect(toolbarState(base).canGoBack).toBe(true);
+    expect(toolbarState(base).canGoForward).toBe(true);
+    const first = toolbarState({ ...base, pages: { current: 1, total: 340, unit: "page" } });
+    expect(first.canGoBack).toBe(false);
+    const last = toolbarState({ ...base, pages: { current: 340, total: 340, unit: "page" } });
+    expect(last.canGoForward).toBe(false);
+  });
+
+  it("keeps the page buttons usable while the engine cannot say where it is", () => {
+    const state = toolbarState({ ...base, pages: null });
+    expect(state.canGoBack).toBe(true);
+    expect(state.canGoForward).toBe(true);
+  });
+
+  it("reports progress as a label and a fraction for the bar", () => {
+    const state = toolbarState({ ...base, progress: 42 });
+    expect(state.progressLabel).toBe("42%");
+    expect(state.progressFraction).toBeCloseTo(0.42);
+  });
+});
+
+describe("progressLabel", () => {
+  it("is empty until the engine can place the reader", () => {
+    expect(progressLabel(null, 0)).toBe("");
+  });
+
+  it("rounds and clamps", () => {
+    const pages = { current: 1, total: 10, unit: "page" as const };
+    expect(progressLabel(pages, 41.6)).toBe("42%");
+    expect(progressLabel(pages, 140)).toBe("100%");
+    expect(progressLabel(pages, Number.NaN)).toBe("");
   });
 });

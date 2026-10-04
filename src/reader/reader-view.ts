@@ -56,6 +56,14 @@ const POSITION_FLUSH_INTERVAL_MS = 2000;
  */
 const TOUCH_SELECTION_POLL_MS = 250;
 const BOOKMARK_TYPE = RESERVED_ENTRY_TYPE;
+/**
+ * A tap this soon after a selection was last seen is the reader dismissing
+ * that selection, not asking for the toolbar. The touch poll sees a live
+ * selection at least this often, so the margin is comfortable.
+ */
+const SELECTION_DISMISS_MS = 600;
+/** The middle share of the page whose tap shows or hides the toolbar on a touchscreen. */
+const CHROME_TAP_ZONE = 1 / 3;
 
 function isReaderViewState(state: unknown): state is ReaderViewState {
   return typeof state === "object" && state !== null;
@@ -86,6 +94,8 @@ export class ReaderView extends FileView {
   private lastEntrySignature: string | null = null;
   /** The bar of highlight swatches that opens over a selection. */
   private popup: SelectionPopup | null = null;
+  /** When a selection was last seen in the book, for telling a dismissing tap apart. */
+  private selectionSeenAt = 0;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -93,6 +103,7 @@ export class ReaderView extends FileView {
     private readonly saveSettings: () => void,
     private readonly events: ReaderEvents,
     private readonly attachFile: (note: TFile) => Promise<boolean>,
+    private readonly openContents: () => void,
   ) {
     super(leaf);
     this.navigation = true;
@@ -131,6 +142,8 @@ export class ReaderView extends FileView {
       goToPage: (page) => void this.goToPage(page),
       displayOptions: () => this.displayOptions(),
       toggleBookmark: () => void this.toggleBookmark(),
+      turnPage: (direction) => void this.turnPage(direction),
+      openContents: () => this.openContents(),
     });
     this.toolbar.setVisible(false);
 
@@ -292,6 +305,7 @@ export class ReaderView extends FileView {
     this.lastEntrySignature = null;
     this.closePopup(false);
     this.toolbar?.setVisible(false);
+    root.removeClass("is-immersive");
     this.clearViewport();
 
     // Opening an .epub straight from the file explorer gives us the book
@@ -411,10 +425,14 @@ export class ReaderView extends FileView {
     return createEpubEngine(this.app, {
       textScale: preferences.epubTextScale,
       flow: preferences.epubFlow,
+      lineSpacing: preferences.epubLineSpacing,
+      margins: preferences.epubMargins,
       onPreferencesChanged: (next) => {
         const reader = this.getSettings().reader;
         reader.epubTextScale = next.textScale;
         reader.epubFlow = next.flow;
+        reader.epubLineSpacing = next.lineSpacing;
+        reader.epubMargins = next.margins;
         this.saveSettings();
       },
     });
@@ -487,7 +505,16 @@ export class ReaderView extends FileView {
    */
   private displayOptions(): DisplayOption[] {
     const engineOptions = this.engine?.displayOptions() ?? [];
+    // A phone's toolbar has no room for the zoom pair (styles.css hides it),
+    // so the menu carries it instead.
+    const zoomOptions: DisplayOption[] = Platform.isPhone
+      ? [
+          { section: "zoom", id: "zoom-in", label: "Zoom in", icon: "zoom-in", checked: false, apply: () => this.zoom(1) },
+          { section: "zoom", id: "zoom-out", label: "Zoom out", icon: "zoom-out", checked: false, apply: () => this.zoom(-1) },
+        ]
+      : [];
     return [
+      ...zoomOptions,
       ...engineOptions,
       {
         section: "appearance",
@@ -512,8 +539,10 @@ export class ReaderView extends FileView {
         pages: engine.pageState(),
         scale: engine.scale(),
         bookmarked: this.currentBookmark() !== null,
+        progress: engine.progress(),
       }),
     );
+    this.toolbar.setContentsAvailable(this.getSettings().panes.outline);
   }
 
   /** Steps the zoom (PDF) or text size (EPUB). Used by the toolbar and the zoom commands. */
@@ -587,6 +616,7 @@ export class ReaderView extends FileView {
   private onSelectionChange(): void {
     if (this.popup?.isPressed()) return;
     const selection = this.engine?.getSelection() ?? null;
+    if (selection) this.selectionSeenAt = Date.now();
     const open = this.popup?.current() ?? null;
     if (!selection || (open && open.exact !== selection.exact)) this.popup?.hide();
   }
@@ -598,6 +628,7 @@ export class ReaderView extends FileView {
     if (!engine || !popup || popup.isPressed()) return;
     const selection = engine.getSelection();
     const open = popup.current();
+    if (selection) this.selectionSeenAt = Date.now();
     if (!selection) {
       if (open) popup.hide();
       return;
@@ -720,6 +751,36 @@ export class ReaderView extends FileView {
     await this.refreshEntries();
   }
 
+  // ---------------------------------------------------------- immersive
+
+  /**
+   * Hides the toolbar to give the page the whole pane, or brings it back.
+   * Not remembered: a book always opens with its controls showing.
+   */
+  toggleChrome(): void {
+    const root = this.contentRoot;
+    if (!root) return;
+    root.toggleClass("is-immersive", !root.hasClass("is-immersive"));
+    this.closeJumpOffer();
+  }
+
+  /**
+   * On a touchscreen, a tap in the middle of the page shows or hides the
+   * toolbar, the way dedicated reading apps do. The edges are left alone —
+   * a paginated book turns its pages there — and so is any tap that is
+   * really the reader putting a selection down.
+   */
+  private toggleChromeFromTap(position: { x: number; y: number }): void {
+    if (!Platform.isMobile || !this.contentRoot) return;
+    if (this.popup?.isPressed() || Date.now() - this.selectionSeenAt < SELECTION_DISMISS_MS) return;
+    const rect = this.contentRoot.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const fraction = (position.x - rect.left) / rect.width;
+    const edge = (1 - CHROME_TAP_ZONE) / 2;
+    if (fraction < edge || fraction > 1 - edge) return;
+    this.toggleChrome();
+  }
+
   // ----------------------------------------------------------- bookmarks
 
   /** The bookmark sitting on the page the reader is looking at, if any. */
@@ -789,7 +850,10 @@ export class ReaderView extends FileView {
     if (this.engine?.getSelection()) return;
     const entry = this.entryAt(position);
     const note = this.bookNote();
-    if (!entry || !note) return;
+    if (!entry || !note) {
+      if (!entry) this.toggleChromeFromTap(position);
+      return;
+    }
     const menu = new Menu();
     this.addEntryItems(menu, note, entry, this.getSettings().annotationTypes);
     menu.showAtPosition(position);

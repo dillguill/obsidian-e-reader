@@ -39,7 +39,7 @@ export interface PageState {
  * either concept exists.
  */
 export interface DisplayOption {
-  section: "zoom" | "spread" | "layout" | "appearance";
+  section: "zoom" | "spread" | "layout" | "spacing" | "margins" | "appearance";
   /** Stable identity, for tests and for keying the menu item. */
   id: string;
   label: string;

@@ -14,7 +14,17 @@
 import { type StatusSettings, normalizeStatus } from "../core/status";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
 import { type SpreadMode, isSpreadMode } from "../reader/spread";
-import { type LineSpacing, type Margins, isLineSpacing, isMargins } from "../reader/typography";
+import {
+  type BookFont,
+  type LineSpacing,
+  type Margins,
+  type ReadingTheme,
+  isBookFont,
+  isLineSpacing,
+  isMargins,
+  isReadingTheme,
+} from "../reader/typography";
+import { DEFAULT_PACE_EPUB_MS, DEFAULT_PACE_PDF_MS, clampPace } from "../reader/reading-time";
 import { clampScale } from "../reader/zoom";
 
 /**
@@ -133,6 +143,22 @@ export interface ReaderPreferences {
   epubLineSpacing: LineSpacing;
   /** Space either side of a reflowable book's text. */
   epubMargins: Margins;
+  epubFont: BookFont;
+  epubJustify: boolean;
+  epubHyphenate: boolean;
+  /** Two pages side by side in paginated flow once the pane is wide enough, or always one. */
+  epubSpread: EpubSpread;
+  /** The page's palette, for both formats. "auto" follows the vault's theme. */
+  readingTheme: ReadingTheme;
+  /** The line under the page with the chapter, time left and percentage. */
+  showFooter: boolean;
+  /**
+   * How long the reader takes over one unit, learned as they read, for the
+   * time-left estimates: an EPUB location (about 1,600 characters) or a PDF
+   * page.
+   */
+  paceEpubMs: number;
+  pacePdfMs: number;
   /** Whether saved highlights are painted into the document. */
   showHighlights: boolean;
   /**
@@ -162,6 +188,7 @@ function paletteColor(index: number): string {
 }
 
 export type EpubFlow = "scrolled" | "paginated";
+export type EpubSpread = "auto" | "none";
 
 /**
  * Whether the PDF scale is pinned to the pane rather than to a number. A
@@ -260,10 +287,22 @@ export const DEFAULT_SETTINGS: Settings = {
     epubFlow: "scrolled",
     epubLineSpacing: "normal",
     epubMargins: "normal",
+    epubFont: "book",
+    epubJustify: false,
+    epubHyphenate: false,
+    epubSpread: "auto",
+    readingTheme: "auto",
+    showFooter: true,
+    paceEpubMs: DEFAULT_PACE_EPUB_MS,
+    pacePdfMs: DEFAULT_PACE_PDF_MS,
     showHighlights: true,
     activeAnnotationType: "idea",
   },
 };
+
+function mergePace(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? clampPace(value) : fallback;
+}
 
 function isPdfFit(value: unknown): value is PdfFit {
   return value === "none" || value === "width" || value === "height" || value === "page";
@@ -444,6 +483,14 @@ function mergeReaderPreferences(saved: Record<string, unknown>, types: Annotatio
     epubFlow: from["epubFlow"] === "paginated" || from["epubFlow"] === "scrolled" ? from["epubFlow"] : defaults.epubFlow,
     epubLineSpacing: isLineSpacing(from["epubLineSpacing"]) ? from["epubLineSpacing"] : defaults.epubLineSpacing,
     epubMargins: isMargins(from["epubMargins"]) ? from["epubMargins"] : defaults.epubMargins,
+    epubFont: isBookFont(from["epubFont"]) ? from["epubFont"] : defaults.epubFont,
+    epubJustify: mergeBoolean(from["epubJustify"], defaults.epubJustify),
+    epubHyphenate: mergeBoolean(from["epubHyphenate"], defaults.epubHyphenate),
+    epubSpread: from["epubSpread"] === "none" || from["epubSpread"] === "auto" ? from["epubSpread"] : defaults.epubSpread,
+    readingTheme: isReadingTheme(from["readingTheme"]) ? from["readingTheme"] : defaults.readingTheme,
+    showFooter: mergeBoolean(from["showFooter"], defaults.showFooter),
+    paceEpubMs: mergePace(from["paceEpubMs"], defaults.paceEpubMs),
+    pacePdfMs: mergePace(from["pacePdfMs"], defaults.pacePdfMs),
     showHighlights: mergeBoolean(from["showHighlights"], defaults.showHighlights),
     activeAnnotationType: mergeActiveType(from["activeAnnotationType"], types),
   };

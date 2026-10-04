@@ -33,6 +33,8 @@ import type {
   ReaderEngine,
 } from "../engine";
 import { pdfPageToPercent } from "../progress";
+import { type SearchHandlers, findMatches, hitFromText, yieldToUi } from "../search";
+import { buildTextIndex } from "../text-index";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
 import { type SpreadMode, adjacentRowPage, spreadRows } from "../spread";
 import type { PdfFit } from "../../settings/settings-model";
@@ -45,6 +47,8 @@ interface PdfjsViewport {
 
 interface PdfjsTextItem {
   str: string;
+  /** Set on the last item of a line. Marked-content items carry neither field. */
+  hasEOL?: boolean;
 }
 
 interface PdfjsTextContent {
@@ -710,6 +714,46 @@ export class PdfEngine implements ReaderEngine {
         box.style.height = `${rect.bottom - rect.top}px`;
       }
     }
+  }
+
+  /**
+   * Reads each page's text content — not the rendered text layer, which only
+   * exists for pages already drawn — and reports every match on it. A
+   * match's page is all the locator carries; the quote and its context are
+   * what find it again on the page once that page is drawn.
+   */
+  async search(query: string, handlers: SearchHandlers, signal: AbortSignal): Promise<void> {
+    const doc = this.doc;
+    if (!doc) return;
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+      if (signal.aborted) return;
+      try {
+        const page = await doc.getPage(pageNumber);
+        const content = await page.getTextContent();
+        if (signal.aborted) return;
+        // Items are runs on a line; a line break separates words the same
+        // way the text layer's own `<br>` does.
+        const text = buildTextIndex(
+          content.items.map((item) => ({ text: `${item.str ?? ""}${item.hasEOL ? "\n" : ""}` })),
+        ).text;
+        for (const match of findMatches(text, query)) {
+          if (!handlers.hit(hitFromText(text, match, { kind: "pdf", page: pageNumber }))) return;
+        }
+      } catch (error) {
+        console.debug("[e-reader] could not search a page", pageNumber, error);
+      }
+      handlers.progress(pageNumber / doc.numPages);
+      // Every page, so the reader can scroll while a long document is searched.
+      await yieldToUi();
+    }
+  }
+
+  setTypography(): void {
+    // A PDF's text is set by the document itself.
+  }
+
+  onLinkFollowed(): void {
+    // Links inside a PDF are not followed by this reader.
   }
 
   refreshTheme(): void {

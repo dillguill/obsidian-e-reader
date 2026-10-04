@@ -116,10 +116,9 @@ describe("toolbarState", () => {
     expect(state.canGoForward).toBe(true);
   });
 
-  it("reports progress as a label and a fraction for the bar", () => {
-    const state = toolbarState({ ...base, progress: 42 });
-    expect(state.progressLabel).toBe("42%");
-    expect(state.progressFraction).toBeCloseTo(0.42);
+  it("reports progress as a fraction for the bar", () => {
+    expect(toolbarState({ ...base, progress: 42 }).progressFraction).toBeCloseTo(0.42);
+    expect(toolbarState({ ...base, pages: null }).progressFraction).toBe(0);
   });
 });
 

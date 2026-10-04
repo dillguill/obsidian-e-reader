@@ -265,14 +265,6 @@
   background-color: var(--background-modifier-border);
 }
 
-.ereader-toolbar__progress {
-  min-width: 4ch;
-  white-space: nowrap;
-  font-size: var(--font-ui-smaller);
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-}
-
 /* How far through the book, as a hairline along the toolbar's bottom edge. */
 .ereader-toolbar__track {
   position: absolute;
@@ -314,11 +306,15 @@
   font-size: 16px;
 }
 
-/* A phone has no room for the zoom pair (the display menu carries it, and
-   pinching does the same) or for the percentage (the bar shows it). */
+/* A phone has no room for the zoom pair or the display menu: the reading
+   settings panel carries both, and pinching zooms. */
 .is-phone .ereader-toolbar__zoom,
-.is-phone .ereader-toolbar__progress {
+.is-phone .ereader-toolbar__display {
   display: none;
+}
+
+.is-phone .ereader-toolbar__button {
+  min-width: 36px;
 }
 
 .is-phone .ereader-toolbar,
@@ -885,4 +881,479 @@
 .ereader-detail-current {
   margin-top: 4px;
   color: var(--text-faint);
+}
+
+/* Reading themes. Each is a palette set on the reader's root, so the page,
+   the toolbar and the panels all follow it, and an EPUB's sections read it
+   back when they are styled (epub/adapter.ts, themeCss). "Match Obsidian"
+   sets nothing. The icon colours are restated because the app resolves them
+   from --text-muted once, at the body, where these do not reach. */
+.ereader-reader.ereader-theme-light {
+  --background-primary: #ffffff;
+  --background-secondary: #f4f4f4;
+  --background-modifier-border: #e2e2e2;
+  --background-modifier-hover: rgba(0, 0, 0, 0.06);
+  --background-modifier-form-field: #ffffff;
+  --text-normal: #1d1d1f;
+  --text-muted: #5f5f63;
+  --text-faint: #9a9aa0;
+  --text-selection: rgba(66, 133, 244, 0.25);
+  --icon-color: #5f5f63;
+  --icon-color-hover: #1d1d1f;
+  --icon-color-active: var(--text-accent);
+  color-scheme: light;
+}
+
+.ereader-reader.ereader-theme-sepia {
+  --background-primary: #f5ecd9;
+  --background-secondary: #ece0c6;
+  --background-modifier-border: #dccbaa;
+  --background-modifier-hover: rgba(91, 70, 54, 0.08);
+  --background-modifier-form-field: #fbf5e8;
+  --text-normal: #5b4636;
+  --text-muted: #7c6650;
+  --text-faint: #a48f76;
+  --text-selection: rgba(178, 120, 50, 0.25);
+  --icon-color: #7c6650;
+  --icon-color-hover: #5b4636;
+  --icon-color-active: #5b4636;
+  color-scheme: light;
+}
+
+.ereader-reader.ereader-theme-dark {
+  --background-primary: #1a1a1a;
+  --background-secondary: #242424;
+  --background-modifier-border: #363636;
+  --background-modifier-hover: rgba(255, 255, 255, 0.07);
+  --background-modifier-form-field: #242424;
+  --text-normal: #d8d8d8;
+  --text-muted: #a3a3a3;
+  --text-faint: #6f6f6f;
+  --text-selection: rgba(120, 160, 255, 0.3);
+  --icon-color: #a3a3a3;
+  --icon-color-hover: #d8d8d8;
+  --icon-color-active: var(--text-accent);
+  color-scheme: dark;
+}
+
+/* A PDF's page is an image, so a fixed theme filters it rather than
+   recolouring it. These win over "adapt to theme", which only means
+   anything while the reader is matching Obsidian. */
+.ereader-reader.ereader-theme-light .ereader-reader__pdf-scroll .ereader-reader__pdf-page {
+  filter: none;
+}
+
+.ereader-reader.ereader-theme-sepia .ereader-reader__pdf-scroll .ereader-reader__pdf-page {
+  filter: sepia(0.35) brightness(0.96) contrast(0.95);
+}
+
+.ereader-reader.ereader-theme-dark .ereader-reader__pdf-scroll .ereader-reader__pdf-page {
+  filter: invert(1) hue-rotate(180deg) brightness(0.9);
+}
+
+/* Floating panels: reading settings and search. Both hang under the toolbar
+   at the right, the way the native app's popovers sit under their buttons. */
+.ereader-panel {
+  position: absolute;
+  top: calc(var(--ereader-toolbar-h, 44px) + var(--size-4-2));
+  right: var(--size-4-2);
+  z-index: var(--layer-popover);
+  width: min(340px, calc(100% - 2 * var(--size-4-2)));
+  max-height: calc(100% - var(--ereader-toolbar-h, 44px) - 2 * var(--size-4-4));
+  overflow-y: auto;
+  padding: var(--size-4-3);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border: var(--border-width) solid var(--background-modifier-border);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-l);
+}
+
+.ereader-panel__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+  padding: var(--size-4-2) 0;
+}
+
+.ereader-panel__row + .ereader-panel__row {
+  border-top: var(--border-width) solid var(--background-modifier-border);
+}
+
+.ereader-panel__row.is-toggle {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ereader-panel__label {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.ereader-panel__row.is-toggle .ereader-panel__label {
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+}
+
+/* Segmented choices. */
+.ereader-panel__choices {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.ereader-panel__choice {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: var(--size-4-1) var(--size-2-2);
+  border: none;
+  border-radius: var(--radius-s);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.ereader-panel__choice:hover {
+  color: var(--text-normal);
+}
+
+.ereader-panel__choice.is-active {
+  background: var(--background-primary);
+  color: var(--text-normal);
+  box-shadow: var(--shadow-s);
+}
+
+.ereader-panel__choice:focus-visible,
+.ereader-panel__step:focus-visible,
+.ereader-panel__action:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+
+/* Theme swatches preview their own palette, whatever the panel is in. */
+.ereader-panel__choice.ereader-swatch {
+  border: var(--border-width) solid transparent;
+}
+
+.ereader-swatch.is-light {
+  background: #ffffff;
+  color: #1d1d1f;
+}
+
+.ereader-swatch.is-sepia {
+  background: #f5ecd9;
+  color: #5b4636;
+}
+
+.ereader-swatch.is-dark {
+  background: #1a1a1a;
+  color: #d8d8d8;
+}
+
+.ereader-panel__choice.ereader-swatch:hover {
+  color: inherit;
+}
+
+.ereader-panel__choice.ereader-swatch.is-light:hover,
+.ereader-panel__choice.ereader-swatch.is-light.is-active {
+  color: #1d1d1f;
+}
+
+.ereader-panel__choice.ereader-swatch.is-sepia:hover,
+.ereader-panel__choice.ereader-swatch.is-sepia.is-active {
+  color: #5b4636;
+}
+
+.ereader-panel__choice.ereader-swatch.is-dark:hover,
+.ereader-panel__choice.ereader-swatch.is-dark.is-active {
+  color: #d8d8d8;
+}
+
+.ereader-panel__choice.ereader-swatch.is-light.is-active,
+.ereader-panel__choice.ereader-swatch.is-sepia.is-active,
+.ereader-panel__choice.ereader-swatch.is-dark.is-active,
+.ereader-panel__choice.ereader-swatch.is-auto.is-active {
+  border-color: var(--interactive-accent);
+}
+
+/* Font choices are shown in their own face. */
+.ereader-font.is-obsidian {
+  font-family: var(--font-text);
+}
+
+.ereader-font.is-serif {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+}
+
+.ereader-font.is-sans {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+}
+
+.ereader-panel__stepper {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
+.ereader-panel__step {
+  flex: 1 1 0;
+  font-size: var(--font-ui-small);
+}
+
+.ereader-panel__step.is-large {
+  font-size: var(--font-ui-large);
+}
+
+.ereader-panel__value {
+  min-width: 5ch;
+  text-align: center;
+  font-size: var(--font-ui-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.ereader-panel__row.is-action {
+  padding: 0;
+}
+
+.ereader-panel__action {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  width: 100%;
+  padding: var(--size-4-2) 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ereader-panel__action > :nth-child(2) {
+  flex: 1 1 auto;
+}
+
+.ereader-panel__action-icon,
+.ereader-panel__action-check {
+  display: flex;
+  color: var(--icon-color);
+}
+
+.is-mobile .ereader-panel__choice,
+.is-mobile .ereader-panel__step {
+  min-height: 36px;
+}
+
+/* Search. */
+.ereader-search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2);
+  overflow: hidden;
+}
+
+.ereader-search__header {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+
+.ereader-search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.is-mobile .ereader-search__input {
+  font-size: 16px;
+}
+
+.ereader-search__button.is-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.ereader-search__status {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ereader-search__status:empty {
+  display: none;
+}
+
+.ereader-search__results {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 calc(-1 * var(--size-4-2));
+}
+
+.ereader-search__results:empty {
+  display: none;
+}
+
+.ereader-search__result {
+  padding: var(--size-4-2) var(--size-4-3);
+  cursor: pointer;
+  border-radius: var(--radius-s);
+}
+
+.ereader-search__result:hover {
+  background: var(--background-modifier-hover);
+}
+
+.ereader-search__result.is-active {
+  background: var(--background-secondary);
+  box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+.ereader-search__where {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ereader-search__where:empty {
+  display: none;
+}
+
+.ereader-search__excerpt {
+  font-size: var(--font-ui-small);
+  line-height: var(--line-height-tight);
+}
+
+.ereader-search__excerpt mark {
+  background: rgba(255, 159, 26, 0.45);
+  color: inherit;
+  border-radius: 2px;
+}
+
+/* A phone's search is a strip across the top: the results fill the pane
+   until one is picked, then fold away to show the page under the arrows. */
+.is-phone .ereader-panel {
+  left: var(--size-4-2);
+  right: var(--size-4-2);
+  width: auto;
+}
+
+.ereader-search.is-collapsed .ereader-search__results {
+  display: none;
+}
+
+/* The line under the page: chapter, time left, how far through the book. */
+.ereader-footer {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-3);
+  padding: var(--size-4-1) var(--size-4-3) calc(var(--size-4-1) + env(safe-area-inset-bottom, 0px));
+  background: var(--background-primary);
+  border-top: var(--border-width) solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ereader-footer__track {
+  position: absolute;
+  top: calc(-1 * var(--border-width));
+  left: 0;
+  right: 0;
+  height: 2px;
+  pointer-events: none;
+}
+
+.ereader-footer__bar {
+  height: 100%;
+  width: 0;
+  background: var(--text-faint);
+  transition: width 150ms ease;
+}
+
+.ereader-footer__chapter {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ereader-footer__right {
+  flex: 0 0 auto;
+  display: flex;
+  white-space: nowrap;
+}
+
+.ereader-footer__right > span:not(:empty) ~ span:not(:empty)::before {
+  content: "·";
+  margin: 0 var(--size-4-2);
+  color: var(--text-faint);
+}
+
+/* "Back to …" after a jump. Bottom left, clear of the docked selection bar
+   (centred) and the footer. */
+.ereader-back {
+  position: absolute;
+  left: var(--size-4-3);
+  bottom: calc(var(--ereader-footer-h, 28px) + var(--size-4-3));
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  max-width: calc(100% - 2 * var(--size-4-3));
+  border: var(--border-width) solid var(--background-modifier-border);
+  border-radius: var(--radius-l);
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+}
+
+.ereader-back__go {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1);
+  min-width: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  cursor: pointer;
+}
+
+.ereader-back__label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ereader-back__icon {
+  display: flex;
+  color: var(--icon-color);
+}
+
+.is-mobile .ereader-back__go,
+.is-mobile .ereader-back__dismiss {
+  min-height: 40px;
+}
+
+/* A phone keeps the footer to the essentials. */
+.is-phone .ereader-footer__chapter {
+  display: none;
+}
+
+.is-phone .ereader-footer {
+  justify-content: center;
 }

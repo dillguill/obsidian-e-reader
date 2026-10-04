@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { DEFAULT_SETTINGS, SETTINGS_VERSION, mergeSettings } from "../../src/settings/settings-model";
 import { RESERVED_ENTRY_TYPE } from "../../src/core/types";
 import { MAX_SCALE, MIN_SCALE } from "../../src/reader/zoom";
+import { DEFAULT_PACE_EPUB_MS, DEFAULT_PACE_PDF_MS } from "../../src/reader/reading-time";
 
 describe("DEFAULT_SETTINGS", () => {
   it("uses the marker property `type` with value `book`", () => {
@@ -174,6 +175,14 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         epubFlow: "paginated",
         epubLineSpacing: "relaxed",
         epubMargins: "wide",
+        epubFont: "serif",
+        epubJustify: true,
+        epubHyphenate: true,
+        epubSpread: "none",
+        readingTheme: "sepia",
+        showFooter: false,
+        paceEpubMs: 50000,
+        pacePdfMs: 90000,
         showHighlights: false,
         activeAnnotationType: "question",
       },
@@ -247,6 +256,14 @@ describe("remembered reader preferences", () => {
       epubFlow: "scrolled",
       epubLineSpacing: "normal",
       epubMargins: "normal",
+      epubFont: "book",
+      epubJustify: false,
+      epubHyphenate: false,
+      epubSpread: "auto",
+      readingTheme: "auto",
+      showFooter: true,
+      paceEpubMs: DEFAULT_PACE_EPUB_MS,
+      pacePdfMs: DEFAULT_PACE_PDF_MS,
       showHighlights: true,
       activeAnnotationType: DEFAULT_SETTINGS.annotationTypes[0]?.name,
     });
@@ -273,10 +290,15 @@ describe("remembered reader preferences", () => {
     expect(merged.reader.epubFlow).toBe("scrolled");
   });
 
-  it("falls back for an unrecognised line spacing or margin", () => {
-    const merged = mergeSettings({ reader: { epubLineSpacing: "double", epubMargins: 3 } });
+  it("falls back for an unrecognised typography choice, theme or spread", () => {
+    const merged = mergeSettings({
+      reader: { epubLineSpacing: "double", epubMargins: 3, epubFont: "comic", readingTheme: "neon", epubSpread: "both" },
+    });
     expect(merged.reader.epubLineSpacing).toBe("normal");
     expect(merged.reader.epubMargins).toBe("normal");
+    expect(merged.reader.epubFont).toBe("book");
+    expect(merged.reader.readingTheme).toBe("auto");
+    expect(merged.reader.epubSpread).toBe("auto");
   });
 });
 

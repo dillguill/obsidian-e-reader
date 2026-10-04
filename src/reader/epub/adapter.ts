@@ -20,21 +20,21 @@
 
 import type { App } from "obsidian";
 import type { Locator } from "../../core/types";
-import type { EpubFlow } from "../../settings/settings-model";
-import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
-import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine } from "../engine";
+import type { EpubFlow, EpubSpread } from "../../settings/settings-model";
+import { activeRange, rangeForQuote, rangeFromOffsets, searchableText, snapshotFromRange } from "../dom-selection";
+import type {
+  DisplayOption,
+  EngineSelection,
+  OutlineNode,
+  PageState,
+  PaintedHighlight,
+  ReaderEngine,
+  SearchHandlers,
+} from "../engine";
+import { findMatches, hitFromText, yieldToUi } from "../search";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
 import { fractionToPercent } from "../progress";
-import {
-  LINE_SPACINGS,
-  LINE_SPACING_LABELS,
-  type LineSpacing,
-  MARGINS,
-  MARGIN_LABELS,
-  type Margins,
-  lineSpacingCss,
-  marginPadding,
-} from "../typography";
+import { type Typography, marginPadding, typographyCss } from "../typography";
 import { clampScale } from "../zoom";
 
 interface EpubNavItem {
@@ -101,6 +101,8 @@ interface EpubContents {
   document: Document;
   window: Window;
   cfiFromRange(range: Range): string;
+  /** epub.js's own event emitter; `linkClicked` fires before it follows an internal link. */
+  on(event: "linkClicked", callback: (href: string) => void): void;
 }
 
 interface EpubHook {
@@ -131,6 +133,8 @@ interface EpubRendition {
   themes: EpubThemes;
   annotations: EpubAnnotations;
   flow(flow: string): void;
+  /** "none" keeps one page; "auto" shows two side by side from `min` pixels wide. */
+  spread(spread: string, min?: number): void;
   destroy(): void;
 }
 
@@ -138,11 +142,11 @@ interface EpubRendition {
 export interface EpubPreferences {
   textScale: number;
   flow: EpubFlow;
-  lineSpacing: LineSpacing;
-  margins: Margins;
+  spread: EpubSpread;
 }
 
 export interface EpubEngineOptions extends EpubPreferences {
+  typography: Typography;
   onPreferencesChanged(preferences: EpubPreferences): void;
 }
 
@@ -293,6 +297,8 @@ function epubFlow(mode: EpubFlow): string {
 
 /** Marks the `<style>` element this plugin owns inside each rendered section. */
 const THEME_STYLE_ID = "ereader-theme";
+/** epub.js's own default: below this a pane shows one page even with spreads on. */
+const MIN_SPREAD_WIDTH_PX = 800;
 
 /**
  * Whether an event landed on a link. Duck-typed rather than `instanceof
@@ -338,8 +344,9 @@ export class EpubEngine implements ReaderEngine {
   private changeHandler: (() => void) | null = null;
   private textScale: number;
   private flowMode: EpubFlow;
-  private lineSpacing: LineSpacing;
-  private margins: Margins;
+  private spreadMode: EpubSpread;
+  private typography: Typography;
+  private linkHandler: (() => void) | null = null;
   private highlights: readonly PaintedHighlight[] = [];
   /** Every CFI range currently drawn, so a repaint can take them all down first. */
   private paintedRanges = new Set<string>();
@@ -373,17 +380,17 @@ export class EpubEngine implements ReaderEngine {
   ) {
     this.textScale = clampScale(options.textScale);
     this.flowMode = options.flow;
-    this.lineSpacing = options.lineSpacing;
-    this.margins = options.margins;
+    this.spreadMode = options.spread;
+    this.typography = { ...options.typography };
   }
 
   private preferences(): EpubPreferences {
-    return { textScale: this.textScale, flow: this.flowMode, lineSpacing: this.lineSpacing, margins: this.margins };
+    return { textScale: this.textScale, flow: this.flowMode, spread: this.spreadMode };
   }
 
   /** Margins sit outside the section's iframe — see marginPadding. */
   private applyMargins(): void {
-    const padding = marginPadding(this.margins);
+    const padding = marginPadding(this.typography.margins);
     this.container?.setCssStyles({ paddingLeft: padding, paddingRight: padding });
   }
 
@@ -407,6 +414,8 @@ export class EpubEngine implements ReaderEngine {
       height: "100%",
       manager: "default",
       flow: epubFlow(this.flowMode),
+      spread: this.spreadMode,
+      minSpreadWidth: MIN_SPREAD_WIDTH_PX,
       allowScriptedContent: false,
     });
     this.rendition = rendition;
@@ -457,6 +466,9 @@ export class EpubEngine implements ReaderEngine {
       contents.document.addEventListener("keydown", (event: KeyboardEvent) => {
         if (this.keyDownHandler?.(event)) event.preventDefault();
       }, options);
+      // The reader's place before an internal link is followed is where
+      // "Back" returns to. epub.js follows the link itself, a moment later.
+      contents.on("linkClicked", () => this.linkHandler?.());
       this.addNavigationGestures(contents);
       // A section that arrives later still gets the vault's theme and
       // whatever highlights belong to it.
@@ -570,40 +582,89 @@ export class EpubEngine implements ReaderEngine {
     });
     // "by chapter" is not decoration: one section renders at a time, so the
     // reader should not expect one continuous scroll through the whole book.
-    // Line spacing restyles each section in place; margins resize the host,
-    // which the resize observer turns into epub.js's own reflow.
-    const spacingOption = (spacing: LineSpacing): DisplayOption => ({
-      section: "spacing",
-      id: `line-spacing-${spacing}`,
-      label: `Line spacing — ${LINE_SPACING_LABELS[spacing]}`,
-      icon: "baseline",
-      checked: this.lineSpacing === spacing,
-      apply: () => {
-        if (this.lineSpacing === spacing) return;
-        this.lineSpacing = spacing;
-        this.options.onPreferencesChanged(this.preferences());
-        this.refreshTheme();
-      },
-    });
-    const marginOption = (margins: Margins): DisplayOption => ({
-      section: "margins",
-      id: `margins-${margins}`,
-      label: `Margins — ${MARGIN_LABELS[margins]}`,
-      icon: "move-horizontal",
-      checked: this.margins === margins,
-      apply: () => {
-        if (this.margins === margins) return;
-        this.margins = margins;
-        this.options.onPreferencesChanged(this.preferences());
-        this.applyMargins();
-      },
-    });
+    // Spreads only exist in paginated flow; scrolled always shows one column.
+    const spreadOption: DisplayOption[] =
+      this.flowMode === "paginated"
+        ? [
+            {
+              section: "spread",
+              id: "spread-auto",
+              label: "Two pages when wide",
+              icon: "book-open",
+              checked: this.spreadMode === "auto",
+              apply: () => {
+                this.spreadMode = this.spreadMode === "auto" ? "none" : "auto";
+                this.options.onPreferencesChanged(this.preferences());
+                this.rendition?.spread(this.spreadMode, MIN_SPREAD_WIDTH_PX);
+                this.changeHandler?.();
+              },
+            },
+          ]
+        : [];
     return [
       flowOption("scrolled", "Scrolled (by chapter)", "move-vertical"),
       flowOption("paginated", "Paginated", "book-open"),
-      ...LINE_SPACINGS.map(spacingOption),
-      ...MARGINS.map(marginOption),
+      ...spreadOption,
     ];
+  }
+
+  /**
+   * Line spacing, font, justification and hyphenation restyle each section in
+   * place; margins resize the host, which the resize observer turns into
+   * epub.js's own reflow.
+   */
+  setTypography(typography: Typography): void {
+    const marginsChanged = typography.margins !== this.typography.margins;
+    this.typography = { ...typography };
+    if (marginsChanged) this.applyMargins();
+    this.refreshTheme();
+  }
+
+  onLinkFollowed(handler: () => void): void {
+    this.linkHandler = handler;
+  }
+
+  /**
+   * Walks every section of the spine for `query`, reporting matches as they
+   * are found so the first results show while the rest of the book is still
+   * being read. Each section is loaded on its own — not the rendered view —
+   * so the search reaches chapters the reader has not opened.
+   */
+  async search(query: string, handlers: SearchHandlers, signal: AbortSignal): Promise<void> {
+    const book = this.book;
+    if (!book) return;
+    const sections = book.spine.spineItems;
+    let full = false;
+    for (let i = 0; i < sections.length; i++) {
+      if (signal.aborted || full) return;
+      const section = sections[i] as EpubSection;
+      try {
+        await withSection(book, section, () => {
+          const body = section.document?.body;
+          if (!body) return;
+          const source = searchableText(body);
+          for (const match of findMatches(source.index.text, query)) {
+            if (signal.aborted) return;
+            const range = rangeFromOffsets(source, match.start, match.end);
+            if (!range) continue;
+            let cfi: string;
+            try {
+              cfi = section.cfiFromRange(range);
+            } catch {
+              continue;
+            }
+            if (!handlers.hit(hitFromText(source.index.text, match, { kind: "epub", cfi }))) {
+              full = true;
+              return;
+            }
+          }
+        });
+      } catch (error) {
+        console.debug("[e-reader] could not search a section", error);
+      }
+      handlers.progress((i + 1) / sections.length);
+      await yieldToUi();
+    }
   }
 
   // ----------------------------------------------------------- navigation
@@ -907,7 +968,7 @@ export class EpubEngine implements ReaderEngine {
     const lineHeight = read("--line-height-normal", "1.5");
     return [
       `html, body { background: ${background} !important; color: ${text} !important; }`,
-      `body { font-family: ${font}; line-height: ${lineHeight}; }`,
+      `body { line-height: ${lineHeight}; }`,
       `body *:not(img):not(svg):not(svg *) { color: inherit !important; background-color: transparent !important; }`,
       `a, a * { color: ${accent} !important; }`,
       `hr, table, td, th, blockquote { border-color: ${faint} !important; }`,
@@ -922,7 +983,7 @@ export class EpubEngine implements ReaderEngine {
       // Wide content is kept inside the page rather than widening it, which
       // is what lets the container suppress horizontal scrolling outright.
       `pre, code { white-space: pre-wrap !important; word-break: break-word; }`,
-      lineSpacingCss(this.lineSpacing),
+      typographyCss(this.typography, font),
       `table { max-width: 100% !important; }`,
       // Mobile turns selection off broadly; without the prefixed form the
       // section inherits that and cannot be selected, so there is nothing to

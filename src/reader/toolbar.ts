@@ -34,6 +34,9 @@ export interface ToolbarCallbacks {
   turnPage(direction: 1 | -1): void;
   /** Opens the book's contents in the outline pane. */
   openContents(): void;
+  toggleSearch(): void;
+  /** Opens the reading-settings panel, anchored to the button that asked. */
+  toggleAppearance(anchorEl: HTMLElement): void;
 }
 
 /**
@@ -42,7 +45,7 @@ export interface ToolbarCallbacks {
  * which would declare the order up front, is not in the public API — so the
  * options are sorted into this order before being added.
  */
-const SECTIONS: DisplayOption["section"][] = ["zoom", "spread", "layout", "spacing", "margins", "appearance"];
+const SECTIONS: DisplayOption["section"][] = ["zoom", "spread", "layout", "appearance"];
 
 export class ReaderToolbar {
   private readonly rootEl: HTMLElement;
@@ -53,7 +56,6 @@ export class ReaderToolbar {
   private readonly bookmarkEl: HTMLElement;
   private readonly prevEl: HTMLElement;
   private readonly nextEl: HTMLElement;
-  private readonly progressEl: HTMLElement;
   private readonly progressBarEl: HTMLElement;
   private readonly contentsEl: HTMLElement;
   /** The last value the box was given, restored when a typed entry is not a number. */
@@ -70,9 +72,10 @@ export class ReaderToolbar {
     this.zoomOutEl = this.addButton(zoomEl, component, "zoom-out", "Zoom out", () => callbacks.zoomOut());
     zoomEl.createDiv({ cls: "ereader-toolbar__divider" });
     this.zoomInEl = this.addButton(zoomEl, component, "zoom-in", "Zoom in", () => callbacks.zoomIn());
+    // A phone hides this too: its items move into the reading-settings panel.
     this.addButton(leftEl, component, "chevron-down", "Display options", (event) => {
       this.showDisplayOptions(event, callbacks.displayOptions());
-    });
+    }).addClass("ereader-toolbar__display");
 
     const pageEl = this.rootEl.createDiv({ cls: "ereader-toolbar__group ereader-toolbar__pages" });
     this.prevEl = this.addButton(pageEl, component, "chevron-left", "Previous page", () => callbacks.turnPage(-1));
@@ -82,7 +85,6 @@ export class ReaderToolbar {
     });
     this.pageCountEl = pageEl.createSpan({ cls: "ereader-toolbar__count" });
     this.nextEl = this.addButton(pageEl, component, "chevron-right", "Next page", () => callbacks.turnPage(1));
-    this.progressEl = pageEl.createSpan({ cls: "ereader-toolbar__progress" });
 
     component.registerDomEvent(this.pageInputEl, "click", () => this.pageInputEl.select());
     component.registerDomEvent(this.pageInputEl, "change", () => {
@@ -98,6 +100,10 @@ export class ReaderToolbar {
     // Highlighting has no button here: selecting text opens the selection
     // popup (selection-popup.ts), which is where the types live.
     const rightEl = this.rootEl.createDiv({ cls: "ereader-toolbar__group" });
+    this.addButton(rightEl, component, "search", "Search in book", () => callbacks.toggleSearch());
+    const appearanceEl = this.addButton(rightEl, component, "type", "Reading settings", () =>
+      callbacks.toggleAppearance(appearanceEl),
+    );
     this.contentsEl = this.addButton(rightEl, component, "list", "Contents", () => callbacks.openContents());
     this.bookmarkEl = this.addButton(rightEl, component, "bookmark", "Bookmark this page", () => callbacks.toggleBookmark());
 
@@ -156,7 +162,6 @@ export class ReaderToolbar {
 
     this.prevEl.toggleClass("is-disabled", !state.canGoBack);
     this.nextEl.toggleClass("is-disabled", !state.canGoForward);
-    this.progressEl.setText(state.progressLabel);
     this.progressBarEl.setCssStyles({ width: `${state.progressFraction * 100}%` });
 
     this.bookmarkEl.toggleClass("is-active", state.bookmarked);

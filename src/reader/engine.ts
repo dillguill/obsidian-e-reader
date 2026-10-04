@@ -4,6 +4,10 @@
 // module — callers (reader-view.ts, toolbar.ts) only ever see this interface.
 
 import type { Locator } from "../core/types";
+import type { SearchHandlers } from "./search";
+import type { Typography } from "./typography";
+
+export type { SearchHandlers } from "./search";
 
 export interface OutlineNode {
   label: string;
@@ -39,7 +43,7 @@ export interface PageState {
  * either concept exists.
  */
 export interface DisplayOption {
-  section: "zoom" | "spread" | "layout" | "spacing" | "margins" | "appearance";
+  section: "zoom" | "spread" | "layout" | "appearance";
   /** Stable identity, for tests and for keying the menu item. */
   id: string;
   label: string;
@@ -193,6 +197,27 @@ export interface ReaderEngine {
    * `css-change`. A no-op for engines that render in the host document.
    */
   refreshTheme(): void;
+
+  // -------------------------------------------------------------- search
+
+  /**
+   * Searches the whole book for `query`, reporting each match through
+   * `handlers` as it is found, in reading order. Stops early when `signal`
+   * aborts or `handlers.hit` returns false.
+   */
+  search(query: string, handlers: SearchHandlers, signal: AbortSignal): Promise<void>;
+
+  // ---------------------------------------------------------- typography
+
+  /** Font, spacing, margins and so on. A no-op for a fixed-layout book. */
+  setTypography(typography: Typography): void;
+
+  /**
+   * Registers a handler fired just before the engine follows a link inside
+   * the book, while it is still at the place the link was followed from, so
+   * the reader can offer a way back. Engines without in-book links ignore it.
+   */
+  onLinkFollowed(handler: () => void): void;
 
   /** Releases the worker/listeners/object URLs this engine holds. Idempotent. */
   destroy(): void;

@@ -13,5 +13,5 @@
       "obsidian": ["./tests/fakes/obsidian.ts"]
     }
   },
-  "include": ["tests/**/*.ts"]
+  "include": ["tests/**/*.ts", "src/types/**/*.d.ts"]
 }

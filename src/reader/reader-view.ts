@@ -54,7 +54,6 @@ import {
   THEME_LABELS,
   type Typography,
 } from "./typography";
-import { ScrollChrome } from "./gestures";
 import { FOOTER_INFOS, focusModeOn, rememberPdfView, setFocusMode } from "../settings/settings-model";
 import {
   type ChapterStart,
@@ -212,12 +211,8 @@ export class ReaderView extends FileView {
   /** A jump's starting point, until the jump is seen to have landed somewhere else. */
   private pendingBack: { target: Locator; at: number } | null = null;
   private readonly savePace = debounce(() => this.saveSettings(), PACE_SAVE_DELAY_MS, true);
-  /** On a touchscreen, the bars follow the direction the page is scrolled. */
-  private readonly scrollChrome = new ScrollChrome();
-  /** The scroller `scrollChrome` last measured, so a different one starts it afresh. */
   /** The last on-screen reach of the pane's title bar, for while it is slid away. */
   private lastHeaderReach = 0;
-  private scrollChromeEl: EventTarget | null = null;
   /** The desktop's countdown to hiding the bars. */
   private idleTimer: number | null = null;
 
@@ -303,10 +298,7 @@ export class ReaderView extends FileView {
     this.registerDomEvent(
       this.contentRoot,
       "scroll",
-      (event: Event) => {
-        this.repositionPopup();
-        this.followScroll(event.target);
-      },
+      () => this.repositionPopup(),
       { capture: true },
     );
     if (Platform.isMobile) {
@@ -483,8 +475,6 @@ export class ReaderView extends FileView {
     root.removeClass("is-immersive");
     root.removeClass("is-epub", "is-pdf");
     this.syncAppChrome();
-    this.scrollChrome.reset();
-    this.scrollChromeEl = null;
     this.resetBookChrome();
     this.clearViewport();
 
@@ -562,11 +552,6 @@ export class ReaderView extends FileView {
     engine.onSelectionChange(() => this.onSelectionChange());
     engine.onKeyDown((event) => this.handleKey(event));
     engine.onLinkFollowed(() => this.recordJump());
-    // A paginated book has nothing to scroll: turning the page or swiping up
-    // goes into the reading view, and swiping down brings the menu back.
-    engine.onPageGesture((gesture) => {
-      if (Platform.isMobile) this.setChromeHidden(gesture !== "down");
-    });
     engine.onChange(() => {
       this.dropJumpOfferIfReached();
       this.settleBack();
@@ -1676,22 +1661,6 @@ export class ReaderView extends FileView {
       }
       this.setChromeHidden(true);
     }, CHROME_IDLE_MS);
-  }
-
-  /**
-   * On a touchscreen, scrolling down into the book hides the bars and
-   * scrolling back up shows them. Only the page's own scroller counts, not a
-   * panel's list.
-   */
-  private followScroll(target: EventTarget | null): void {
-    if (!Platform.isMobile || !(target instanceof HTMLElement) || !this.engine) return;
-    if (!target.closest(".ereader-reader__viewport")) return;
-    if (target !== this.scrollChromeEl) {
-      this.scrollChromeEl = target;
-      this.scrollChrome.reset();
-    }
-    const action = this.scrollChrome.update(target.scrollTop, target.clientHeight);
-    if (action) this.setChromeHidden(action === "hide");
   }
 
   /**

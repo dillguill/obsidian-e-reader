@@ -65,7 +65,9 @@ Obsidian, Light, Sepia or Dark — the zoom or text size, the layout (PDF fit
 and spreads, EPUB flow and two-page spreads) and, for EPUBs, the font (the book's own, your
 Obsidian font, a serif or a sans), text size, line spacing, margins,
 alignment (the book's own, left or justified) and hyphenation, which is on
-to start with so justified lines on a phone don't open wide gaps.
+to start with so justified lines on a phone don't open wide gaps. English
+books are hyphenated by the reader itself, with the standard TeX patterns,
+since Obsidian's iPhone app ignores the browser's own hyphenation.
 
 **Search** (the search button, or Cmd/Ctrl-F in the reader) finds every match
 in the book as you type, listed with its page or chapter; pick one, or step
@@ -74,10 +76,9 @@ Jumping anywhere — a search result, a contents entry, a link, a typed page —
 leaves a **Back to …** button that returns you to where you were reading.
 
 **Focus mode.** On a phone the book fills the screen, from just under the
-status bar to the progress line. Scroll down (or, in a paginated EPUB, turn
-the page or swipe up) and the menu goes away: the toolbar, the pane's title
-bar and Obsidian's own bottom bar. Scroll up, swipe down or tap the middle of
-the page to bring it back. While you read, a thin progress line along the
+status bar to the progress line. Tap the middle of the page and the menu goes
+away: the toolbar, the pane's title bar and Obsidian's own bottom bar; tap it
+again to bring the menu back. While you read, a thin progress line along the
 bottom shows the whole book, with a tick wherever a contents entry starts and
 the book's percentage beside it; the label under it cycles, when tapped,
 through the chapter's name, the time left in the chapter and the time

@@ -57,6 +57,8 @@ export function buildTextIndex(chunks: readonly TextChunk[]): TextIndex {
     const raw = chunks[chunk]?.text ?? "";
     for (let offset = 0; offset < raw.length; offset++) {
       const character = raw[offset] as string;
+      // A soft hyphen the reader wrote in (soft-hyphens.ts) is not text.
+      if (character === "\u00AD") continue;
       if (WHITESPACE.test(character)) {
         // Leading whitespace has nothing to separate, so it is simply dropped.
         if (text.length > 0 && pendingSpace === null) pendingSpace = { chunk, offset };

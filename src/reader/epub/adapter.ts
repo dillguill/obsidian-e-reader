@@ -36,6 +36,7 @@ import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../
 import { swipeDirection, verticalSwipe } from "../gestures";
 import { fractionToPercent } from "../progress";
 import { PROSE_ELEMENTS, type Typography, marginPadding, typographyCss } from "../typography";
+import { canHyphenate, setSoftHyphens } from "../soft-hyphens";
 import { clampScale } from "../zoom";
 
 interface EpubNavItem {
@@ -82,6 +83,12 @@ interface EpubLocations {
 
 /** Marks a paragraph the "Left" alignment set flush left, so it can be undone. */
 const LEFT_ALIGNED_ATTR = "data-ereader-left";
+
+/** The language a section's `<html>` declares, as `lang` or `xml:lang`. */
+function declaredLanguage(doc: Document): string | null {
+  const root = doc.documentElement;
+  return root.lang || root.getAttribute("xml:lang") || root.getAttributeNS("http://www.w3.org/XML/1998/namespace", "lang");
+}
 
 interface EpubBook {
   ready: Promise<unknown>;
@@ -1180,6 +1187,7 @@ export class EpubEngine implements ReaderEngine {
     // book's own stylesheets are inlined a moment later.
     head.appendChild(styleEl);
     this.declareLanguage(doc);
+    setSoftHyphens(doc, this.typography.hyphenate && canHyphenate(declaredLanguage(doc)));
     this.alignLeft(doc);
   }
 
@@ -1190,7 +1198,7 @@ export class EpubEngine implements ReaderEngine {
    */
   private declareLanguage(doc: Document): void {
     const root = doc.documentElement;
-    if (root.lang || root.getAttribute("xml:lang")) return;
+    if (declaredLanguage(doc)) return;
     root.lang = this.book?.packaging?.metadata?.language?.trim() || "en";
   }
 

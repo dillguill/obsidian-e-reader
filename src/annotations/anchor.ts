@@ -37,7 +37,8 @@ export function contextAround(text: string, start: number, end: number, window =
  * anything matched against it are normalised the same way.
  */
 export function normalizeQuote(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  // Soft hyphens are break points the reader adds, not part of the quote.
+  return text.replace(/\u00AD/g, "").replace(/\s+/g, " ").trim();
 }
 
 /**

@@ -848,6 +848,14 @@ export class EpubEngine implements ReaderEngine {
           }
         : null,
       typography: this.typography,
+      // Which elements hold the running text, and how each kind is set.
+      textBlocks: Object.fromEntries(
+        Array.from(new Set(Array.from(doc.body.querySelectorAll("*")).map((el) => el.tagName.toLowerCase()))).map((tag) => {
+          const el = doc.body.querySelector(tag);
+          const css = el ? doc.defaultView?.getComputedStyle(el) : null;
+          return [tag, css ? `${css.textAlign} ${css.getPropertyValue("-webkit-hyphens")}` : ""];
+        }),
+      ),
     };
   }
 

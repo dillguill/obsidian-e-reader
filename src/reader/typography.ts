@@ -125,7 +125,9 @@ export function typographyCss(typography: Typography, vaultFont: string): string
   if (height !== null) rules.push(`body, div, ${PROSE_ELEMENTS} { line-height: ${height} !important; }`);
   if (typography.align === "justify") rules.push(`${PROSE_ELEMENTS} { text-align: justify !important; }`);
   if (typography.hyphenate) {
-    rules.push(`${PROSE_ELEMENTS} { -webkit-hyphens: auto !important; hyphens: auto !important; }`);
+    // All of the text, not only the prose blocks: books set running text in
+    // divs and spans as often as in paragraphs.
+    rules.push(`${TEXT_ELEMENTS} { -webkit-hyphens: auto !important; hyphens: auto !important; }`);
   }
   return rules.join("\n");
 }

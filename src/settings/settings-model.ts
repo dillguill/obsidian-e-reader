@@ -19,6 +19,8 @@ import {
   type LineSpacing,
   type Margins,
   type ReadingTheme,
+  type TextAlign,
+  TEXT_ALIGNS,
   isBookFont,
   isLineSpacing,
   isMargins,
@@ -143,8 +145,14 @@ export interface ReaderPreferences {
   /** Space either side of a reflowable book's text. */
   epubMargins: Margins;
   epubFont: BookFont;
-  epubJustify: boolean;
-  epubHyphenate: boolean;
+  /** How running text is aligned; "book" leaves it to the book. */
+  epubAlign: TextAlign;
+  /**
+   * Hyphenation, on by default as in Apple Books: without it a justified
+   * line on a phone can only break between whole words, and spreads the
+   * rest of the line into wide gaps.
+   */
+  epubHyphenation: boolean;
   /** Two pages side by side in paginated flow once the pane is wide enough, or always one. */
   epubSpread: EpubSpread;
   /** The page's palette, for both formats. "auto" follows the vault's theme. */
@@ -362,8 +370,8 @@ export const DEFAULT_SETTINGS: Settings = {
     epubLineSpacing: "normal",
     epubMargins: "normal",
     epubFont: "book",
-    epubJustify: false,
-    epubHyphenate: false,
+    epubAlign: "book",
+    epubHyphenation: true,
     epubSpread: "auto",
     readingTheme: "auto",
     showFooter: true,
@@ -561,8 +569,15 @@ function mergeReaderPreferences(saved: Record<string, unknown>, types: Annotatio
     epubLineSpacing: isLineSpacing(from["epubLineSpacing"]) ? from["epubLineSpacing"] : defaults.epubLineSpacing,
     epubMargins: isMargins(from["epubMargins"]) ? from["epubMargins"] : defaults.epubMargins,
     epubFont: isBookFont(from["epubFont"]) ? from["epubFont"] : defaults.epubFont,
-    epubJustify: mergeBoolean(from["epubJustify"], defaults.epubJustify),
-    epubHyphenate: mergeBoolean(from["epubHyphenate"], defaults.epubHyphenate),
+    // 0.4.0-beta.22 and earlier had a justify switch whose "off" left it to the book.
+    epubAlign: (TEXT_ALIGNS as readonly unknown[]).includes(from["epubAlign"])
+      ? (from["epubAlign"] as TextAlign)
+      : from["epubJustify"] === true
+        ? "justify"
+        : defaults.epubAlign,
+    // A new name, so the old switch's saved "off" — its default until now —
+    // does not keep hyphenation off; a reader who had turned it on keeps it.
+    epubHyphenation: mergeBoolean(from["epubHyphenation"], from["epubHyphenate"] === true || defaults.epubHyphenation),
     epubSpread: from["epubSpread"] === "none" || from["epubSpread"] === "auto" ? from["epubSpread"] : defaults.epubSpread,
     readingTheme: isReadingTheme(from["readingTheme"]) ? from["readingTheme"] : defaults.readingTheme,
     showFooter: mergeBoolean(from["showFooter"], defaults.showFooter),

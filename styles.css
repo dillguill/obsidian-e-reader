@@ -281,39 +281,27 @@
   pointer-events: none;
 }
 
-/* On a phone in focus mode the pane's title bar floats over the top of the
-   page instead of pushing it down, so the page can start just under the
-   status bar. Recent versions of Obsidian float it already, and push a
-   phone's views down with a margin (--view-top-spacing) to clear it; that
-   margin is the band this takes back. */
-.workspace-leaf-content.ereader-focus {
-  position: relative;
+/* On a phone in focus mode the reader is pinned over the whole screen while
+   it is the pane in front, the way FleurEPUB and R-Reader do it
+   (github.com/gibsonchan-5/fleur-epub, styles.css): Obsidian's spacing above
+   a phone's views and its floating bars then take nothing from the page.
+   Unlike theirs it stays pinned while the menu comes and goes, so the book
+   is laid out once; the pane's title bar and Obsidian's bottom bar float
+   over it with the toolbar while the menu is out. */
+.ereader-reader.is-pinned {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-cover);
+  background: var(--background-primary);
 }
 
-.is-mobile .mod-root .workspace-leaf-content.ereader-focus > .view-content {
-  margin-top: 0;
-}
-
-.workspace-leaf-content.ereader-focus > .view-header {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 4;
-}
-
-/* ...and Obsidian's bar along the bottom floats over the bottom of it, where
-   it does not already. */
-body.ereader-focus-navbar .mobile-navbar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+body.ereader-focus-active .workspace-leaf.mod-active .view-header,
+body.ereader-focus-active .mobile-navbar {
   z-index: var(--layer-status-bar);
 }
 
-/* In the reading view both go with the reader's own bars, slid away and
-   faded, so nothing under them moves. */
+/* In the reading view they go with the reader's own bars, slid away and
+   faded; the editing toolbar, the tab header and the status bar too. */
 body.ereader-immersive-epub .mobile-navbar,
 body.ereader-immersive-pdf .mobile-navbar {
   transform: translateY(100%);
@@ -328,6 +316,11 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
   opacity: 0;
   pointer-events: none;
   transition: transform 180ms ease, opacity 180ms ease;
+}
+
+body.ereader-immersive-epub :is(.mobile-toolbar, .mobile-tab-header, .status-bar),
+body.ereader-immersive-pdf :is(.mobile-toolbar, .mobile-tab-header, .status-bar) {
+  display: none;
 }
 
 /* On a desktop with the bars hidden, the top edge of the pane brings them

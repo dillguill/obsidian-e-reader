@@ -35,7 +35,7 @@ import { findMatches, hitFromText, yieldToUi } from "../search";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
 import { swipeDirection, verticalSwipe } from "../gestures";
 import { fractionToPercent } from "../progress";
-import { type Typography, marginPadding, typographyCss } from "../typography";
+import { PROSE_ELEMENTS, type Typography, marginPadding, typographyCss } from "../typography";
 import { clampScale } from "../zoom";
 
 interface EpubNavItem {
@@ -80,8 +80,13 @@ interface EpubLocations {
   total: number;
 }
 
+/** Marks a paragraph the "Left" alignment set flush left, so it can be undone. */
+const LEFT_ALIGNED_ATTR = "data-ereader-left";
+
 interface EpubBook {
   ready: Promise<unknown>;
+  /** The package document, read by the time `ready` resolves. */
+  packaging?: { metadata?: { language?: string } };
   navigation: EpubNavigation;
   spine: EpubSpine;
   locations: EpubLocations;
@@ -1134,6 +1139,41 @@ export class EpubEngine implements ReaderEngine {
     // this last in `head` — and so winning on equal specificity — after the
     // book's own stylesheets are inlined a moment later.
     head.appendChild(styleEl);
+    this.declareLanguage(doc);
+    this.alignLeft(doc);
+  }
+
+  /**
+   * WebKit hyphenates only text whose language it knows, and many books
+   * declare one in their package but not on each chapter's `<html>`. The
+   * package's language, or English, fills the gap.
+   */
+  private declareLanguage(doc: Document): void {
+    const root = doc.documentElement;
+    if (root.lang || root.getAttribute("xml:lang")) return;
+    root.lang = this.book?.packaging?.metadata?.language?.trim() || "en";
+  }
+
+  /**
+   * "Left" alignment: the paragraphs the book justifies, and only those, are
+   * set flush left, so its centred titles and right-aligned attributions
+   * stay where it put them. Which ones the book justifies is only known
+   * from computed style, so this is done per element rather than in CSS,
+   * and undone first, so switching back to the book's own is exact. Run
+   * again once the book's stylesheets are inlined.
+   */
+  private alignLeft(doc: Document): void {
+    for (const el of Array.from(doc.querySelectorAll<HTMLElement>(`[${LEFT_ALIGNED_ATTR}]`))) {
+      el.style.removeProperty("text-align");
+      el.removeAttribute(LEFT_ALIGNED_ATTR);
+    }
+    const win = doc.defaultView;
+    if (this.typography.align !== "left" || !win) return;
+    for (const el of Array.from(doc.querySelectorAll<HTMLElement>(PROSE_ELEMENTS))) {
+      if (win.getComputedStyle(el).textAlign !== "justify") continue;
+      el.style.setProperty("text-align", "left", "important");
+      el.setAttribute(LEFT_ALIGNED_ATTR, "");
+    }
   }
 
   /**

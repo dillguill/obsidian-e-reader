@@ -240,13 +240,14 @@
    the PDF view specifically and themes style them assuming a real PDF is
    behind them, so the handful of layout rules is restated rather than
    borrowed. The generic chrome (`clickable-icon`) still is Obsidian's. */
-/* The toolbar and the footer float over the page rather than taking space
-   from it, so hiding them (a tap, scrolling, the desktop's idle timer) never
-   resizes the page: a resize reflows an EPUB and refits a PDF, and would do
-   both every time they came and went. The page keeps clear of them instead —
-   see the viewport and PDF rules below, which read the heights the view
-   publishes: --ereader-top-h and --ereader-bottom-h for what covers the top
-   and the bottom of the page. */
+/* The toolbar and the progress line float over the page rather than taking
+   space from it, so hiding them (a tap, scrolling, the desktop's idle timer)
+   never resizes the page: a resize reflows an EPUB and refits a PDF, and
+   would do both every time they came and went. Where the bars can hide, the
+   book is laid out over the whole pane and the toolbar covers its top while
+   the menu is out, the way a reading app's does; where they cannot, the page
+   keeps clear of it. The view publishes what the page keeps clear of as
+   --ereader-top-h and --ereader-bottom-h (the progress line's space). */
 .ereader-toolbar {
   position: absolute;
   top: 0;
@@ -273,12 +274,6 @@
 /* Immersive reading: the bars slide off the page. */
 .ereader-reader.is-immersive .ereader-toolbar {
   transform: translateY(-100%);
-  opacity: 0;
-  pointer-events: none;
-}
-
-.ereader-reader.is-immersive .ereader-footer {
-  transform: translateY(100%);
   opacity: 0;
   pointer-events: none;
 }
@@ -453,8 +448,8 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
   display: flex;
 }
 
-/* An EPUB's pages sit between the bars. The space stays when they hide,
-   because giving it to the book would reflow it. */
+/* An EPUB's pages fill the pane, less what it keeps clear of. That never
+   changes as the bars come and go, because changing it would reflow it. */
 .ereader-reader.is-epub .ereader-reader__viewport {
   padding-top: var(--ereader-top-h, 0px);
   /* At least clear of a phone's home indicator. */
@@ -985,11 +980,11 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
    at the right, the way the native app's popovers sit under their buttons. */
 .ereader-panel {
   position: absolute;
-  top: calc(var(--ereader-top-h, 44px) + var(--size-4-2));
+  top: calc(var(--ereader-toolbar-h, 44px) + var(--size-4-2));
   right: var(--size-4-2);
   z-index: var(--layer-popover);
   width: min(340px, calc(100% - 2 * var(--size-4-2)));
-  max-height: calc(100% - var(--ereader-top-h, 44px) - 2 * var(--size-4-4));
+  max-height: calc(100% - var(--ereader-toolbar-h, 44px) - 2 * var(--size-4-4));
   overflow-y: auto;
   padding: var(--size-4-3);
   background: var(--background-primary);
@@ -1253,36 +1248,43 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
   display: none;
 }
 
-/* The line under the page: chapter, time left, how far through the book. */
+/* The progress line: a thin bar of the whole book, with a tick at every
+   contents entry, and one label a tap cycles (chapter, book, time left in
+   either). It belongs to the reading view, so where the bars can hide it
+   shows only while they are hidden — the toolbar's page box is the progress
+   when they are out. The space it takes at the bottom is kept either way, so
+   showing it never moves the page. */
 .ereader-footer {
   position: absolute;
-  bottom: var(--ereader-bottom-inset, 0px);
+  bottom: 0;
   left: 0;
   right: 0;
   z-index: 3;
-  transition: transform 180ms ease, opacity 180ms ease;
   display: flex;
   align-items: center;
   gap: var(--size-4-3);
-  /* The home indicator's safe area, unless Obsidian's bar under the footer
-     already keeps it clear. */
-  padding: var(--size-4-1) var(--size-4-3)
-    calc(var(--size-4-1) + max(0px, env(safe-area-inset-bottom, 0px) - var(--ereader-bottom-inset, 0px)));
+  padding: var(--size-2-3) var(--size-4-4) calc(var(--size-2-3) + env(safe-area-inset-bottom, 0px));
   background: var(--background-primary);
-  border-top: var(--border-width) solid var(--background-modifier-border);
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 180ms ease;
 }
 
-/* The book's progress along the footer's top edge — the only progress bar
-   the reader has — with a tick where each chapter begins. */
+.ereader-reader.is-hideable:not(.is-immersive) .ereader-footer {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .ereader-footer__track {
-  position: absolute;
-  top: calc(-1 * var(--border-width));
-  left: 0;
-  right: 0;
+  position: relative;
+  flex: 1 1 auto;
   height: 3px;
+  border-radius: 2px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
   pointer-events: none;
 }
 
@@ -1299,6 +1301,7 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
   inset: 0;
 }
 
+/* A gap cut in the bar where an entry starts; a nested entry's is fainter. */
 .ereader-footer__tick {
   position: absolute;
   top: 0;
@@ -1308,30 +1311,18 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
   background: var(--background-primary);
 }
 
-.ereader-footer__chapter {
-  flex: 1 1 auto;
-  min-width: 0;
+.ereader-footer__tick.is-nested {
+  width: 1px;
+  margin-left: 0;
+  opacity: 0.5;
+}
+
+.ereader-footer__label {
+  flex: 0 1 auto;
+  max-width: 55%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* A tap anywhere on the footer switches its time left between the chapter and the book. */
-.ereader-footer {
-  cursor: pointer;
-  user-select: none;
-}
-
-.ereader-footer__right {
-  flex: 0 0 auto;
-  display: flex;
-  white-space: nowrap;
-}
-
-.ereader-footer__right > span:not(:empty) ~ span:not(:empty)::before {
-  content: "·";
-  margin: 0 var(--size-4-2);
-  color: var(--text-faint);
 }
 
 /* The chip over the page: "Jump to the furthest you read" on opening a book,
@@ -1340,7 +1331,8 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
 .ereader-chip {
   position: absolute;
   left: var(--size-4-3);
-  bottom: calc(var(--ereader-bottom-h, 28px) + var(--size-4-3));
+  /* Clear of the progress line, and of Obsidian's floating bar on a phone. */
+  bottom: calc(max(var(--ereader-bottom-h, 0px), var(--ereader-bottom-inset, 0px)) + var(--size-4-3));
   z-index: 5;
   display: flex;
   align-items: center;
@@ -1380,41 +1372,3 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
   min-height: 40px;
 }
 
-/* A phone keeps the footer to the essentials. */
-.is-phone .ereader-footer__chapter {
-  display: none;
-}
-
-.is-phone .ereader-footer {
-  justify-content: center;
-}
-
-/* A phone's footer sits under the toolbar instead: the bottom of the screen
-   belongs to Obsidian's floating bar and the home indicator, and with the
-   bars hidden the book has it to the very edge, the way a reading app does. */
-.is-phone .ereader-footer {
-  top: var(--ereader-toolbar-h, 0px);
-  bottom: auto;
-  padding: 2px var(--size-4-3) var(--size-4-1);
-  border-top: none;
-  border-bottom: var(--border-width) solid var(--background-modifier-border);
-}
-
-.is-phone .ereader-toolbar {
-  border-bottom: none;
-}
-
-.is-phone .ereader-footer__track {
-  top: auto;
-  bottom: calc(-1 * var(--border-width));
-}
-
-.is-phone .ereader-reader.is-immersive .ereader-footer {
-  transform: translateY(calc(-100% - var(--ereader-toolbar-h, 0px)));
-}
-
-/* With nothing at the bottom, the chip sits under the bars too. */
-.is-phone .ereader-chip {
-  top: calc(var(--ereader-top-h, 0px) + var(--size-4-2));
-  bottom: auto;
-}

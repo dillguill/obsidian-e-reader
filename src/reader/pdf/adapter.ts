@@ -784,6 +784,10 @@ export class PdfEngine implements ReaderEngine {
     );
   }
 
+  onPageGesture(_handler: (gesture: "turn" | "up" | "down") => void): void {
+    // A PDF scrolls, and the view follows the scrolling itself.
+  }
+
   highlightAt(_position: { x: number; y: number }): string | null {
     // The boxes are in the host document, where the view hit-tests them.
     return null;

@@ -17,6 +17,16 @@ export function swipeDirection(dx: number, dy: number, ms: number): "next" | "pr
   return dx < 0 ? "next" : "prev";
 }
 
+/**
+ * A swipe up or down, the paginated book's stand-in for scrolling: down
+ * (the finger travelling down the screen) brings the menu back, up puts it
+ * away. The same thresholds as a sideways swipe, turned on their side.
+ */
+export function verticalSwipe(dx: number, dy: number, ms: number): "up" | "down" | null {
+  if (ms > SWIPE_MAX_MS || Math.abs(dy) < SWIPE_MIN_PX || Math.abs(dy) < Math.abs(dx) * SWIPE_RATIO) return null;
+  return dy > 0 ? "down" : "up";
+}
+
 /** How far the page has to move one way before the toolbar follows. */
 const SCROLL_CHROME_PX = 24;
 /** Within this much of the top, the toolbar always shows. */

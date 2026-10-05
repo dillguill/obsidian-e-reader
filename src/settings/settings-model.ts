@@ -151,8 +151,8 @@ export interface ReaderPreferences {
   readingTheme: ReadingTheme;
   /** The line under the page with the chapter, time left and percentage. */
   showFooter: boolean;
-  /** Whether the footer's time left is for the chapter or the whole book; a tap on it switches. */
-  footerTime: FooterTime;
+  /** What the progress line's label shows; a tap on it moves to the next. */
+  footerInfo: FooterInfo;
   /** On a desktop, hide the toolbar and footer once the pointer has been still for a moment. */
   autoHideChrome: boolean;
   /**
@@ -207,7 +207,16 @@ export type EpubSpread = "auto" | "none";
  * re-applied whenever the pane is resized or the device rotated.
  */
 export type PdfFit = "none" | "width" | "height" | "page";
-export type FooterTime = "chapter" | "book";
+export type FooterInfo = "chapter" | "book" | "chapter-time" | "book-time";
+export const FOOTER_INFOS: readonly FooterInfo[] = ["chapter", "book", "chapter-time", "book-time"];
+
+function mergeFooterInfo(info: unknown, legacyTime: unknown, fallback: FooterInfo): FooterInfo {
+  if (typeof info === "string" && (FOOTER_INFOS as readonly string[]).includes(info)) return info as FooterInfo;
+  // 0.4.0-beta.14–18 switched only the time left between chapter and book.
+  if (legacyTime === "book") return "book-time";
+  if (legacyTime === "chapter") return "chapter-time";
+  return fallback;
+}
 
 export interface PdfView {
   scale: number;
@@ -339,7 +348,7 @@ export const DEFAULT_SETTINGS: Settings = {
     epubSpread: "auto",
     readingTheme: "auto",
     showFooter: true,
-    footerTime: "chapter",
+    footerInfo: "chapter",
     autoHideChrome: false,
     pdfBooks: {},
     paceEpubMs: DEFAULT_PACE_EPUB_MS,
@@ -537,7 +546,7 @@ function mergeReaderPreferences(saved: Record<string, unknown>, types: Annotatio
     epubSpread: from["epubSpread"] === "none" || from["epubSpread"] === "auto" ? from["epubSpread"] : defaults.epubSpread,
     readingTheme: isReadingTheme(from["readingTheme"]) ? from["readingTheme"] : defaults.readingTheme,
     showFooter: mergeBoolean(from["showFooter"], defaults.showFooter),
-    footerTime: from["footerTime"] === "book" || from["footerTime"] === "chapter" ? from["footerTime"] : defaults.footerTime,
+    footerInfo: mergeFooterInfo(from["footerInfo"], from["footerTime"], defaults.footerInfo),
     autoHideChrome: mergeBoolean(from["autoHideChrome"], defaults.autoHideChrome),
     pdfBooks: mergePdfBooks(from["pdfBooks"]),
     paceEpubMs: mergePace(from["paceEpubMs"], defaults.paceEpubMs),

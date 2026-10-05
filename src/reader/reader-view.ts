@@ -131,6 +131,8 @@ const SEARCH_MARK_ID = "ereader-search-hit";
 const SEARCH_MARK_COLOR = "#ff9f1a";
 /** On a desktop in focus mode, the bars hide after the pointer has been still this long. */
 const CHROME_IDLE_MS = 2500;
+/** How long the bars take to slide in or out (styles.css). */
+const CHROME_SLIDE_MS = 180;
 /** In focus mode on a phone, the text's distance from the status bar, and from the progress line. */
 const FOCUS_TOP_GAP_PX = 6;
 const FOCUS_BOTTOM_GAP_PX = 8;
@@ -210,6 +212,8 @@ export class ReaderView extends FileView {
   /** On a touchscreen, the bars follow the direction the page is scrolled. */
   private readonly scrollChrome = new ScrollChrome();
   /** The scroller `scrollChrome` last measured, so a different one starts it afresh. */
+  /** The last on-screen reach of the pane's title bar, for while it is slid away. */
+  private lastHeaderReach = 0;
   private scrollChromeEl: EventTarget | null = null;
   /** The desktop's countdown to hiding the bars. */
   private idleTimer: number | null = null;
@@ -1416,11 +1420,11 @@ export class ReaderView extends FileView {
     const phoneFocus = focus && Platform.isMobile;
     root.toggleClass("is-hideable", focus);
     this.containerEl.toggleClass("ereader-focus", phoneFocus);
-    const headerHeight = phoneFocus ? this.headerReach(root) : 0;
+    const safe = Platform.isMobile ? this.safeArea(root) : { top: 0, bottom: 0 };
+    const headerHeight = phoneFocus ? this.headerReach(root, safe.top) : 0;
     const toolbarHeight = root.querySelector<HTMLElement>(".ereader-toolbar")?.offsetHeight ?? 0;
     const footer = this.footer?.el;
     const footerHeight = focus && footer?.isShown() ? footer.offsetHeight : 0;
-    const safe = Platform.isMobile ? this.safeArea(root) : { top: 0, bottom: 0 };
     let top = toolbarHeight;
     let bottom = safe.bottom;
     if (phoneFocus) {
@@ -1441,14 +1445,20 @@ export class ReaderView extends FileView {
   }
 
   /**
-   * How far into the reader the pane's title bar reaches. Measured from
-   * layout rather than the screen, so it holds while the bar is slid away.
+   * How far into the reader the pane's floating title bar reaches, at least
+   * clear of the status bar. Obsidian places the bar with more than its
+   * layout box says, so it is measured on screen, while it is showing; slid
+   * away, it keeps the last measurement.
    */
-  private headerReach(root: HTMLElement): number {
+  private headerReach(root: HTMLElement, safeTop: number): number {
     const header = this.containerEl.querySelector<HTMLElement>(":scope > .view-header");
-    if (!header) return 0;
-    const rootTop = root.getBoundingClientRect().top - this.containerEl.getBoundingClientRect().top;
-    return Math.max(0, Math.round(header.offsetTop + header.offsetHeight - rootTop));
+    const body = this.containerEl.doc.body;
+    const shown = !body.hasClass("ereader-immersive-epub") && !body.hasClass("ereader-immersive-pdf");
+    // Not mid-slide either: the bar is measured where it comes to rest.
+    if (header && shown && header.getAnimations().length === 0) {
+      this.lastHeaderReach = Math.round(header.getBoundingClientRect().bottom - root.getBoundingClientRect().top);
+    }
+    return Math.max(safeTop, this.lastHeaderReach);
   }
 
   /**
@@ -1530,6 +1540,8 @@ export class ReaderView extends FileView {
     if (hidden && (this.search?.isOpen() || this.appearance?.isOpen())) return;
     root.toggleClass("is-immersive", hidden);
     this.syncAppChrome();
+    // The title bar slides back in; the toolbar settles under it once it has.
+    if (!hidden) window.setTimeout(() => this.measureChrome(), CHROME_SLIDE_MS + 50);
   }
 
   /**

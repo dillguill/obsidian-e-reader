@@ -142,33 +142,30 @@ export function formatDuration(ms: number): string {
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
 }
 
-/** What the progress line's label can show; a tap moves to the next. */
-export type ProgressInfo = "chapter" | "book" | "chapter-time" | "book-time";
+/** What the progress line's second row can show; a tap moves to the next. */
+export type ProgressInfo = "chapter" | "chapter-time" | "book-time";
 
 export interface ProgressFacts {
   /** The chapter the reader is in, when the contents place them in one. */
   chapter: { label: string; fraction: number; msLeft: number } | null;
-  /** How far through the book, already formatted ("18%"). */
-  bookPercent: string;
   bookMsLeft: number;
 }
 
 /**
- * The progress line's label. A chapter choice in a book whose contents do
- * not place the reader in a chapter falls back to the book's equivalent.
+ * The progress line's second row. A chapter choice in a book whose contents
+ * do not place the reader in a chapter falls back to the time left in the
+ * book, since the book's percentage is already on the row above.
  */
 export function progressInfoLabel(info: ProgressInfo, facts: ProgressFacts): string {
   const chapter = facts.chapter;
   switch (info) {
     case "chapter":
       if (chapter) return `${chapter.label} · ${Math.round(chapter.fraction * 100)}%`;
-      return facts.bookPercent;
+      return `${formatDuration(facts.bookMsLeft)} left in book`;
     case "chapter-time":
       if (chapter) return `${formatDuration(chapter.msLeft)} left in chapter`;
       return `${formatDuration(facts.bookMsLeft)} left in book`;
-    case "book-time":
-      return `${formatDuration(facts.bookMsLeft)} left in book`;
     default:
-      return facts.bookPercent;
+      return `${formatDuration(facts.bookMsLeft)} left in book`;
   }
 }

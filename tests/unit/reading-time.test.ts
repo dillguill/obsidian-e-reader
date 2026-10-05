@@ -73,20 +73,18 @@ describe("chapter progress", () => {
 describe("progressInfoLabel", () => {
   const facts = {
     chapter: { label: "The Desert", fraction: 0.424, msLeft: 12 * 60_000 },
-    bookPercent: "18%",
     bookMsLeft: (5 * 60 + 4) * 60_000,
   };
 
   it("shows each kind of progress", () => {
     expect(progressInfoLabel("chapter", facts)).toBe("The Desert · 42%");
-    expect(progressInfoLabel("book", facts)).toBe("18%");
     expect(progressInfoLabel("chapter-time", facts)).toBe("12 min left in chapter");
     expect(progressInfoLabel("book-time", facts)).toBe("5 h 4 min left in book");
   });
 
-  it("falls back to the book outside any chapter", () => {
+  it("falls back to the time left in the book outside any chapter", () => {
     const none = { ...facts, chapter: null };
-    expect(progressInfoLabel("chapter", none)).toBe("18%");
+    expect(progressInfoLabel("chapter", none)).toBe("5 h 4 min left in book");
     expect(progressInfoLabel("chapter-time", none)).toBe("5 h 4 min left in book");
   });
 });

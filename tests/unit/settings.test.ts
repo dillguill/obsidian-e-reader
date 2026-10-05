@@ -181,7 +181,8 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         readingTheme: "sepia",
         showFooter: false,
         footerInfo: "book-time",
-        autoHideChrome: true,
+        focusModeMobile: false,
+        focusModeDesktop: true,
         pdfBooks: { "Books/Scan.pdf": { scale: 1.5, fit: "none", spread: "odd" } },
         paceEpubMs: 50000,
         pacePdfMs: 90000,
@@ -250,8 +251,19 @@ describe("import settings", () => {
 describe("progress line label", () => {
   it("carries over the earlier chapter/book time switch", () => {
     expect(mergeSettings({ reader: { footerTime: "book" } }).reader.footerInfo).toBe("book-time");
-    expect(mergeSettings({ reader: { footerInfo: "book" } }).reader.footerInfo).toBe("book");
+    expect(mergeSettings({ reader: { footerInfo: "book" } }).reader.footerInfo).toBe("chapter");
     expect(mergeSettings({ reader: { footerInfo: "nonsense" } }).reader.footerInfo).toBe("chapter");
+  });
+});
+
+describe("focus mode", () => {
+  it("is on for phones and off for desktops by default", () => {
+    expect(mergeSettings({}).reader.focusModeMobile).toBe(true);
+    expect(mergeSettings({}).reader.focusModeDesktop).toBe(false);
+  });
+
+  it("carries over the desktop's earlier auto-hide", () => {
+    expect(mergeSettings({ reader: { autoHideChrome: true } }).reader.focusModeDesktop).toBe(true);
   });
 });
 
@@ -292,7 +304,8 @@ describe("remembered reader preferences", () => {
       readingTheme: "auto",
       showFooter: true,
       footerInfo: "chapter",
-      autoHideChrome: false,
+      focusModeMobile: true,
+      focusModeDesktop: false,
       pdfBooks: {},
       paceEpubMs: DEFAULT_PACE_EPUB_MS,
       pacePdfMs: DEFAULT_PACE_PDF_MS,

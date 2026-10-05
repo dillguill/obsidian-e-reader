@@ -243,14 +243,16 @@
 /* The toolbar and the progress line float over the page rather than taking
    space from it, so hiding them (a tap, scrolling, the desktop's idle timer)
    never resizes the page: a resize reflows an EPUB and refits a PDF, and
-   would do both every time they came and went. Where the bars can hide, the
-   book is laid out over the whole pane and the toolbar covers its top while
-   the menu is out, the way a reading app's does; where they cannot, the page
-   keeps clear of it. The view publishes what the page keeps clear of as
-   --ereader-top-h and --ereader-bottom-h (the progress line's space). */
+   would do both every time they came and went. In focus mode the book is
+   laid out over the whole pane and the menu covers its top while it is out,
+   the way a reading app's does; out of it, the page keeps clear of the
+   toolbar. The view publishes what the page keeps clear of as
+   --ereader-top-h and --ereader-bottom-h, and on a phone in focus mode the
+   height of the pane's title bar, which then floats too, as
+   --ereader-header-h. */
 .ereader-toolbar {
   position: absolute;
-  top: 0;
+  top: var(--ereader-header-h, 0px);
   left: 0;
   right: 0;
   z-index: 3;
@@ -273,26 +275,46 @@
 
 /* Immersive reading: the bars slide off the page. */
 .ereader-reader.is-immersive .ereader-toolbar {
-  transform: translateY(-100%);
+  transform: translateY(calc(-100% - var(--ereader-header-h, 0px)));
   opacity: 0;
   pointer-events: none;
 }
 
-/* Obsidian's own bar along the bottom of a phone goes with the reader's.
-   Under a PDF it gives its space to the page, which only scrolls further;
-   under an EPUB it keeps it, because giving it away would reflow the book. */
+/* On a phone in focus mode the pane's title bar floats over the top of the
+   page instead of pushing it down, so the page can start just under the
+   status bar. */
+.workspace-leaf-content.ereader-focus {
+  position: relative;
+}
+
+.workspace-leaf-content.ereader-focus > .view-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 4;
+}
+
+/* ...and Obsidian's bar along the bottom floats over the bottom of it, where
+   it does not already. */
+body.ereader-focus-navbar .mobile-navbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--layer-status-bar);
+}
+
+/* In the reading view both go with the reader's own bars, slid away and
+   faded, so nothing under them moves. */
+body.ereader-immersive-epub .mobile-navbar,
 body.ereader-immersive-pdf .mobile-navbar {
-  display: none;
-}
-
-body.ereader-immersive-epub .mobile-navbar {
+  transform: translateY(100%);
   opacity: 0;
   pointer-events: none;
+  transition: transform 180ms ease, opacity 180ms ease;
 }
 
-/* The pane's own title bar goes too, the way Obsidian hides it (and the bar
-   above) while a note is scrolled: slid up and faded, so nothing under it
-   moves. */
 body.ereader-immersive-epub .workspace-leaf.mod-active .view-header,
 body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
   transform: translateY(-100%);
@@ -452,8 +474,16 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
    changes as the bars come and go, because changing it would reflow it. */
 .ereader-reader.is-epub .ereader-reader__viewport {
   padding-top: var(--ereader-top-h, 0px);
-  /* At least clear of a phone's home indicator. */
-  padding-bottom: max(var(--ereader-bottom-h, 0px), env(safe-area-inset-bottom, 0px));
+  padding-bottom: var(--ereader-bottom-h, 0px);
+}
+
+/* Reads a phone's safe-area insets for the view to measure against. */
+.ereader-safe-probe {
+  position: fixed;
+  visibility: hidden;
+  pointer-events: none;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* A book opening. */
@@ -611,7 +641,7 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
      the padding keeps the first and last pages clear of them, and a page
      jumped to lands below the toolbar. */
   padding-top: calc(var(--ereader-top-h, 0px) + var(--size-4-4));
-  padding-bottom: calc(max(var(--ereader-bottom-h, 0px), env(safe-area-inset-bottom, 0px)) + var(--size-4-4));
+  padding-bottom: calc(var(--ereader-bottom-h, 0px) + var(--size-4-4));
   scroll-padding-top: var(--ereader-top-h, 0px);
 }
 
@@ -1249,21 +1279,24 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
 }
 
 /* The progress line: a thin bar of the whole book, with a tick at every
-   contents entry, and one label a tap cycles (chapter, book, time left in
-   either). It belongs to the reading view, so where the bars can hide it
-   shows only while they are hidden — the toolbar's page box is the progress
-   when they are out. The space it takes at the bottom is kept either way, so
-   showing it never moves the page. */
+   contents entry, and the book's percentage beside it; under them, one label
+   a tap cycles (the chapter, the time left in it, the time left in the
+   book). It belongs to focus mode's reading view, so it shows only while the
+   menu is hidden — the toolbar's page box is the progress when it is out.
+   The space it takes at the bottom is kept either way, so showing it never
+   moves the page. */
 .ereader-footer {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
   z-index: 3;
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto;
   align-items: center;
-  gap: var(--size-4-3);
-  padding: var(--size-2-3) var(--size-4-4) calc(var(--size-2-3) + env(safe-area-inset-bottom, 0px));
+  column-gap: var(--size-4-3);
+  row-gap: var(--size-2-1);
+  padding: var(--size-2-3) var(--size-4-4) calc(var(--size-2-3) + var(--ereader-safe-bottom, 0px));
   background: var(--background-primary);
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
@@ -1273,6 +1306,10 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
   transition: opacity 180ms ease;
 }
 
+.ereader-reader:not(.is-hideable) .ereader-footer {
+  display: none;
+}
+
 .ereader-reader.is-hideable:not(.is-immersive) .ereader-footer {
   opacity: 0;
   pointer-events: none;
@@ -1280,7 +1317,6 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
 
 .ereader-footer__track {
   position: relative;
-  flex: 1 1 auto;
   height: 3px;
   border-radius: 2px;
   background: var(--background-modifier-border);
@@ -1317,9 +1353,15 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
   opacity: 0.5;
 }
 
+.ereader-footer__percent {
+  min-width: 3ch;
+  text-align: right;
+}
+
 .ereader-footer__label {
-  flex: 0 1 auto;
-  max-width: 55%;
+  grid-column: 1 / -1;
+  text-align: center;
+  font-size: var(--font-ui-smaller);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

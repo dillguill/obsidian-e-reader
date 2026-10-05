@@ -245,7 +245,8 @@
    resizes the page: a resize reflows an EPUB and refits a PDF, and would do
    both every time they came and went. The page keeps clear of them instead —
    see the viewport and PDF rules below, which read the heights the view
-   publishes as --ereader-toolbar-h and --ereader-footer-h. */
+   publishes: --ereader-top-h and --ereader-bottom-h for what covers the top
+   and the bottom of the page. */
 .ereader-toolbar {
   position: absolute;
   top: 0;
@@ -413,7 +414,7 @@ body.ereader-immersive-epub .mobile-navbar {
 .ereader-popup.is-docked {
   left: 50%;
   top: auto;
-  bottom: calc(var(--size-4-4) + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--size-4-4) + max(env(safe-area-inset-bottom, 0px), var(--ereader-bottom-inset, 0px)));
   transform: translateX(-50%);
   max-width: calc(100% - 2 * var(--size-4-4));
   overflow-x: auto;
@@ -444,8 +445,9 @@ body.ereader-immersive-epub .mobile-navbar {
 /* An EPUB's pages sit between the bars. The space stays when they hide,
    because giving it to the book would reflow it. */
 .ereader-reader.is-epub .ereader-reader__viewport {
-  padding-top: var(--ereader-toolbar-h, 0px);
-  padding-bottom: var(--ereader-footer-h, 0px);
+  padding-top: var(--ereader-top-h, 0px);
+  /* At least clear of a phone's home indicator. */
+  padding-bottom: max(var(--ereader-bottom-h, 0px), env(safe-area-inset-bottom, 0px));
 }
 
 /* A book opening. */
@@ -602,9 +604,9 @@ body.ereader-immersive-epub .mobile-navbar {
   /* A PDF scrolls under the bars, so it has the whole pane once they hide;
      the padding keeps the first and last pages clear of them, and a page
      jumped to lands below the toolbar. */
-  padding-top: calc(var(--ereader-toolbar-h, 0px) + var(--size-4-4));
-  padding-bottom: calc(var(--ereader-footer-h, 0px) + var(--size-4-4));
-  scroll-padding-top: var(--ereader-toolbar-h, 0px);
+  padding-top: calc(var(--ereader-top-h, 0px) + var(--size-4-4));
+  padding-bottom: calc(max(var(--ereader-bottom-h, 0px), env(safe-area-inset-bottom, 0px)) + var(--size-4-4));
+  scroll-padding-top: var(--ereader-top-h, 0px);
 }
 
 .ereader-reader__pdf-page {
@@ -972,11 +974,11 @@ body.ereader-immersive-epub .mobile-navbar {
    at the right, the way the native app's popovers sit under their buttons. */
 .ereader-panel {
   position: absolute;
-  top: calc(var(--ereader-toolbar-h, 44px) + var(--size-4-2));
+  top: calc(var(--ereader-top-h, 44px) + var(--size-4-2));
   right: var(--size-4-2);
   z-index: var(--layer-popover);
   width: min(340px, calc(100% - 2 * var(--size-4-2)));
-  max-height: calc(100% - var(--ereader-toolbar-h, 44px) - 2 * var(--size-4-4));
+  max-height: calc(100% - var(--ereader-top-h, 44px) - 2 * var(--size-4-4));
   overflow-y: auto;
   padding: var(--size-4-3);
   background: var(--background-primary);
@@ -1327,7 +1329,7 @@ body.ereader-immersive-epub .mobile-navbar {
 .ereader-chip {
   position: absolute;
   left: var(--size-4-3);
-  bottom: calc(var(--ereader-footer-h, 28px) + var(--size-4-3));
+  bottom: calc(var(--ereader-bottom-h, 28px) + var(--size-4-3));
   z-index: 5;
   display: flex;
   align-items: center;
@@ -1374,4 +1376,34 @@ body.ereader-immersive-epub .mobile-navbar {
 
 .is-phone .ereader-footer {
   justify-content: center;
+}
+
+/* A phone's footer sits under the toolbar instead: the bottom of the screen
+   belongs to Obsidian's floating bar and the home indicator, and with the
+   bars hidden the book has it to the very edge, the way a reading app does. */
+.is-phone .ereader-footer {
+  top: var(--ereader-toolbar-h, 0px);
+  bottom: auto;
+  padding: 2px var(--size-4-3) var(--size-4-1);
+  border-top: none;
+  border-bottom: var(--border-width) solid var(--background-modifier-border);
+}
+
+.is-phone .ereader-toolbar {
+  border-bottom: none;
+}
+
+.is-phone .ereader-footer__track {
+  top: auto;
+  bottom: calc(-1 * var(--border-width));
+}
+
+.is-phone .ereader-reader.is-immersive .ereader-footer {
+  transform: translateY(calc(-100% - var(--ereader-toolbar-h, 0px)));
+}
+
+/* With nothing at the bottom, the chip sits under the bars too. */
+.is-phone .ereader-chip {
+  top: calc(var(--ereader-top-h, 0px) + var(--size-4-2));
+  bottom: auto;
 }

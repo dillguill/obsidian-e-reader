@@ -295,6 +295,17 @@ body.ereader-immersive-epub .mobile-navbar {
   pointer-events: none;
 }
 
+/* The pane's own title bar goes too, the way Obsidian hides it (and the bar
+   above) while a note is scrolled: slid up and faded, so nothing under it
+   moves. */
+body.ereader-immersive-epub .workspace-leaf.mod-active .view-header,
+body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
 /* On a desktop with the bars hidden, the top edge of the pane brings them
    back when the pointer reaches it. */
 .ereader-reader__reveal {

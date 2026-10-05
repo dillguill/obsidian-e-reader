@@ -1408,12 +1408,18 @@ export class ReaderView extends FileView {
     const root = this.contentRoot;
     if (!root) return;
     const toolbar = root.querySelector<HTMLElement>(".ereader-toolbar");
+    const toolbarHeight = toolbar?.offsetHeight ?? 0;
+    const footerHeight = this.footer?.el.offsetHeight ?? 0;
     const inset = this.bottomInset(root);
+    // On a phone the footer sits under the toolbar (styles.css), leaving the
+    // bottom of the screen to the book and to Obsidian's floating bar.
+    const footerOnTop = Platform.isPhone;
     root.setCssProps({
-      "--ereader-toolbar-h": `${toolbar?.offsetHeight ?? 0}px`,
+      "--ereader-toolbar-h": `${toolbarHeight}px`,
       "--ereader-bottom-inset": `${inset}px`,
+      "--ereader-top-h": `${toolbarHeight + (footerOnTop ? footerHeight : 0)}px`,
       // Everything that keeps clear of the footer keeps clear of what is under it too.
-      "--ereader-footer-h": `${(this.footer?.el.offsetHeight ?? 0) + inset}px`,
+      "--ereader-bottom-h": `${footerOnTop ? 0 : footerHeight + inset}px`,
     });
   }
 

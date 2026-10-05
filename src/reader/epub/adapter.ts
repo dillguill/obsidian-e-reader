@@ -33,7 +33,7 @@ import type {
 } from "../engine";
 import { findMatches, hitFromText, yieldToUi } from "../search";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
-import { swipeDirection } from "../gestures";
+import { swipeDirection, verticalSwipe } from "../gestures";
 import { fractionToPercent } from "../progress";
 import { type Typography, marginPadding, typographyCss } from "../typography";
 import { clampScale } from "../zoom";
@@ -351,6 +351,7 @@ export class EpubEngine implements ReaderEngine {
   private lastCfi: string | null = null;
   private contextMenuHandler: ((position: { x: number; y: number }) => boolean) | null = null;
   private tapHandler: ((position: { x: number; y: number }) => void) | null = null;
+  private pageGestureHandler: ((gesture: "turn" | "up" | "down") => void) | null = null;
   private selectionEndHandler: (() => void) | null = null;
   private selectionChangeHandler: (() => void) | null = null;
   private keyDownHandler: ((event: KeyboardEvent) => boolean) | null = null;
@@ -759,8 +760,17 @@ export class EpubEngine implements ReaderEngine {
         start = null;
         const touch = event.changedTouches[0];
         if (!from || !touch || this.flowMode !== "paginated" || event.touches.length > 0 || selecting()) return;
-        const direction = swipeDirection(touch.clientX - from.x, touch.clientY - from.y, Date.now() - from.at);
-        if (direction) void this.turn(direction);
+        const dx = touch.clientX - from.x;
+        const dy = touch.clientY - from.y;
+        const ms = Date.now() - from.at;
+        const direction = swipeDirection(dx, dy, ms);
+        if (direction) {
+          void this.turn(direction);
+          this.pageGestureHandler?.("turn");
+          return;
+        }
+        const vertical = verticalSwipe(dx, dy, ms);
+        if (vertical) this.pageGestureHandler?.(vertical);
       }) as EventListener,
       { passive: true, signal },
     );
@@ -788,14 +798,20 @@ export class EpubEngine implements ReaderEngine {
       const fraction = pane && pane.width > 0 ? (position.x - pane.left) / pane.width : width > 0 ? x / width : 0.5;
       if (fraction < TAP_ZONE) {
         void this.turn("prev");
+        this.pageGestureHandler?.("turn");
         return;
       }
       if (fraction > 1 - TAP_ZONE) {
         void this.turn("next");
+        this.pageGestureHandler?.("turn");
         return;
       }
     }
     this.tapHandler?.(position);
+  }
+
+  onPageGesture(handler: (gesture: "turn" | "up" | "down") => void): void {
+    this.pageGestureHandler = handler;
   }
 
   highlightAt(position: { x: number; y: number }): string | null {
@@ -1297,6 +1313,7 @@ export class EpubEngine implements ReaderEngine {
     this.listeners = null;
     this.contextMenuHandler = null;
     this.tapHandler = null;
+    this.pageGestureHandler = null;
     this.selectionEndHandler = null;
     this.selectionChangeHandler = null;
     this.keyDownHandler = null;

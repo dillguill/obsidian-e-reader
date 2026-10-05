@@ -121,6 +121,13 @@ export interface ReaderEngine {
    */
   highlightAt(position: { x: number; y: number }): string | null;
   /**
+   * A paginated book's page was turned by the reader (a tap at the edge, a
+   * swipe), or the reader swiped up or down on it — the gestures that stand
+   * in for scrolling where nothing scrolls. An engine whose pages scroll
+   * never calls it.
+   */
+  onPageGesture(handler: (gesture: "turn" | "up" | "down") => void): void;
+  /**
    * Registers a handler for the end of a selection gesture inside the
    * rendered document — a mouse or touch release, NOT a settled selection.
    * The selection popup opens on the release itself rather than on a

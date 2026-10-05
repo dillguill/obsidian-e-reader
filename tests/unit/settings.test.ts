@@ -180,7 +180,7 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         epubSpread: "none",
         readingTheme: "sepia",
         showFooter: false,
-        footerTime: "book",
+        footerInfo: "book-time",
         autoHideChrome: true,
         pdfBooks: { "Books/Scan.pdf": { scale: 1.5, fit: "none", spread: "odd" } },
         paceEpubMs: 50000,
@@ -247,6 +247,14 @@ describe("import settings", () => {
   });
 });
 
+describe("progress line label", () => {
+  it("carries over the earlier chapter/book time switch", () => {
+    expect(mergeSettings({ reader: { footerTime: "book" } }).reader.footerInfo).toBe("book-time");
+    expect(mergeSettings({ reader: { footerInfo: "book" } }).reader.footerInfo).toBe("book");
+    expect(mergeSettings({ reader: { footerInfo: "nonsense" } }).reader.footerInfo).toBe("chapter");
+  });
+});
+
 describe("per-PDF views", () => {
   const view = { scale: 1.2, fit: "none" as const, spread: "single" as const };
 
@@ -283,7 +291,7 @@ describe("remembered reader preferences", () => {
       epubSpread: "auto",
       readingTheme: "auto",
       showFooter: true,
-      footerTime: "chapter",
+      footerInfo: "chapter",
       autoHideChrome: false,
       pdfBooks: {},
       paceEpubMs: DEFAULT_PACE_EPUB_MS,

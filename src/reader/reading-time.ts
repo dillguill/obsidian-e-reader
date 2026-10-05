@@ -82,18 +82,19 @@ export function chapterAt(starts: readonly ChapterStart[], current: number, tota
 }
 
 /**
- * Where each top-level chapter starts along the book's progress bar, as
- * 0–1. The first chapter's start is the start of the bar and gets no tick, and
- * two chapters starting on the same unit get one.
+ * Where every contents entry starts along the book's progress bar, as 0–1,
+ * with the depth of the shallowest entry starting there. The start of the
+ * bar gets no tick, and entries starting on the same unit share one.
  */
-export function chapterTicks(starts: readonly ChapterStart[], total: number): number[] {
+export function chapterTicks(starts: readonly ChapterStart[], total: number): { at: number; depth: number }[] {
   if (total <= 1) return [];
-  const units = new Set<number>();
+  const depths = new Map<number, number>();
   for (const entry of starts) {
-    if ((entry.depth ?? 0) !== 0 || entry.unit === null || entry.unit <= 1 || entry.unit > total) continue;
-    units.add(entry.unit);
+    if (entry.unit === null || entry.unit <= 1 || entry.unit > total) continue;
+    const depth = entry.depth ?? 0;
+    depths.set(entry.unit, Math.min(depth, depths.get(entry.unit) ?? depth));
   }
-  return [...units].sort((a, b) => a - b).map((unit) => (unit - 1) / (total - 1));
+  return [...depths.entries()].sort((a, b) => a[0] - b[0]).map(([unit, depth]) => ({ at: (unit - 1) / (total - 1), depth }));
 }
 
 /**
@@ -139,4 +140,35 @@ export function formatDuration(ms: number): string {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}
+
+/** What the progress line's label can show; a tap moves to the next. */
+export type ProgressInfo = "chapter" | "book" | "chapter-time" | "book-time";
+
+export interface ProgressFacts {
+  /** The chapter the reader is in, when the contents place them in one. */
+  chapter: { label: string; fraction: number; msLeft: number } | null;
+  /** How far through the book, already formatted ("18%"). */
+  bookPercent: string;
+  bookMsLeft: number;
+}
+
+/**
+ * The progress line's label. A chapter choice in a book whose contents do
+ * not place the reader in a chapter falls back to the book's equivalent.
+ */
+export function progressInfoLabel(info: ProgressInfo, facts: ProgressFacts): string {
+  const chapter = facts.chapter;
+  switch (info) {
+    case "chapter":
+      if (chapter) return `${chapter.label} · ${Math.round(chapter.fraction * 100)}%`;
+      return facts.bookPercent;
+    case "chapter-time":
+      if (chapter) return `${formatDuration(chapter.msLeft)} left in chapter`;
+      return `${formatDuration(facts.bookMsLeft)} left in book`;
+    case "book-time":
+      return `${formatDuration(facts.bookMsLeft)} left in book`;
+    default:
+      return facts.bookPercent;
+  }
 }

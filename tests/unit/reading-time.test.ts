@@ -5,6 +5,7 @@ import {
   chapterFraction,
   chapterTicks,
   adjacentChapter,
+  progressInfoLabel,
   formatDuration,
   nextPace,
   unitsLeft,
@@ -69,6 +70,27 @@ describe("chapter progress", () => {
   });
 });
 
+describe("progressInfoLabel", () => {
+  const facts = {
+    chapter: { label: "The Desert", fraction: 0.424, msLeft: 12 * 60_000 },
+    bookPercent: "18%",
+    bookMsLeft: (5 * 60 + 4) * 60_000,
+  };
+
+  it("shows each kind of progress", () => {
+    expect(progressInfoLabel("chapter", facts)).toBe("The Desert · 42%");
+    expect(progressInfoLabel("book", facts)).toBe("18%");
+    expect(progressInfoLabel("chapter-time", facts)).toBe("12 min left in chapter");
+    expect(progressInfoLabel("book-time", facts)).toBe("5 h 4 min left in book");
+  });
+
+  it("falls back to the book outside any chapter", () => {
+    const none = { ...facts, chapter: null };
+    expect(progressInfoLabel("chapter", none)).toBe("18%");
+    expect(progressInfoLabel("chapter-time", none)).toBe("5 h 4 min left in book");
+  });
+});
+
 describe("adjacentChapter", () => {
   const starts = [
     { label: "One", unit: 1 },
@@ -92,15 +114,18 @@ describe("adjacentChapter", () => {
 });
 
 describe("chapterTicks", () => {
-  it("marks each top-level chapter after the first along the bar", () => {
+  it("marks every entry after the start of the book, with its depth", () => {
     const starts = [
       { label: "One", unit: 1, depth: 0 },
-      { label: "One, part A", unit: 5, depth: 1 },
+      { label: "One, part A", unit: 26, depth: 1 },
       { label: "Two", unit: 51, depth: 0 },
-      { label: "Two again", unit: 51, depth: 0 },
+      { label: "Two, part A", unit: 51, depth: 1 },
       { label: "Unplaced", unit: null, depth: 0 },
     ];
-    expect(chapterTicks(starts, 101)).toEqual([0.5]);
+    expect(chapterTicks(starts, 101)).toEqual([
+      { at: 0.25, depth: 1 },
+      { at: 0.5, depth: 0 },
+    ]);
   });
 
   it("has nothing to mark in a one-unit book", () => {

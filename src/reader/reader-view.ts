@@ -52,15 +52,15 @@ import {
   type Typography,
 } from "./typography";
 import { ScrollChrome } from "./gestures";
-import { rememberPdfView } from "../settings/settings-model";
+import { FOOTER_INFOS, rememberPdfView } from "../settings/settings-model";
 import {
   type ChapterStart,
   adjacentChapter,
   chapterAt,
   chapterFraction,
   chapterTicks,
-  formatDuration,
   nextPace,
+  progressInfoLabel,
   unitsLeft,
 } from "./reading-time";
 
@@ -182,9 +182,7 @@ export class ReaderView extends FileView {
   private searchMark: PaintedHighlight | null = null;
   private footer: {
     el: HTMLElement;
-    chapterEl: HTMLElement;
-    chapterLeftEl: HTMLElement;
-    bookEl: HTMLElement;
+    labelEl: HTMLElement;
     barEl: HTMLElement;
     ticksEl: HTMLElement;
     /** The chapter list the ticks were last drawn for. */
@@ -552,6 +550,11 @@ export class ReaderView extends FileView {
     engine.onSelectionChange(() => this.onSelectionChange());
     engine.onKeyDown((event) => this.handleKey(event));
     engine.onLinkFollowed(() => this.recordJump());
+    // A paginated book has nothing to scroll: turning the page or swiping up
+    // goes into the reading view, and swiping down brings the menu back.
+    engine.onPageGesture((gesture) => {
+      if (Platform.isMobile) this.setChromeHidden(gesture !== "down");
+    });
     engine.onChange(() => {
       this.dropJumpOfferIfReached();
       this.settleBack();
@@ -737,6 +740,7 @@ export class ReaderView extends FileView {
                 const reader = this.getSettings().reader;
                 reader.autoHideChrome = !reader.autoHideChrome;
                 this.saveSettings();
+                this.measureChrome();
                 if (!reader.autoHideChrome) this.setChromeHidden(false);
                 this.noteActivity();
               },
@@ -1206,29 +1210,26 @@ export class ReaderView extends FileView {
 
   private buildFooter(root: HTMLElement): NonNullable<ReaderView["footer"]> {
     const el = root.createDiv({ cls: "ereader-footer" });
-    // How far through the book, with a tick where each chapter starts.
+    // The whole book, with a tick wherever a contents entry starts.
     const trackEl = el.createDiv({ cls: "ereader-footer__track", attr: { "aria-hidden": "true" } });
     const barEl = trackEl.createDiv({ cls: "ereader-footer__bar" });
     const ticksEl = trackEl.createDiv({ cls: "ereader-footer__ticks" });
-    const chapterEl = el.createSpan({ cls: "ereader-footer__chapter" });
-    const rightEl = el.createDiv({ cls: "ereader-footer__right" });
-    const chapterLeftEl = rightEl.createSpan({ cls: "ereader-footer__chapter-left" });
-    const bookEl = rightEl.createSpan({ cls: "ereader-footer__book" });
-    // A tap switches the time left between the chapter and the whole book.
+    const labelEl = el.createSpan({ cls: "ereader-footer__label" });
+    // A tap moves the label on to the next kind of progress.
     el.addEventListener("click", () => {
       const reader = this.getSettings().reader;
-      reader.footerTime = reader.footerTime === "chapter" ? "book" : "chapter";
+      reader.footerInfo = FOOTER_INFOS[(FOOTER_INFOS.indexOf(reader.footerInfo) + 1) % FOOTER_INFOS.length] ?? "chapter";
       this.saveSettings();
       this.updateFooter();
     });
     el.hide();
-    return { el, chapterEl, chapterLeftEl, bookEl, barEl, ticksEl, ticksFor: null };
+    return { el, labelEl, barEl, ticksEl, ticksFor: null };
   }
 
   /**
-   * The line under the page: the chapter, the time left in it, and how far
-   * through the book. Time is units left × the pace learned from the
-   * reader's own page turns (reading-time.ts).
+   * The progress line: the book as a bar, and a label showing the chapter's
+   * progress, the book's, or the time left in either. Time is units left ×
+   * the pace learned from the reader's own page turns (reading-time.ts).
    */
   private updateFooter(): void {
     const footer = this.footer;
@@ -1247,42 +1248,42 @@ export class ReaderView extends FileView {
     const pace = this.pace();
     const starts = this.chapterStartsFor(engine, pages.total);
     const chapter = chapterAt(starts, pages.current, pages.total);
-    const bookLeft = formatDuration(unitsLeft(pages.current, pages.total + 1) * pace);
     const progress = engine.progress();
-    const percent = progressLabel(pages, progress);
-    footer.chapterEl.setText(chapter?.label ?? "");
-    footer.bookEl.setText(percent);
     footer.barEl.setCssStyles({ width: `${Math.min(100, Math.max(0, progress))}%` });
     if (footer.ticksFor !== starts) {
       footer.ticksFor = starts;
       footer.ticksEl.empty();
-      for (const at of chapterTicks(starts, pages.total)) {
-        footer.ticksEl.createDiv({ cls: "ereader-footer__tick" }).setCssStyles({ left: `${at * 100}%` });
+      for (const tick of chapterTicks(starts, pages.total)) {
+        const el = footer.ticksEl.createDiv({ cls: "ereader-footer__tick" });
+        el.toggleClass("is-nested", tick.depth > 0);
+        el.setCssStyles({ left: `${tick.at * 100}%` });
       }
     }
-    const switchHint = "Tap to switch between the chapter and the book";
-    if (chapter && this.getSettings().reader.footerTime === "chapter") {
-      const fraction = chapterFraction(chapter, pages.current);
-      footer.chapterLeftEl.setText(`${formatDuration(unitsLeft(pages.current, chapter.end) * pace)} left in chapter`);
-      setTooltip(footer.el, `${Math.round(fraction * 100)}% through this chapter · about ${bookLeft} left in the book. ${switchHint}`, { placement: "top" });
-    } else {
-      footer.chapterLeftEl.setText(`${bookLeft} left in book`);
-      setTooltip(footer.el, chapter ? `${percent} through the book. ${switchHint}` : `${percent} through the book`, { placement: "top" });
-    }
+    const facts = {
+      chapter: chapter
+        ? {
+            label: chapter.label.trim(),
+            fraction: chapterFraction(chapter, pages.current),
+            msLeft: unitsLeft(pages.current, chapter.end) * pace,
+          }
+        : null,
+      bookPercent: progressLabel(pages, progress),
+      bookMsLeft: unitsLeft(pages.current, pages.total + 1) * pace,
+    };
+    footer.labelEl.setText(progressInfoLabel(this.getSettings().reader.footerInfo, facts));
+    setTooltip(footer.el, "Tap for the chapter, the book, or the time left in either", { placement: "top" });
   }
 
   /**
-   * The footer before there is anything to put in it: while the book opens,
-   * and while an EPUB's pages are counted in the background. Showing it at
-   * once also means its height is known before the page is laid out.
+   * The progress line before there is anything to put in it: while the book
+   * opens, and while an EPUB's pages are counted in the background. Showing
+   * it at once also means its height is known before the page is laid out.
    */
   private showFooterPlaceholder(): void {
     const footer = this.footer;
     if (!footer || !this.getSettings().reader.showFooter) return;
     footer.el.show();
-    footer.chapterEl.setText("");
-    footer.chapterLeftEl.setText("Calculating time left…");
-    footer.bookEl.setText("");
+    footer.labelEl.setText("Calculating…");
     footer.barEl.setCssStyles({ width: "0" });
     footer.ticksEl.empty();
     footer.ticksFor = null;
@@ -1411,16 +1412,23 @@ export class ReaderView extends FileView {
     const toolbarHeight = toolbar?.offsetHeight ?? 0;
     const footerHeight = this.footer?.el.offsetHeight ?? 0;
     const inset = this.bottomInset(root);
-    // On a phone the footer sits under the toolbar (styles.css), leaving the
-    // bottom of the screen to the book and to Obsidian's floating bar.
-    const footerOnTop = Platform.isPhone;
+    // Where the bars come and go, the book is laid out over the whole pane and
+    // the toolbar covers its top while the menu is out, as in a reading app;
+    // the progress line belongs to the reading view (styles.css). Where they
+    // stay, the page keeps clear of the toolbar and the line is always shown.
+    const hideable = this.chromeCanHide();
+    root.toggleClass("is-hideable", hideable);
     root.setCssProps({
       "--ereader-toolbar-h": `${toolbarHeight}px`,
       "--ereader-bottom-inset": `${inset}px`,
-      "--ereader-top-h": `${toolbarHeight + (footerOnTop ? footerHeight : 0)}px`,
-      // Everything that keeps clear of the footer keeps clear of what is under it too.
-      "--ereader-bottom-h": `${footerOnTop ? 0 : footerHeight + inset}px`,
+      "--ereader-top-h": `${hideable ? 0 : toolbarHeight}px`,
+      "--ereader-bottom-h": `${footerHeight}px`,
     });
+  }
+
+  /** Whether the bars hide while reading: always on a touchscreen, and on a desktop with auto-hide on. */
+  private chromeCanHide(): boolean {
+    return Platform.isMobile || this.getSettings().reader.autoHideChrome;
   }
 
   /**

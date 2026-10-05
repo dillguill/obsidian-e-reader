@@ -116,13 +116,6 @@ export function adjacentChapter(starts: readonly ChapterStart[], current: number
   return found;
 }
 
-/** 0–1 through a chapter. */
-export function chapterFraction(chapter: ChapterSpan, current: number): number {
-  const length = chapter.end - chapter.start;
-  if (length <= 0) return 1;
-  return Math.min(1, Math.max(0, (current - chapter.start) / length));
-}
-
 /**
  * Units still to read, counting the one on screen as half read: the reader is
  * somewhere inside it, and counting it whole or not at all makes the last
@@ -147,7 +140,7 @@ export type ProgressInfo = "chapter" | "chapter-time" | "book-time";
 
 export interface ProgressFacts {
   /** The chapter the reader is in, when the contents place them in one. */
-  chapter: { label: string; fraction: number; msLeft: number } | null;
+  chapter: { label: string; msLeft: number } | null;
   bookMsLeft: number;
 }
 
@@ -160,7 +153,7 @@ export function progressInfoLabel(info: ProgressInfo, facts: ProgressFacts): str
   const chapter = facts.chapter;
   switch (info) {
     case "chapter":
-      if (chapter) return `${chapter.label} · ${Math.round(chapter.fraction * 100)}%`;
+      if (chapter) return chapter.label;
       return `${formatDuration(facts.bookMsLeft)} left in book`;
     case "chapter-time":
       if (chapter) return `${formatDuration(chapter.msLeft)} left in chapter`;

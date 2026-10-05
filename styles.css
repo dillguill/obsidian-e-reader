@@ -247,12 +247,13 @@
    laid out over the whole pane and the menu covers its top while it is out,
    the way a reading app's does; out of it, the page keeps clear of the
    toolbar. The view publishes what the page keeps clear of as
-   --ereader-top-h and --ereader-bottom-h, and on a phone in focus mode the
-   height of the pane's title bar, which then floats too, as
-   --ereader-header-h. */
+   --ereader-top-h and --ereader-bottom-h, and on a phone in focus mode how
+   far down the pane's floating title bar reaches as --ereader-header-h: the
+   toolbar's background runs up behind it, so the page never shows between
+   the two. */
 .ereader-toolbar {
   position: absolute;
-  top: var(--ereader-header-h, 0px);
+  top: 0;
   left: 0;
   right: 0;
   z-index: 3;
@@ -263,7 +264,7 @@
   align-items: stretch;
   justify-content: space-between;
   gap: var(--size-4-2);
-  padding: var(--size-4-1) var(--size-4-3);
+  padding: calc(var(--ereader-header-h, 0px) + var(--size-4-1)) var(--size-4-3) var(--size-4-1);
   overflow-x: auto;
 }
 
@@ -275,16 +276,22 @@
 
 /* Immersive reading: the bars slide off the page. */
 .ereader-reader.is-immersive .ereader-toolbar {
-  transform: translateY(calc(-100% - var(--ereader-header-h, 0px)));
+  transform: translateY(-100%);
   opacity: 0;
   pointer-events: none;
 }
 
 /* On a phone in focus mode the pane's title bar floats over the top of the
    page instead of pushing it down, so the page can start just under the
-   status bar. */
+   status bar. Recent versions of Obsidian float it already, and push a
+   phone's views down with a margin (--view-top-spacing) to clear it; that
+   margin is the band this takes back. */
 .workspace-leaf-content.ereader-focus {
   position: relative;
+}
+
+.is-mobile .mod-root .workspace-leaf-content.ereader-focus > .view-content {
+  margin-top: 0;
 }
 
 .workspace-leaf-content.ereader-focus > .view-header {
@@ -482,8 +489,8 @@ body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
   position: fixed;
   visibility: hidden;
   pointer-events: none;
-  padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  padding-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
 }
 
 /* A book opening. */

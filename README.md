@@ -79,7 +79,7 @@ bar and Obsidian's own bottom bar. Scroll up, swipe down or tap the middle of
 the page to bring it back. While you read, a thin progress line along the
 bottom shows the whole book, with a tick wherever a contents entry starts and
 the book's percentage beside it; the label under it cycles, when tapped,
-through the chapter's progress, the time left in the chapter and the time
+through the chapter's name, the time left in the chapter and the time
 left in the book. The time is learned from how fast you actually turn pages.
 On a desktop, focus mode hides the menu once the pointer is still; move it,
 or move it to the top of the pane, to bring the menu back. Focus mode is on

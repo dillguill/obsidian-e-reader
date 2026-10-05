@@ -57,7 +57,6 @@ import {
   type ChapterStart,
   adjacentChapter,
   chapterAt,
-  chapterFraction,
   chapterTicks,
   nextPace,
   progressInfoLabel,
@@ -1264,7 +1263,6 @@ export class ReaderView extends FileView {
       chapter: chapter
         ? {
             label: chapter.label.trim(),
-            fraction: chapterFraction(chapter, pages.current),
             msLeft: unitsLeft(pages.current, chapter.end) * pace,
           }
         : null,
@@ -1418,8 +1416,7 @@ export class ReaderView extends FileView {
     const phoneFocus = focus && Platform.isMobile;
     root.toggleClass("is-hideable", focus);
     this.containerEl.toggleClass("ereader-focus", phoneFocus);
-    const header = phoneFocus ? this.containerEl.querySelector<HTMLElement>(":scope > .view-header") : null;
-    const headerHeight = header?.offsetHeight ?? 0;
+    const headerHeight = phoneFocus ? this.headerReach(root) : 0;
     const toolbarHeight = root.querySelector<HTMLElement>(".ereader-toolbar")?.offsetHeight ?? 0;
     const footer = this.footer?.el;
     const footerHeight = focus && footer?.isShown() ? footer.offsetHeight : 0;
@@ -1435,12 +1432,23 @@ export class ReaderView extends FileView {
     }
     root.setCssProps({
       "--ereader-header-h": `${headerHeight}px`,
-      "--ereader-toolbar-h": `${headerHeight + toolbarHeight}px`,
+      "--ereader-toolbar-h": `${toolbarHeight}px`,
       "--ereader-bottom-inset": `${this.bottomInset(root)}px`,
       "--ereader-safe-bottom": `${safe.bottom}px`,
       "--ereader-top-h": `${top}px`,
       "--ereader-bottom-h": `${bottom}px`,
     });
+  }
+
+  /**
+   * How far into the reader the pane's title bar reaches. Measured from
+   * layout rather than the screen, so it holds while the bar is slid away.
+   */
+  private headerReach(root: HTMLElement): number {
+    const header = this.containerEl.querySelector<HTMLElement>(":scope > .view-header");
+    if (!header) return 0;
+    const rootTop = root.getBoundingClientRect().top - this.containerEl.getBoundingClientRect().top;
+    return Math.max(0, Math.round(header.offsetTop + header.offsetHeight - rootTop));
   }
 
   /**

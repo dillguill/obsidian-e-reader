@@ -220,6 +220,7 @@ export class ReaderView extends FileView {
     private readonly events: ReaderEvents,
     private readonly attachFile: (note: TFile) => Promise<boolean>,
     private readonly openContents: () => void,
+    private readonly openHighlights: () => void,
   ) {
     super(leaf);
     this.navigation = true;
@@ -257,6 +258,7 @@ export class ReaderView extends FileView {
       toggleBookmark: () => void this.toggleBookmark(),
       turnPage: (direction) => void this.turnPage(direction),
       openContents: () => this.openContents(),
+      openHighlights: () => this.openHighlights(),
       toggleSearch: () => this.toggleSearch(),
       toggleAppearance: (anchorEl) => {
         this.search?.hide();
@@ -266,7 +268,12 @@ export class ReaderView extends FileView {
     });
 
     this.search = new SearchPanel(this.contentRoot, this, {
-      search: (query, handlers, signal) => this.engine?.search(query, handlers, signal) ?? Promise.resolve(),
+      // The contents first: results are labelled with their chapter, and an
+      // EPUB's contents are read from the same sections the search walks.
+      search: async (query, handlers, signal) => {
+        await this.outline();
+        if (!signal.aborted) await this.engine?.search(query, handlers, signal);
+      },
       label: (hit) => this.searchLabel(hit),
       open: (hit) => void this.openSearchHit(hit),
       closed: () => void this.clearSearchMark(),
@@ -331,6 +338,8 @@ export class ReaderView extends FileView {
     // An EPUB renders inside iframes that inherit none of the vault's CSS, so
     // a theme switch has to be pushed into them.
     this.registerEvent(this.app.workspace.on("css-change", () => this.engine?.refreshTheme()));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.syncAppChrome()));
+    this.register(() => this.containerEl.doc.body.removeClass("ereader-immersive-epub", "ereader-immersive-pdf"));
     // A PDF's remembered zoom follows it when it is renamed or moved.
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
@@ -372,6 +381,7 @@ export class ReaderView extends FileView {
     this.lastFlushAt = 0;
     this.toolbar?.setVisible(false);
     this.clearViewport();
+    this.syncAppChrome();
   }
 
   override async onClose(): Promise<void> {
@@ -462,6 +472,7 @@ export class ReaderView extends FileView {
     this.toolbar?.setVisible(false);
     root.removeClass("is-immersive");
     root.removeClass("is-epub", "is-pdf");
+    this.syncAppChrome();
     this.scrollChrome.reset();
     this.scrollChromeEl = null;
     this.resetBookChrome();
@@ -761,7 +772,7 @@ export class ReaderView extends FileView {
         progress: engine.progress(),
       }),
     );
-    this.toolbar.setContentsAvailable(this.getSettings().panes.outline);
+    this.toolbar.setPanesAvailable(this.getSettings().panes);
     this.updateFooter();
   }
 
@@ -1434,6 +1445,25 @@ export class ReaderView extends FileView {
     // Bars hidden under an open panel would leave it floating over nothing.
     if (hidden && (this.search?.isOpen() || this.appearance?.isOpen())) return;
     root.toggleClass("is-immersive", hidden);
+    this.syncAppChrome();
+  }
+
+  /**
+   * On a phone, Obsidian's own bar along the bottom (search, new note, tabs,
+   * menu) goes and comes back with the reader's bars, while this reader is
+   * the pane in front. It belongs to the whole app, so it is only ever
+   * hidden through a class on the body, and that class is dropped the
+   * moment another pane takes over or the reader closes.
+   */
+  private syncAppChrome(): void {
+    const body = this.containerEl.doc.body;
+    const hide =
+      Platform.isMobile &&
+      this.engine !== null &&
+      this.contentRoot?.hasClass("is-immersive") === true &&
+      this.app.workspace.getActiveViewOfType(ReaderView) === this;
+    body.toggleClass("ereader-immersive-epub", hide && this.format === "epub");
+    body.toggleClass("ereader-immersive-pdf", hide && this.format === "pdf");
   }
 
   /**
@@ -1553,6 +1583,11 @@ export class ReaderView extends FileView {
   private entryAt(position: { x: number; y: number }): Entry | null {
     const root = this.contentRoot;
     if (!root) return null;
+    const hit = this.engine?.highlightAt(position) ?? null;
+    if (hit !== null) {
+      const entry = this.entries.find((candidate) => candidate.id === hit);
+      if (entry) return entry;
+    }
     for (const el of Array.from(root.querySelectorAll<HTMLElement>(".ereader-hl[data-id]"))) {
       const rect = el.getBoundingClientRect();
       if (position.x < rect.left || position.x > rect.right) continue;

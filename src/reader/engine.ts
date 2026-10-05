@@ -115,6 +115,12 @@ export interface ReaderEngine {
    */
   onTap(handler: (position: { x: number; y: number }) => void): void;
   /**
+   * The id of the painted highlight under `position` (host-document client
+   * coordinates), or null. An engine that cannot tell returns null and the
+   * view hit-tests the painted overlay itself.
+   */
+  highlightAt(position: { x: number; y: number }): string | null;
+  /**
    * Registers a handler for the end of a selection gesture inside the
    * rendered document — a mouse or touch release, NOT a settled selection.
    * The selection popup opens on the release itself rather than on a

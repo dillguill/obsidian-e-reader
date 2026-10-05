@@ -282,6 +282,18 @@
   pointer-events: none;
 }
 
+/* Obsidian's own bar along the bottom of a phone goes with the reader's.
+   Under a PDF it gives its space to the page, which only scrolls further;
+   under an EPUB it keeps it, because giving it away would reflow the book. */
+body.ereader-immersive-pdf .mobile-navbar {
+  display: none;
+}
+
+body.ereader-immersive-epub .mobile-navbar {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* On a desktop with the bars hidden, the top edge of the pane brings them
    back when the pointer reaches it. */
 .ereader-reader__reveal {

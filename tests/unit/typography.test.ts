@@ -12,11 +12,24 @@ import {
   typographyCss,
 } from "../../src/reader/typography";
 
-const DEFAULTS: Typography = { font: "book", lineSpacing: "normal", margins: "normal", justify: false, hyphenate: false };
+const DEFAULTS: Typography = { font: "book", lineSpacing: "normal", margins: "normal", align: "book", hyphenate: false };
 
 describe("typographyCss", () => {
-  it("sets only the vault font on body by default, as the reader always did", () => {
-    expect(typographyCss(DEFAULTS, "Inter")).toBe("body { font-family: Inter; }");
+  it("sets the vault font on body by default, and no alignment or line height", () => {
+    const css = typographyCss(DEFAULTS, "Inter");
+    expect(css).toContain("body { font-family: Inter; }");
+    expect(css).not.toContain("text-align");
+    expect(css).not.toContain("line-height");
+  });
+
+  it("breaks paragraphs as a whole, with kerning", () => {
+    const css = typographyCss(DEFAULTS, "Inter");
+    expect(css).toContain("text-wrap: pretty");
+    expect(css).toContain("font-kerning: normal");
+  });
+
+  it("leaves left alignment to the per-paragraph pass", () => {
+    expect(typographyCss({ ...DEFAULTS, align: "left" }, "Inter")).not.toContain("text-align");
   });
 
   it("forces a chosen font onto the text but leaves code alone", () => {
@@ -36,7 +49,7 @@ describe("typographyCss", () => {
 
   it("justifies and hyphenates only when asked", () => {
     expect(typographyCss(DEFAULTS, "Inter")).not.toContain("justify");
-    const css = typographyCss({ ...DEFAULTS, justify: true, hyphenate: true }, "Inter");
+    const css = typographyCss({ ...DEFAULTS, align: "justify", hyphenate: true }, "Inter");
     expect(css).toContain("text-align: justify !important");
     expect(css).toContain("hyphens: auto !important");
   });

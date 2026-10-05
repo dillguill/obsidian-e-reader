@@ -20,7 +20,7 @@ export interface Typography {
   font: BookFont;
   lineSpacing: LineSpacing;
   margins: Margins;
-  justify: boolean;
+  align: TextAlign;
   hyphenate: boolean;
 }
 
@@ -70,7 +70,16 @@ const SANS_STACK = `-apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto
 /** Everything a forced font may restyle: all of the text except code, which keeps its monospace. */
 const TEXT_ELEMENTS = "body, body *:not(pre):not(code):not(kbd):not(samp):not(pre *):not(code *)";
 /** The blocks of running prose that line spacing, justification and hyphenation apply to. */
-const PROSE_ELEMENTS = "p, li, blockquote, dd, dt";
+export const PROSE_ELEMENTS = "p, li, blockquote, dd, dt";
+
+/**
+ * How running text is aligned: as the book sets it, left-aligned (only what
+ * the book justifies; its centred and right-aligned lines stay), or all of
+ * it justified.
+ */
+export type TextAlign = "book" | "left" | "justify";
+export const TEXT_ALIGNS: readonly TextAlign[] = ["book", "left", "justify"];
+export const TEXT_ALIGN_LABELS: Record<TextAlign, string> = { book: "Book", left: "Left", justify: "Justify" };
 
 /** The forced line height for a choice, or null for "leave it to the book". */
 export function lineHeightFor(spacing: LineSpacing): number | null {
@@ -107,9 +116,14 @@ export function typographyCss(typography: Typography, vaultFont: string): string
   }
   // A forced line height has to reach the blocks themselves, because books
   // routinely set one on `p` and a value on `body` alone would change nothing.
+  // Line breaking from Omni Book Reader (github.com/pavelpeng7/omni-book-reader,
+  // src/reader-style.ts): kerning, and paragraphs broken as a whole rather
+  // than line by line, which evens out a justified line's spaces.
+  rules.push(`body { text-rendering: optimizeLegibility; font-kerning: normal; }`);
+  rules.push(`${PROSE_ELEMENTS} { text-wrap: pretty; orphans: 2; widows: 2; }`);
   const height = lineHeightFor(typography.lineSpacing);
   if (height !== null) rules.push(`body, div, ${PROSE_ELEMENTS} { line-height: ${height} !important; }`);
-  if (typography.justify) rules.push(`${PROSE_ELEMENTS} { text-align: justify !important; }`);
+  if (typography.align === "justify") rules.push(`${PROSE_ELEMENTS} { text-align: justify !important; }`);
   if (typography.hyphenate) {
     rules.push(`${PROSE_ELEMENTS} { -webkit-hyphens: auto !important; hyphens: auto !important; }`);
   }

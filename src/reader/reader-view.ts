@@ -48,6 +48,9 @@ import {
   MARGIN_LABELS,
   READING_THEMES,
   type ReadingTheme,
+  TEXT_ALIGNS,
+  TEXT_ALIGN_LABELS,
+  type TextAlign,
   THEME_LABELS,
   type Typography,
 } from "./typography";
@@ -345,7 +348,7 @@ export class ReaderView extends FileView {
     this.registerEvent(this.app.workspace.on("css-change", () => this.engine?.refreshTheme()));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.syncAppChrome()));
     this.register(() =>
-      this.containerEl.doc.body.removeClass("ereader-immersive-epub", "ereader-immersive-pdf", "ereader-focus-active", "ereader-focus-navbar"),
+      this.containerEl.doc.body.removeClass("ereader-immersive-epub", "ereader-immersive-pdf", "ereader-focus-active"),
     );
     // A PDF's remembered zoom follows it when it is renamed or moved.
     this.registerEvent(
@@ -1113,8 +1116,8 @@ export class ReaderView extends FileView {
       font: reader.epubFont,
       lineSpacing: reader.epubLineSpacing,
       margins: reader.epubMargins,
-      justify: reader.epubJustify,
-      hyphenate: reader.epubHyphenate,
+      align: reader.epubAlign,
+      hyphenate: reader.epubHyphenation,
     };
   }
 
@@ -1192,16 +1195,17 @@ export class ReaderView extends FileView {
           onChange: (value) => this.changeTypography(() => (reader.epubMargins = value as Typography["margins"])),
         },
         {
-          kind: "toggle",
-          label: "Justify text",
-          value: reader.epubJustify,
-          onChange: (value) => this.changeTypography(() => (reader.epubJustify = value)),
+          kind: "choice",
+          label: "Alignment",
+          options: TEXT_ALIGNS.map((align) => ({ value: align, label: TEXT_ALIGN_LABELS[align] })),
+          value: reader.epubAlign,
+          onChange: (value) => this.changeTypography(() => (reader.epubAlign = value as TextAlign)),
         },
         {
           kind: "toggle",
           label: "Hyphenate",
-          value: reader.epubHyphenate,
-          onChange: (value) => this.changeTypography(() => (reader.epubHyphenate = value)),
+          value: reader.epubHyphenation,
+          onChange: (value) => this.changeTypography(() => (reader.epubHyphenation = value)),
         },
       );
     }
@@ -1419,7 +1423,6 @@ export class ReaderView extends FileView {
     const focus = this.chromeCanHide();
     const phoneFocus = focus && Platform.isMobile;
     root.toggleClass("is-hideable", focus);
-    this.containerEl.toggleClass("ereader-focus", phoneFocus);
     const safe = Platform.isMobile ? this.safeArea(root) : { top: 0, bottom: 0 };
     const headerHeight = phoneFocus ? this.headerReach(root, safe.top) : 0;
     const toolbarHeight = root.querySelector<HTMLElement>(".ereader-toolbar")?.offsetHeight ?? 0;
@@ -1545,23 +1548,20 @@ export class ReaderView extends FileView {
   }
 
   /**
-   * On a phone in focus mode, Obsidian's own bar along the bottom (search,
-   * new note, tabs, menu) floats over the page while this reader is the pane
-   * in front, and goes and comes back with the reader's bars. It belongs to
-   * the whole app, so it is only ever changed through classes on the body,
-   * dropped the moment another pane takes over or the reader closes.
+   * On a phone in focus mode the reader is pinned over the whole screen
+   * while it is the pane in front (styles.css), and Obsidian's own bars
+   * (the pane's title bar, and the one along the bottom: search, new note,
+   * tabs, menu) go and come back with the reader's. They belong to the whole
+   * app, so they are only ever changed through classes on the body, dropped
+   * the moment another pane takes over or the reader closes.
    */
   private syncAppChrome(): void {
     const body = this.containerEl.doc.body;
     const focus =
       Platform.isMobile && this.chromeCanHide() && this.app.workspace.getActiveViewOfType(ReaderView) === this;
     const hide = focus && this.engine !== null && this.contentRoot?.hasClass("is-immersive") === true;
+    this.contentRoot?.toggleClass("is-pinned", focus);
     body.toggleClass("ereader-focus-active", focus);
-    // A bar that already floats (recent versions of Obsidian) is left where it is.
-    body.removeClass("ereader-focus-navbar");
-    const navbar = body.querySelector<HTMLElement>(".mobile-navbar");
-    const inFlow = navbar !== null && ["static", "relative"].includes(body.win.getComputedStyle(navbar).position);
-    body.toggleClass("ereader-focus-navbar", focus && inFlow);
     body.toggleClass("ereader-immersive-epub", hide && this.format === "epub");
     body.toggleClass("ereader-immersive-pdf", hide && this.format === "pdf");
   }

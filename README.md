@@ -60,11 +60,12 @@ fit and spreads, so a scanned textbook and a novel can each keep theirs. The rea
 note as its file, so Obsidian's own Properties pane and everything else that
 follows the active file work on it unchanged.
 
-**Reading settings** (the **Aa** button) choose a theme for the page — match
+**Reading settings** (the **T** button) choose a theme for the page — match
 Obsidian, Light, Sepia or Dark — the zoom or text size, the layout (PDF fit
 and spreads, EPUB flow and two-page spreads) and, for EPUBs, the font (the book's own, your
 Obsidian font, a serif or a sans), text size, line spacing, margins,
-justification and hyphenation.
+alignment (the book's own, left or justified) and hyphenation, which is on
+to start with so justified lines on a phone don't open wide gaps.
 
 **Search** (the search button, or Cmd/Ctrl-F in the reader) finds every match
 in the book as you type, listed with its page or chapter; pick one, or step

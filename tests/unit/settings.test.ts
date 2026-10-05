@@ -175,8 +175,8 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         epubLineSpacing: "relaxed",
         epubMargins: "wide",
         epubFont: "serif",
-        epubJustify: true,
-        epubHyphenate: true,
+        epubAlign: "left",
+        epubHyphenation: false,
         epubSpread: "none",
         readingTheme: "sepia",
         showFooter: false,
@@ -256,6 +256,18 @@ describe("progress line label", () => {
   });
 });
 
+describe("text alignment and hyphenation", () => {
+  it("carries the old justify switch over", () => {
+    expect(mergeSettings({ reader: { epubJustify: true } }).reader.epubAlign).toBe("justify");
+    expect(mergeSettings({ reader: { epubJustify: false } }).reader.epubAlign).toBe("book");
+  });
+
+  it("hyphenates unless turned off under the new name", () => {
+    expect(mergeSettings({ reader: { epubHyphenate: false } }).reader.epubHyphenation).toBe(true);
+    expect(mergeSettings({ reader: { epubHyphenation: false } }).reader.epubHyphenation).toBe(false);
+  });
+});
+
 describe("focus mode", () => {
   it("is on for phones and off for desktops by default", () => {
     expect(mergeSettings({}).reader.focusModeMobile).toBe(true);
@@ -298,8 +310,8 @@ describe("remembered reader preferences", () => {
       epubLineSpacing: "normal",
       epubMargins: "normal",
       epubFont: "book",
-      epubJustify: false,
-      epubHyphenate: false,
+      epubAlign: "book",
+      epubHyphenation: true,
       epubSpread: "auto",
       readingTheme: "auto",
       showFooter: true,

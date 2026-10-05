@@ -788,6 +788,10 @@ export class PdfEngine implements ReaderEngine {
     // A PDF scrolls, and the view follows the scrolling itself.
   }
 
+  diagnostics(): Record<string, unknown> {
+    return {};
+  }
+
   highlightAt(_position: { x: number; y: number }): string | null {
     // The boxes are in the host document, where the view hit-tests them.
     return null;

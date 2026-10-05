@@ -22,9 +22,9 @@ describe("typographyCss", () => {
     expect(css).not.toContain("line-height");
   });
 
-  it("breaks paragraphs as a whole, with kerning", () => {
+  it("kerns, and leaves line breaking to the browser", () => {
     const css = typographyCss(DEFAULTS, "Inter");
-    expect(css).toContain("text-wrap: pretty");
+    expect(css).not.toContain("text-wrap");
     expect(css).toContain("font-kerning: normal");
   });
 

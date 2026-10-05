@@ -819,6 +819,38 @@ export class EpubEngine implements ReaderEngine {
     this.pageGestureHandler = handler;
   }
 
+  diagnostics(): Record<string, unknown> {
+    const contents = this.rendition?.getContents()[0];
+    const doc = contents?.document;
+    if (!doc) return { section: null };
+    const root = doc.documentElement;
+    const p = doc.querySelector("p");
+    const style = p ? doc.defaultView?.getComputedStyle(p) : null;
+    return {
+      contentType: doc.contentType,
+      namespace: root.namespaceURI,
+      lang: root.getAttribute("lang"),
+      xmlLang: root.getAttribute("xml:lang") ?? root.getAttributeNS("http://www.w3.org/XML/1998/namespace", "lang"),
+      packageLanguage: this.book?.packaging?.metadata?.language ?? null,
+      themeStyle: doc.getElementById(THEME_STYLE_ID) !== null,
+      bookStyles: doc.querySelectorAll("style").length,
+      paragraph: style
+        ? {
+            lang: p?.closest("[lang]")?.getAttribute("lang") ?? null,
+            textAlign: style.textAlign,
+            hyphens: style.hyphens,
+            webkitHyphens: style.getPropertyValue("-webkit-hyphens"),
+            textWrap: style.getPropertyValue("text-wrap"),
+            wordSpacing: style.wordSpacing,
+            fontSize: style.fontSize,
+            fontFamily: style.fontFamily,
+            width: p?.clientWidth,
+          }
+        : null,
+      typography: this.typography,
+    };
+  }
+
   highlightAt(position: { x: number; y: number }): string | null {
     const live = new Set((this.rendition?.getContents() ?? []).map((contents) => contents.document));
     this.paintedHits = this.paintedHits.filter((hit) => live.has(hit.doc));

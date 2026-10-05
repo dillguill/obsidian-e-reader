@@ -13,7 +13,7 @@
 // FileView.setState drive; do the actual book loading from `onLoadFile`.
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
-import { FileView, Menu, Notice, Platform, Scope, TFile, debounce, setIcon, setTooltip } from "obsidian";
+import { FileView, Menu, Notice, Platform, Scope, TFile, apiVersion, debounce, setIcon, setTooltip } from "obsidian";
 import { addEntry, fillSections, foldHighlightNotes, listEntries, migrateBookmarks, removeEntry, setEntryType } from "../annotations/store";
 import { linksToBook } from "../annotations/highlight-notes";
 import { addCopyItems } from "../annotations/entry-menu";
@@ -1486,6 +1486,73 @@ export class ReaderView extends FileView {
   /** Whether the menu hides while reading: focus mode, kept per kind of device. */
   private chromeCanHide(): boolean {
     return focusModeOn(this.getSettings().reader, Platform.isMobile);
+  }
+
+  /**
+   * Where everything the layout depends on actually is on this device, as
+   * JSON: the safe-area insets as the reader reads them, Obsidian's own
+   * spacing variables, and the boxes of the title bar, the bottom bar, the
+   * reader and its toolbar. For fixing the layout from a phone's real
+   * numbers rather than guesses.
+   */
+  layoutDiagnostics(): string {
+    const root = this.contentRoot;
+    const doc = this.containerEl.doc;
+    const win = doc.win;
+    const box = (el: Element | null | undefined): unknown => {
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      const style = win.getComputedStyle(el);
+      return {
+        cls: el.className,
+        rect: [rect.left, rect.top, rect.width, rect.height].map(Math.round),
+        position: style.position,
+        transform: style.transform,
+        marginTop: style.marginTop,
+        paddingTop: style.paddingTop,
+        paddingBottom: style.paddingBottom,
+        zIndex: style.zIndex,
+        animations: el.getAnimations().length,
+      };
+    };
+    const bodyStyle = win.getComputedStyle(doc.body);
+    const vars = (style: CSSStyleDeclaration, names: string[]): Record<string, string> =>
+      Object.fromEntries(names.map((name) => [name, style.getPropertyValue(name).trim()]));
+    let probe: Record<string, string> | null = null;
+    if (root) {
+      const el = root.createDiv({ cls: "ereader-safe-probe" });
+      const style = win.getComputedStyle(el);
+      probe = { top: style.paddingTop, bottom: style.paddingBottom };
+      el.style.paddingTop = "env(safe-area-inset-top)";
+      el.style.paddingBottom = "env(safe-area-inset-bottom)";
+      probe["envTop"] = win.getComputedStyle(el).paddingTop;
+      probe["envBottom"] = win.getComputedStyle(el).paddingBottom;
+      el.remove();
+    }
+    const facts = {
+      obsidian: apiVersion,
+      platform: { mobile: Platform.isMobile, phone: Platform.isPhone, ios: Platform.isIosApp, android: Platform.isAndroidApp },
+      userAgent: navigator.userAgent,
+      window: { inner: [win.innerWidth, win.innerHeight], client: doc.documentElement.clientHeight, visual: win.visualViewport?.height ?? null },
+      bodyClasses: doc.body.className,
+      bodyVars: vars(bodyStyle, ["--safe-area-inset-top", "--safe-area-inset-bottom", "--view-top-spacing", "--view-header-height", "--mobile-navbar-height", "--header-height"]),
+      probe,
+      focus: this.chromeCanHide(),
+      lastHeaderReach: this.lastHeaderReach,
+      leafChildren: Array.from(this.containerEl.children).map((el) => el.className),
+      viewHeader: box(this.containerEl.querySelector(":scope > .view-header")),
+      anyViewHeader: box(doc.querySelector(".workspace-leaf.mod-active .view-header")),
+      viewContent: box(this.containerEl.querySelector(":scope > .view-content")),
+      navbar: box(doc.querySelector(".mobile-navbar")),
+      reader: box(root),
+      readerVars: root
+        ? vars(win.getComputedStyle(root), ["--ereader-top-h", "--ereader-bottom-h", "--ereader-header-h", "--ereader-toolbar-h", "--ereader-safe-bottom", "--ereader-bottom-inset"])
+        : null,
+      toolbar: box(root?.querySelector(".ereader-toolbar")),
+      footer: box(this.footer?.el),
+      engine: this.engine?.diagnostics() ?? null,
+    };
+    return JSON.stringify(facts, null, 2);
   }
 
   /** Focus mode was switched, here or in the plugin's settings. */

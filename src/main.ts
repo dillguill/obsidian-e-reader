@@ -256,6 +256,21 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     readerCommand("zoom-in", "Zoom in", (view) => view.zoom(1));
     readerCommand("zoom-out", "Zoom out", (view) => view.zoom(-1));
     readerCommand("toggle-toolbar", "Show or hide the reader toolbar", (view) => Promise.resolve(view.toggleChrome()));
+    readerCommand("copy-layout-diagnostics", "Copy layout diagnostics", async (view) => {
+      const text = view.layoutDiagnostics();
+      try {
+        await navigator.clipboard.writeText(text);
+        new Notice("Layout diagnostics copied");
+      } catch {
+        // A phone can refuse the clipboard; the vault never does.
+        const path = "e-reader layout diagnostics.md";
+        const file = this.app.vault.getFileByPath(path);
+        const body = "```json\n" + text + "\n```\n";
+        if (file) await this.app.vault.modify(file, body);
+        else await this.app.vault.create(path, body);
+        new Notice(`Layout diagnostics saved to ${path}`);
+      }
+    });
 
     this.addCommand({
       id: "import-book",

@@ -116,11 +116,11 @@ export function typographyCss(typography: Typography, vaultFont: string): string
   }
   // A forced line height has to reach the blocks themselves, because books
   // routinely set one on `p` and a value on `body` alone would change nothing.
-  // Line breaking from Omni Book Reader (github.com/pavelpeng7/omni-book-reader,
-  // src/reader-style.ts): kerning, and paragraphs broken as a whole rather
-  // than line by line, which evens out a justified line's spaces.
+  // From Omni Book Reader (github.com/pavelpeng7/omni-book-reader,
+  // src/reader-style.ts). Its `text-wrap: pretty` is left out: on a phone it
+  // made justified lines' gaps worse (0.4.0-beta.23).
   rules.push(`body { text-rendering: optimizeLegibility; font-kerning: normal; }`);
-  rules.push(`${PROSE_ELEMENTS} { text-wrap: pretty; orphans: 2; widows: 2; }`);
+  rules.push(`${PROSE_ELEMENTS} { orphans: 2; widows: 2; }`);
   const height = lineHeightFor(typography.lineSpacing);
   if (height !== null) rules.push(`body, div, ${PROSE_ELEMENTS} { line-height: ${height} !important; }`);
   if (typography.align === "justify") rules.push(`${PROSE_ELEMENTS} { text-align: justify !important; }`);

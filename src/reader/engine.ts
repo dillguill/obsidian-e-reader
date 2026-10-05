@@ -120,6 +120,8 @@ export interface ReaderEngine {
    * view hit-tests the painted overlay itself.
    */
   highlightAt(position: { x: number; y: number }): string | null;
+  /** Facts about how the page is rendered, for the layout diagnostics command. */
+  diagnostics(): Record<string, unknown>;
   /**
    * A paginated book's page was turned by the reader (a tap at the edge, a
    * swipe), or the reader swiped up or down on it — the gestures that stand

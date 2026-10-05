@@ -153,8 +153,14 @@ export interface ReaderPreferences {
   showFooter: boolean;
   /** What the progress line's label shows; a tap on it moves to the next. */
   footerInfo: FooterInfo;
-  /** On a desktop, hide the toolbar and footer once the pointer has been still for a moment. */
-  autoHideChrome: boolean;
+  /**
+   * Focus mode: the menu hides while reading (scrolling or turning pages on a
+   * phone, the pointer resting on a desktop) and the progress line takes its
+   * place. Kept per kind of device, because one vault is read on both and a
+   * phone wants it far more than a desktop.
+   */
+  focusModeMobile: boolean;
+  focusModeDesktop: boolean;
   /**
    * Zoom, fit and spreads per PDF, by the path of the file the reader has
    * open: a scanned textbook and a novel want different ones. The top-level
@@ -207,11 +213,24 @@ export type EpubSpread = "auto" | "none";
  * re-applied whenever the pane is resized or the device rotated.
  */
 export type PdfFit = "none" | "width" | "height" | "page";
-export type FooterInfo = "chapter" | "book" | "chapter-time" | "book-time";
-export const FOOTER_INFOS: readonly FooterInfo[] = ["chapter", "book", "chapter-time", "book-time"];
+/** Whether focus mode is on for this kind of device. */
+export function focusModeOn(reader: ReaderPreferences, mobile: boolean): boolean {
+  return mobile ? reader.focusModeMobile : reader.focusModeDesktop;
+}
+
+export function setFocusMode(reader: ReaderPreferences, mobile: boolean, on: boolean): void {
+  if (mobile) reader.focusModeMobile = on;
+  else reader.focusModeDesktop = on;
+}
+
+/** The second row of the progress line; the first always shows the book's percentage. */
+export type FooterInfo = "chapter" | "chapter-time" | "book-time";
+export const FOOTER_INFOS: readonly FooterInfo[] = ["chapter", "chapter-time", "book-time"];
 
 function mergeFooterInfo(info: unknown, legacyTime: unknown, fallback: FooterInfo): FooterInfo {
   if (typeof info === "string" && (FOOTER_INFOS as readonly string[]).includes(info)) return info as FooterInfo;
+  // 0.4.0-beta.19 also had the book's percentage, which now always shows.
+  if (info === "book") return "chapter";
   // 0.4.0-beta.14–18 switched only the time left between chapter and book.
   if (legacyTime === "book") return "book-time";
   if (legacyTime === "chapter") return "chapter-time";
@@ -349,7 +368,8 @@ export const DEFAULT_SETTINGS: Settings = {
     readingTheme: "auto",
     showFooter: true,
     footerInfo: "chapter",
-    autoHideChrome: false,
+    focusModeMobile: true,
+    focusModeDesktop: false,
     pdfBooks: {},
     paceEpubMs: DEFAULT_PACE_EPUB_MS,
     pacePdfMs: DEFAULT_PACE_PDF_MS,
@@ -547,7 +567,9 @@ function mergeReaderPreferences(saved: Record<string, unknown>, types: Annotatio
     readingTheme: isReadingTheme(from["readingTheme"]) ? from["readingTheme"] : defaults.readingTheme,
     showFooter: mergeBoolean(from["showFooter"], defaults.showFooter),
     footerInfo: mergeFooterInfo(from["footerInfo"], from["footerTime"], defaults.footerInfo),
-    autoHideChrome: mergeBoolean(from["autoHideChrome"], defaults.autoHideChrome),
+    focusModeMobile: mergeBoolean(from["focusModeMobile"], defaults.focusModeMobile),
+    // 0.4.0-beta.14–19 called the desktop's "Hide toolbar while reading".
+    focusModeDesktop: mergeBoolean(from["focusModeDesktop"] ?? from["autoHideChrome"], defaults.focusModeDesktop),
     pdfBooks: mergePdfBooks(from["pdfBooks"]),
     paceEpubMs: mergePace(from["paceEpubMs"], defaults.paceEpubMs),
     pacePdfMs: mergePace(from["pacePdfMs"], defaults.pacePdfMs),

@@ -764,6 +764,12 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
   }
 
   /** Closes any pane the reader has just switched off. Called from the settings tab. */
+  applyFocusMode(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(READER_VIEW_TYPE)) {
+      if (leaf.view instanceof ReaderView) leaf.view.applyFocusMode();
+    }
+  }
+
   applyPaneSettings(): void {
     if (!this.settings.panes.outline) this.app.workspace.detachLeavesOfType(OUTLINE_VIEW_TYPE);
     if (!this.settings.panes.highlights) this.app.workspace.detachLeavesOfType(HIGHLIGHTS_VIEW_TYPE);

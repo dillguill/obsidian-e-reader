@@ -52,7 +52,7 @@ import {
   type Typography,
 } from "./typography";
 import { ScrollChrome } from "./gestures";
-import { FOOTER_INFOS, rememberPdfView } from "../settings/settings-model";
+import { FOOTER_INFOS, focusModeOn, rememberPdfView, setFocusMode } from "../settings/settings-model";
 import {
   type ChapterStart,
   adjacentChapter,
@@ -130,8 +130,11 @@ const CHROME_TAP_ZONE = 1 / 3;
 /** The painted mark on the search result being looked at. */
 const SEARCH_MARK_ID = "ereader-search-hit";
 const SEARCH_MARK_COLOR = "#ff9f1a";
-/** On a desktop with auto-hide on, the bars hide after the pointer has been still this long. */
+/** On a desktop in focus mode, the bars hide after the pointer has been still this long. */
 const CHROME_IDLE_MS = 2500;
+/** In focus mode on a phone, the text's distance from the status bar, and from the progress line. */
+const FOCUS_TOP_GAP_PX = 6;
+const FOCUS_BOTTOM_GAP_PX = 8;
 /** The learned reading pace is saved this long after it last changed. */
 const PACE_SAVE_DELAY_MS = 30_000;
 const THEME_CLASSES: Record<ReadingTheme, string> = {
@@ -183,6 +186,7 @@ export class ReaderView extends FileView {
   private footer: {
     el: HTMLElement;
     labelEl: HTMLElement;
+    percentEl: HTMLElement;
     barEl: HTMLElement;
     ticksEl: HTMLElement;
     /** The chapter list the ticks were last drawn for. */
@@ -337,7 +341,9 @@ export class ReaderView extends FileView {
     // a theme switch has to be pushed into them.
     this.registerEvent(this.app.workspace.on("css-change", () => this.engine?.refreshTheme()));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.syncAppChrome()));
-    this.register(() => this.containerEl.doc.body.removeClass("ereader-immersive-epub", "ereader-immersive-pdf"));
+    this.register(() =>
+      this.containerEl.doc.body.removeClass("ereader-immersive-epub", "ereader-immersive-pdf", "ereader-focus-active", "ereader-focus-navbar"),
+    );
     // A PDF's remembered zoom follows it when it is renamed or moved.
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
@@ -727,29 +733,23 @@ export class ReaderView extends FileView {
         checked: this.getSettings().reader.showHighlights,
         apply: () => this.toggleHighlights(),
       },
-      ...(Platform.isMobile
-        ? []
-        : [
-            {
-              section: "appearance" as const,
-              id: "auto-hide-chrome",
-              label: "Hide toolbar while reading",
-              icon: "eye-off",
-              checked: this.getSettings().reader.autoHideChrome,
-              apply: () => {
-                const reader = this.getSettings().reader;
-                reader.autoHideChrome = !reader.autoHideChrome;
-                this.saveSettings();
-                this.measureChrome();
-                if (!reader.autoHideChrome) this.setChromeHidden(false);
-                this.noteActivity();
-              },
-            },
-          ]),
+      {
+        section: "appearance",
+        id: "focus-mode",
+        label: "Focus mode",
+        icon: "eye-off",
+        checked: focusModeOn(this.getSettings().reader, Platform.isMobile),
+        apply: () => {
+          const reader = this.getSettings().reader;
+          setFocusMode(reader, Platform.isMobile, !focusModeOn(reader, Platform.isMobile));
+          this.saveSettings();
+          this.applyFocusMode();
+        },
+      },
       {
         section: "appearance",
         id: "show-footer",
-        label: "Show time left and progress",
+        label: "Show progress in focus mode",
         icon: "clock",
         checked: this.getSettings().reader.showFooter,
         apply: () => {
@@ -1214,8 +1214,9 @@ export class ReaderView extends FileView {
     const trackEl = el.createDiv({ cls: "ereader-footer__track", attr: { "aria-hidden": "true" } });
     const barEl = trackEl.createDiv({ cls: "ereader-footer__bar" });
     const ticksEl = trackEl.createDiv({ cls: "ereader-footer__ticks" });
-    const labelEl = el.createSpan({ cls: "ereader-footer__label" });
-    // A tap moves the label on to the next kind of progress.
+    const percentEl = el.createSpan({ cls: "ereader-footer__percent" });
+    const labelEl = el.createDiv({ cls: "ereader-footer__label" });
+    // A tap moves the second row on to the next kind of progress.
     el.addEventListener("click", () => {
       const reader = this.getSettings().reader;
       reader.footerInfo = FOOTER_INFOS[(FOOTER_INFOS.indexOf(reader.footerInfo) + 1) % FOOTER_INFOS.length] ?? "chapter";
@@ -1223,7 +1224,7 @@ export class ReaderView extends FileView {
       this.updateFooter();
     });
     el.hide();
-    return { el, labelEl, barEl, ticksEl, ticksFor: null };
+    return { el, labelEl, percentEl, barEl, ticksEl, ticksFor: null };
   }
 
   /**
@@ -1267,11 +1268,11 @@ export class ReaderView extends FileView {
             msLeft: unitsLeft(pages.current, chapter.end) * pace,
           }
         : null,
-      bookPercent: progressLabel(pages, progress),
       bookMsLeft: unitsLeft(pages.current, pages.total + 1) * pace,
     };
+    footer.percentEl.setText(progressLabel(pages, progress));
     footer.labelEl.setText(progressInfoLabel(this.getSettings().reader.footerInfo, facts));
-    setTooltip(footer.el, "Tap for the chapter, the book, or the time left in either", { placement: "top" });
+    setTooltip(footer.el, "Tap for the chapter, or the time left in it or the book", { placement: "top" });
   }
 
   /**
@@ -1284,6 +1285,7 @@ export class ReaderView extends FileView {
     if (!footer || !this.getSettings().reader.showFooter) return;
     footer.el.show();
     footer.labelEl.setText("Calculating…");
+    footer.percentEl.setText("");
     footer.barEl.setCssStyles({ width: "0" });
     footer.ticksEl.empty();
     footer.ticksFor = null;
@@ -1401,41 +1403,81 @@ export class ReaderView extends FileView {
   }
 
   /**
-   * Publishes the toolbar's and footer's heights for the panels and the back
-   * chip to sit clear of. Both depend on the theme, on whether the toolbar's
-   * buttons wrap, and on whether either is showing at all.
+   * Publishes what the page keeps clear of, and where the toolbar and the
+   * panels sit, for styles.css. In focus mode the book is laid out once over
+   * the whole pane, so the bars coming and going never reflows it: on a
+   * phone that runs from just under the status bar to just above the
+   * progress line, with the pane's title bar, the toolbar and Obsidian's
+   * bottom bar floating over the page while the menu is out. Out of focus
+   * mode, the page sits between the bars and the progress line never shows.
    */
   private measureChrome(): void {
     const root = this.contentRoot;
     if (!root) return;
-    const toolbar = root.querySelector<HTMLElement>(".ereader-toolbar");
-    const toolbarHeight = toolbar?.offsetHeight ?? 0;
-    const footerHeight = this.footer?.el.offsetHeight ?? 0;
-    const inset = this.bottomInset(root);
-    // Where the bars come and go, the book is laid out over the whole pane and
-    // the toolbar covers its top while the menu is out, as in a reading app;
-    // the progress line belongs to the reading view (styles.css). Where they
-    // stay, the page keeps clear of the toolbar and the line is always shown.
-    const hideable = this.chromeCanHide();
-    root.toggleClass("is-hideable", hideable);
+    const focus = this.chromeCanHide();
+    const phoneFocus = focus && Platform.isMobile;
+    root.toggleClass("is-hideable", focus);
+    this.containerEl.toggleClass("ereader-focus", phoneFocus);
+    const header = phoneFocus ? this.containerEl.querySelector<HTMLElement>(":scope > .view-header") : null;
+    const headerHeight = header?.offsetHeight ?? 0;
+    const toolbarHeight = root.querySelector<HTMLElement>(".ereader-toolbar")?.offsetHeight ?? 0;
+    const footer = this.footer?.el;
+    const footerHeight = focus && footer?.isShown() ? footer.offsetHeight : 0;
+    const safe = Platform.isMobile ? this.safeArea(root) : { top: 0, bottom: 0 };
+    let top = toolbarHeight;
+    let bottom = safe.bottom;
+    if (phoneFocus) {
+      top = safe.top + FOCUS_TOP_GAP_PX;
+      if (footerHeight > 0) bottom = footerHeight + FOCUS_BOTTOM_GAP_PX;
+    } else if (focus) {
+      top = 0;
+      bottom = footerHeight;
+    }
     root.setCssProps({
-      "--ereader-toolbar-h": `${toolbarHeight}px`,
-      "--ereader-bottom-inset": `${inset}px`,
-      "--ereader-top-h": `${hideable ? 0 : toolbarHeight}px`,
-      "--ereader-bottom-h": `${footerHeight}px`,
+      "--ereader-header-h": `${headerHeight}px`,
+      "--ereader-toolbar-h": `${headerHeight + toolbarHeight}px`,
+      "--ereader-bottom-inset": `${this.bottomInset(root)}px`,
+      "--ereader-safe-bottom": `${safe.bottom}px`,
+      "--ereader-top-h": `${top}px`,
+      "--ereader-bottom-h": `${bottom}px`,
     });
   }
 
-  /** Whether the bars hide while reading: always on a touchscreen, and on a desktop with auto-hide on. */
+  /**
+   * How much of the reader runs under a phone's status bar and home
+   * indicator: the device's safe-area insets, less whatever Obsidian
+   * already keeps between them and the pane.
+   */
+  private safeArea(root: HTMLElement): { top: number; bottom: number } {
+    const probe = root.createDiv({ cls: "ereader-safe-probe" });
+    const style = root.win.getComputedStyle(probe);
+    const insetTop = parseFloat(style.paddingTop) || 0;
+    const insetBottom = parseFloat(style.paddingBottom) || 0;
+    probe.remove();
+    const rect = root.getBoundingClientRect();
+    const height = root.doc.documentElement.clientHeight;
+    return {
+      top: Math.max(0, Math.round(insetTop - rect.top)),
+      bottom: Math.max(0, Math.round(insetBottom - (height - rect.bottom))),
+    };
+  }
+
+  /** Whether the menu hides while reading: focus mode, kept per kind of device. */
   private chromeCanHide(): boolean {
-    return Platform.isMobile || this.getSettings().reader.autoHideChrome;
+    return focusModeOn(this.getSettings().reader, Platform.isMobile);
+  }
+
+  /** Focus mode was switched, here or in the plugin's settings. */
+  applyFocusMode(): void {
+    if (!this.chromeCanHide()) this.setChromeHidden(false);
+    this.measureChrome();
+    this.syncAppChrome();
+    this.noteActivity();
   }
 
   /**
    * How much of the bottom of the reader Obsidian's phone navigation bar
-   * covers. The bar floats over the bottom of the pane rather than sitting
-   * below it, so the footer is lifted clear of it. Measured even while the
-   * bar is faded out over an EPUB, so the page underneath never moves.
+   * covers, for the back chip to sit clear of while the menu is out.
    */
   private bottomInset(root: HTMLElement): number {
     if (!Platform.isMobile) return 0;
@@ -1475,6 +1517,7 @@ export class ReaderView extends FileView {
   private setChromeHidden(hidden: boolean): void {
     const root = this.contentRoot;
     if (!root || root.hasClass("is-immersive") === hidden) return;
+    if (hidden && !this.chromeCanHide()) return;
     // Bars hidden under an open panel would leave it floating over nothing.
     if (hidden && (this.search?.isOpen() || this.appearance?.isOpen())) return;
     root.toggleClass("is-immersive", hidden);
@@ -1482,19 +1525,23 @@ export class ReaderView extends FileView {
   }
 
   /**
-   * On a phone, Obsidian's own bar along the bottom (search, new note, tabs,
-   * menu) goes and comes back with the reader's bars, while this reader is
-   * the pane in front. It belongs to the whole app, so it is only ever
-   * hidden through a class on the body, and that class is dropped the
-   * moment another pane takes over or the reader closes.
+   * On a phone in focus mode, Obsidian's own bar along the bottom (search,
+   * new note, tabs, menu) floats over the page while this reader is the pane
+   * in front, and goes and comes back with the reader's bars. It belongs to
+   * the whole app, so it is only ever changed through classes on the body,
+   * dropped the moment another pane takes over or the reader closes.
    */
   private syncAppChrome(): void {
     const body = this.containerEl.doc.body;
-    const hide =
-      Platform.isMobile &&
-      this.engine !== null &&
-      this.contentRoot?.hasClass("is-immersive") === true &&
-      this.app.workspace.getActiveViewOfType(ReaderView) === this;
+    const focus =
+      Platform.isMobile && this.chromeCanHide() && this.app.workspace.getActiveViewOfType(ReaderView) === this;
+    const hide = focus && this.engine !== null && this.contentRoot?.hasClass("is-immersive") === true;
+    body.toggleClass("ereader-focus-active", focus);
+    // A bar that already floats (recent versions of Obsidian) is left where it is.
+    body.removeClass("ereader-focus-navbar");
+    const navbar = body.querySelector<HTMLElement>(".mobile-navbar");
+    const inFlow = navbar !== null && ["static", "relative"].includes(body.win.getComputedStyle(navbar).position);
+    body.toggleClass("ereader-focus-navbar", focus && inFlow);
     body.toggleClass("ereader-immersive-epub", hide && this.format === "epub");
     body.toggleClass("ereader-immersive-pdf", hide && this.format === "pdf");
   }
@@ -1525,15 +1572,15 @@ export class ReaderView extends FileView {
     this.registerDomEvent(reveal, "mouseenter", () => this.noteActivity());
   }
 
-  /** The pointer moved: show the bars, and on a desktop with auto-hide on, start the countdown to hiding them. */
+  /** The pointer moved: show the bars, and on a desktop in focus mode, start the countdown to hiding them. */
   private noteActivity(): void {
-    if (Platform.isMobile || !this.getSettings().reader.autoHideChrome) return;
+    if (Platform.isMobile || !this.chromeCanHide()) return;
     this.setChromeHidden(false);
     if (this.idleTimer !== null) window.clearTimeout(this.idleTimer);
     this.idleTimer = window.setTimeout(() => {
       this.idleTimer = null;
       const root = this.contentRoot;
-      if (!root || !this.engine || !this.getSettings().reader.autoHideChrome) return;
+      if (!root || !this.engine || !this.chromeCanHide()) return;
       // Not while the pointer rests on a bar, or something in one has focus.
       const bars = [root.querySelector(".ereader-toolbar"), this.footer?.el];
       if (bars.some((el) => el?.matches(":hover") || el?.contains(root.doc.activeElement))) {

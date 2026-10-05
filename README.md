@@ -72,22 +72,24 @@ through them with Enter and Shift-Enter, and the match is marked on the page.
 Jumping anywhere — a search result, a contents entry, a link, a typed page —
 leaves a **Back to …** button that returns you to where you were reading.
 
-**Reading view.** Scroll down (or, in a paginated EPUB, turn the page or
-swipe up) and the menu goes away: the toolbar, the pane's title bar and, on a
-phone, Obsidian's own bottom bar, leaving the book the whole screen. Scroll
-up, swipe down or tap the middle of the page to bring the menu back. While
-you read, a thin progress line along the bottom shows the whole book, with a
-tick wherever a contents entry starts, and a label you tap to cycle through
-the chapter's progress, the book's, and the time left in either. The time is
-learned from how fast you actually turn pages. Turn the line off in reading
-settings. Opening a book you had read further in elsewhere offers to jump to
-the furthest page you reached.
+**Focus mode.** On a phone the book fills the screen, from just under the
+status bar to the progress line. Scroll down (or, in a paginated EPUB, turn
+the page or swipe up) and the menu goes away: the toolbar, the pane's title
+bar and Obsidian's own bottom bar. Scroll up, swipe down or tap the middle of
+the page to bring it back. While you read, a thin progress line along the
+bottom shows the whole book, with a tick wherever a contents entry starts and
+the book's percentage beside it; the label under it cycles, when tapped,
+through the chapter's progress, the time left in the chapter and the time
+left in the book. The time is learned from how fast you actually turn pages.
+On a desktop, focus mode hides the menu once the pointer is still; move it,
+or move it to the top of the pane, to bring the menu back. Focus mode is on
+for phones and off for desktops to start with; switch it in reading settings
+(**T**) or the plugin's settings. With it off, the menu stays and the page
+sits under it. Opening a book you had read further in elsewhere offers to
+jump to the furthest page you reached.
 
 Pinch zooms on a touchscreen, and a sideways swipe turns a paginated EPUB's
-page. On a desktop, **Hide toolbar while reading** in reading settings gives
-the same reading view once the pointer is still; move it, or move it to the
-top of the pane, to bring the menu back. With it off, the toolbar and the
-progress line both stay.
+page.
 
 The left and right arrow keys and Page Up/Page Down turn the page (Space and
 Shift-Space too in an EPUB), and Shift with an arrow key goes to the next or

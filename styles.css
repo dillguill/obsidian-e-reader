@@ -1243,7 +1243,7 @@ body.ereader-immersive-epub .mobile-navbar {
 /* The line under the page: chapter, time left, how far through the book. */
 .ereader-footer {
   position: absolute;
-  bottom: 0;
+  bottom: var(--ereader-bottom-inset, 0px);
   left: 0;
   right: 0;
   z-index: 3;
@@ -1251,7 +1251,10 @@ body.ereader-immersive-epub .mobile-navbar {
   display: flex;
   align-items: center;
   gap: var(--size-4-3);
-  padding: var(--size-4-1) var(--size-4-3) calc(var(--size-4-1) + env(safe-area-inset-bottom, 0px));
+  /* The home indicator's safe area, unless Obsidian's bar under the footer
+     already keeps it clear. */
+  padding: var(--size-4-1) var(--size-4-3)
+    calc(var(--size-4-1) + max(0px, env(safe-area-inset-bottom, 0px) - var(--ereader-bottom-inset, 0px)));
   background: var(--background-primary);
   border-top: var(--border-width) solid var(--background-modifier-border);
   font-size: var(--font-ui-smaller);

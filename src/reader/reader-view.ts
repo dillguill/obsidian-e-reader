@@ -1408,10 +1408,29 @@ export class ReaderView extends FileView {
     const root = this.contentRoot;
     if (!root) return;
     const toolbar = root.querySelector<HTMLElement>(".ereader-toolbar");
+    const inset = this.bottomInset(root);
     root.setCssProps({
       "--ereader-toolbar-h": `${toolbar?.offsetHeight ?? 0}px`,
-      "--ereader-footer-h": `${this.footer?.el.offsetHeight ?? 0}px`,
+      "--ereader-bottom-inset": `${inset}px`,
+      // Everything that keeps clear of the footer keeps clear of what is under it too.
+      "--ereader-footer-h": `${(this.footer?.el.offsetHeight ?? 0) + inset}px`,
     });
+  }
+
+  /**
+   * How much of the bottom of the reader Obsidian's phone navigation bar
+   * covers. The bar floats over the bottom of the pane rather than sitting
+   * below it, so the footer is lifted clear of it. Measured even while the
+   * bar is faded out over an EPUB, so the page underneath never moves.
+   */
+  private bottomInset(root: HTMLElement): number {
+    if (!Platform.isMobile) return 0;
+    const navbar = root.doc.querySelector<HTMLElement>(".mobile-navbar");
+    if (!navbar) return 0;
+    const bar = navbar.getBoundingClientRect();
+    const pane = root.getBoundingClientRect();
+    if (bar.height <= 0 || bar.top >= pane.bottom || bar.bottom <= pane.top) return 0;
+    return Math.max(0, Math.round(pane.bottom - bar.top));
   }
 
   /** Everything that belongs to one open book, cleared when it closes or another opens. */
@@ -1478,6 +1497,10 @@ export class ReaderView extends FileView {
       const toolbarEl = root.querySelector<HTMLElement>(".ereader-toolbar");
       if (toolbarEl) observer.observe(toolbarEl);
       if (this.footer) observer.observe(this.footer.el);
+      // The pane itself and Obsidian's phone bar, for the footer's lift.
+      observer.observe(root);
+      const navbar = root.doc.querySelector<HTMLElement>(".mobile-navbar");
+      if (navbar) observer.observe(navbar);
       this.register(() => observer.disconnect());
     }
     if (Platform.isMobile) return;

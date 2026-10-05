@@ -137,6 +137,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
           this.readerEvents,
           (note) => this.attachFile(note),
           () => void this.revealPane(OUTLINE_VIEW_TYPE),
+          () => void this.revealPane(HIGHLIGHTS_VIEW_TYPE),
         ),
     );
     // Both panes are registered whatever the settings say: `registerView` has

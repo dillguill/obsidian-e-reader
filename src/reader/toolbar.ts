@@ -1,5 +1,5 @@
 // The reader's toolbar: the page buttons around a page box, then search,
-// reading settings, contents and the bookmark.
+// reading settings, contents, highlights and the bookmark.
 //
 // Zoom and the display options used to sit here too, shaped like Obsidian's
 // own PDF toolbar. They now live in the reading-settings panel
@@ -29,6 +29,8 @@ export interface ToolbarCallbacks {
   turnPage(direction: 1 | -1): void;
   /** Opens the book's contents in the outline pane. */
   openContents(): void;
+  /** Opens this book's highlights in the highlights pane. */
+  openHighlights(): void;
   toggleSearch(): void;
   /** Opens the reading-settings panel, anchored to the button that asked. */
   toggleAppearance(anchorEl: HTMLElement): void;
@@ -42,6 +44,7 @@ export class ReaderToolbar {
   private readonly prevEl: HTMLElement;
   private readonly nextEl: HTMLElement;
   private readonly contentsEl: HTMLElement;
+  private readonly highlightsEl: HTMLElement;
   /** The last value the box was given, restored when a typed entry is not a number. */
   private lastPageValue = "";
 
@@ -74,6 +77,7 @@ export class ReaderToolbar {
       callbacks.toggleAppearance(appearanceEl),
     );
     this.contentsEl = this.addButton(rightEl, component, "list", "Contents", () => callbacks.openContents());
+    this.highlightsEl = this.addButton(rightEl, component, "highlighter", "Highlights", () => callbacks.openHighlights());
     this.bookmarkEl = this.addButton(rightEl, component, "bookmark", "Bookmark this page", () => callbacks.toggleBookmark());
   }
 
@@ -112,9 +116,10 @@ export class ReaderToolbar {
     setTooltip(this.bookmarkEl, state.bookmarked ? "Remove this bookmark" : "Bookmark this page");
   }
 
-  /** The contents button follows the outline pane's own toggle in settings. */
-  setContentsAvailable(available: boolean): void {
-    this.contentsEl.toggle(available);
+  /** The contents and highlights buttons follow their panes' own toggles in settings. */
+  setPanesAvailable(panes: { outline: boolean; highlights: boolean }): void {
+    this.contentsEl.toggle(panes.outline);
+    this.highlightsEl.toggle(panes.highlights);
   }
 
   /** Hidden whenever there is no book to act on — a failed open, or no file. */

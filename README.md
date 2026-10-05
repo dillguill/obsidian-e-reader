@@ -49,7 +49,8 @@ status for a reading queue. Reading progress is tracked separately.
 **Reader.** EPUB and PDF, both remembering where you were, with a toolbar
 that is the same on desktop and phone: previous and next page buttons around a
 page box you can type into (a page number for PDFs, a percentage for EPUBs),
-then search, reading settings and a button that opens the contents. PDFs offer
+then search, reading settings, and buttons that open the contents and the
+book's highlights. PDFs offer
 fit-to-width, fit-to-height and two-page spreads, and are inverted to match a
 dark vault; EPUBs
 offer scrolled or paginated reading (two pages side by side on a wide pane, or
@@ -80,8 +81,9 @@ to jump to the furthest page you reached.
 
 Pinch zooms on a touchscreen, and a sideways swipe turns a paginated EPUB's
 page. On any touchscreen a tap in the middle of the page hides the toolbar and
-footer for distraction-free reading and brings them back, and they also slide
-away as you scroll down and return as you scroll up. On a desktop, **Hide
+footer (and on a phone, Obsidian's own bottom bar) for distraction-free
+reading and brings them back, and they also slide away as you scroll down and
+return as you scroll up. On a desktop, **Hide
 toolbar while reading** in reading settings hides them once the pointer is
 still; move it, or move it to the top of the pane, to bring them back.
 
@@ -94,7 +96,7 @@ toolbar** are commands you can bind to any hotkey.
 **Highlights and notes.** Select text and a small bar opens beside it: tap a
 colour to highlight as that type, or copy the text. Right-click works too, and
 the **Highlight selection** command repeats the last type you chose. Saved highlights are painted back into the
-book in the colour of their type, and right-clicking one offers to recolour,
+book in the colour of their type, and right-clicking or tapping one offers to recolour,
 copy or delete it. Each is written into the book note as a callout you can
 read, edit and link to:
 

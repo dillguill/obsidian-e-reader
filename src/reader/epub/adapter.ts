@@ -18,7 +18,7 @@
 // epub.js type may leak past this module — callers only see
 // ReaderEngine/OutlineNode/... (../engine.ts).
 
-import type { App } from "obsidian";
+import { type App, Platform } from "obsidian";
 import type { Locator } from "../../core/types";
 import type { EpubFlow, EpubSpread } from "../../settings/settings-model";
 import { activeRange, rangeForQuote, rangeFromOffsets, searchableText, snapshotFromRange } from "../dom-selection";
@@ -57,6 +57,8 @@ interface EpubSection {
   cfiFromRange(range: Range): string;
   /** Set by `load`; the section's parsed document. Undefined once unloaded. */
   document?: Document;
+  /** The section's resolved URL in the archive, which `load` requests. */
+  url: string;
 }
 
 interface EpubSpine {
@@ -151,24 +153,33 @@ export interface EpubEngineOptions extends EpubPreferences {
   onPreferencesChanged(preferences: EpubPreferences): void;
 }
 
+/** The size of an element's content box, padding excluded, as "WxH" — what the book is laid out in. */
+function contentSize(el: HTMLElement): string {
+  const style = el.win.getComputedStyle(el);
+  const px = (value: string): number => Number.parseFloat(value) || 0;
+  const width = el.clientWidth - px(style.paddingLeft) - px(style.paddingRight);
+  const height = el.clientHeight - px(style.paddingTop) - px(style.paddingBottom);
+  return `${Math.round(width)}x${Math.round(height)}`;
+}
+
 /**
- * Loads a section for inspection and leaves it as it was found.
+ * A section's document, for reading without displaying it.
  *
- * `Section.unload()` clears the section's parsed document, and epub.js's
- * rendered view holds the SAME Section objects the spine does — so unloading
- * one that is currently on screen pulls the document out from under the
- * reader and the page goes blank. Searching walks every section in the book,
- * which always includes the one being read, so a section that was already
- * loaded is left loaded.
+ * It is a copy of its own, fetched the same way `Section.load` fetches it,
+ * and never the Section's. epub.js's rendered view holds the SAME Section
+ * objects the spine does, so loading one here and unloading it afterwards
+ * pulled the document out from under the reader whenever that section was
+ * being displayed at the time — and searching walks every section while the
+ * reader jumps to its results, which is how a first search used to blank or
+ * freeze the page until a few taps re-rendered it. A copy cannot do that,
+ * and is dropped when it is no longer used. The CFIs built against it are
+ * the same, since a Section builds them from its spine position, not from
+ * its document.
  */
-async function withSection<T>(book: EpubBook, section: EpubSection, use: () => T): Promise<T> {
-  const wasLoaded = section.document !== undefined;
-  await section.load((url) => book.load(url));
-  try {
-    return use();
-  } finally {
-    if (!wasLoaded) section.unload();
-  }
+async function withSection<T>(book: EpubBook, section: EpubSection, use: (doc: Document) => T): Promise<T> {
+  const doc = section.document ?? ((await book.load(section.url)) as Document | undefined);
+  if (!doc?.documentElement) throw new Error(`could not read ${section.url}`);
+  return use(doc);
 }
 
 /**
@@ -210,8 +221,8 @@ async function cfiForHref(book: EpubBook, href: string, EpubCFI: EpubCfiClass): 
   const section = book.spine.get(href);
   if (!section) return null;
   try {
-    return await withSection(book, section, () => {
-      const root = section.document?.documentElement;
+    return await withSection(book, section, (doc) => {
+      const root = doc.documentElement;
       if (!root) return null;
       const target = anchorElement(root, href);
       if (!target) return null;
@@ -224,13 +235,10 @@ async function cfiForHref(book: EpubBook, href: string, EpubCFI: EpubCfiClass): 
     // returns never settles and the caller waits forever on a blank page
     // with nothing thrown and nothing logged. Far better to drop the entry
     // here, where the outline can simply omit it.
-      const doc = root.ownerDocument;
-      if (doc) {
-        const range = new EpubCFI(cfi).toRange(doc);
-        if (!range) {
-          console.warn("[e-reader] dropping a TOC entry whose CFI does not resolve", href, cfi);
-          return null;
-        }
+      const range = new EpubCFI(cfi).toRange(doc);
+      if (!range) {
+        console.warn("[e-reader] dropping a TOC entry whose CFI does not resolve", href, cfi);
+        return null;
       }
       return cfi;
     });
@@ -261,6 +269,10 @@ const TAP_ZONE = 0.3;
 
 /** A tap that moved this far is a drag — a selection, not a page turn. */
 const TAP_SLOP_PX = 8;
+/** A touch held longer than this is a press (selecting), not a tap. */
+const TOUCH_TAP_MAX_MS = 400;
+/** How long after a touch tap the browser's own synthesised `click` is ignored. */
+const TOUCH_CLICK_MS = 800;
 
 /**
  * How far past the end of a chapter the reader has to keep pushing before it
@@ -351,6 +363,14 @@ export class EpubEngine implements ReaderEngine {
   private highlights: readonly PaintedHighlight[] = [];
   /** Every CFI range currently drawn, so a repaint can take them all down first. */
   private paintedRanges = new Set<string>();
+  /**
+   * The text each drawn highlight covers, per section document, for telling
+   * which one a tap landed on. Measured from the text itself rather than from
+   * epub.js's overlay, whose position is its own business.
+   */
+  private paintedHits: { doc: Document; range: Range; id: string }[] = [];
+  /** A touch that was a tap is handled on release; the `click` the browser may synthesise after it is ignored. */
+  private touchTapAt = 0;
   /** Set while a page/chapter turn is in flight, so repeat gestures do not stack. */
   private turning = false;
   /** Scroll travel accumulated past the end of the chapter, in pixels. */
@@ -372,6 +392,8 @@ export class EpubEngine implements ReaderEngine {
   private listeners: AbortController | null = null;
   /** Reflows the book when the pane changes size — see watchForResize. */
   private resizeObserver: ResizeObserver | null = null;
+  /** The pane's size the book was last laid out for, as "WxH". */
+  private laidOutAt = "";
   private resizeTimer: number | null = null;
   /** Every match of the query in force, in reading order. */
 
@@ -443,18 +465,6 @@ export class EpubEngine implements ReaderEngine {
           y: event.clientY + (frameRect?.top ?? 0),
         });
         if (claimed) event.preventDefault();
-      }, options);
-      // A tap is how an existing highlight is reached on a touchscreen.
-      contents.document.addEventListener("click", (event: MouseEvent) => {
-        const handler = this.tapHandler;
-        if (!handler) return;
-        // Following a link is not a tap on the page.
-        if (isOnLink(event.target)) return;
-        const frameRect = contents.window.frameElement?.getBoundingClientRect();
-        handler({
-          x: event.clientX + (frameRect?.left ?? 0),
-          y: event.clientY + (frameRect?.top ?? 0),
-        });
       }, options);
       // Selection gestures, like the context menu, do not cross the iframe
       // boundary and have to be attached per section.
@@ -641,8 +651,8 @@ export class EpubEngine implements ReaderEngine {
       if (signal.aborted || full) return;
       const section = sections[i] as EpubSection;
       try {
-        await withSection(book, section, () => {
-          const body = section.document?.body;
+        await withSection(book, section, (doc) => {
+          const body = doc.body;
           if (!body) return;
           const source = searchableText(body);
           for (const match of findMatches(source.index.text, query)) {
@@ -692,23 +702,32 @@ export class EpubEngine implements ReaderEngine {
     doc.addEventListener("mousedown", (event: MouseEvent) => {
       downAt = { x: event.clientX, y: event.clientY };
     }, options);
-
     doc.addEventListener("click", (event: MouseEvent) => {
       const from = downAt;
       downAt = null;
-      if (this.flowMode !== "paginated" || event.button !== 0) return;
+      if (event.button !== 0 || Date.now() - this.touchTapAt < TOUCH_CLICK_MS) return;
       if (from && Math.hypot(event.clientX - from.x, event.clientY - from.y) > TAP_SLOP_PX) return;
-      // A link, or a live selection, means the tap was meant for the page.
-      if (isOnLink(event.target)) return;
-      const selection = contents.window.getSelection();
-      if (selection && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed) return;
-
-      const width = doc.documentElement.clientWidth;
-      if (width <= 0) return;
-      const fraction = event.clientX / width;
-      if (fraction < TAP_ZONE) void this.turn("prev");
-      else if (fraction > 1 - TAP_ZONE) void this.turn("next");
+      this.pageTapped(contents, event.clientX, event.clientY, event.target);
     }, options);
+
+    // A touchscreen's tap is read from the touch itself. A WebView does not
+    // reliably synthesise a `click` inside the section's document for a tap
+    // on plain text, which is why tapping a highlight used to do nothing.
+    let touchFrom: { x: number; y: number; at: number } | null = null;
+    doc.addEventListener("touchstart", (event: TouchEvent) => {
+      const touch = event.touches.length === 1 ? event.touches[0] : undefined;
+      touchFrom = touch ? { x: touch.clientX, y: touch.clientY, at: Date.now() } : null;
+    }, { passive: true, signal: this.listeners?.signal });
+    doc.addEventListener("touchend", (event: TouchEvent) => {
+      const from = touchFrom;
+      touchFrom = null;
+      const touch = event.changedTouches[0];
+      if (!from || !touch || event.touches.length > 0) return;
+      if (Date.now() - from.at > TOUCH_TAP_MAX_MS) return;
+      if (Math.hypot(touch.clientX - from.x, touch.clientY - from.y) > TAP_SLOP_PX) return;
+      this.touchTapAt = Date.now();
+      this.pageTapped(contents, touch.clientX, touch.clientY, event.target);
+    }, { passive: true, signal: this.listeners?.signal });
 
     this.addScrollIntentListeners(doc);
     this.addPinchListeners(doc);
@@ -745,6 +764,52 @@ export class EpubEngine implements ReaderEngine {
       }) as EventListener,
       { passive: true, signal },
     );
+  }
+
+  /**
+   * A tap on the page, in the section's own coordinates. On a highlight it
+   * is for the highlight; otherwise the left and right edges of a paginated
+   * page turn it, and anything else is the view's (the middle shows or hides
+   * the bars on a touchscreen).
+   */
+  private pageTapped(contents: EpubContents, x: number, y: number, target: EventTarget | null): void {
+    // A link, or a live selection, means the tap was meant for the page.
+    if (isOnLink(target)) return;
+    const selection = contents.window.getSelection();
+    if (selection && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed) return;
+    const frameRect = contents.window.frameElement?.getBoundingClientRect();
+    const position = { x: x + (frameRect?.left ?? 0), y: y + (frameRect?.top ?? 0) };
+
+    if (this.flowMode === "paginated" && this.highlightAt(position) === null) {
+      const width = contents.document.documentElement.clientWidth;
+      // In paginated flow the section is one wide strip of columns, so the
+      // edge is measured on the pane the reader sees, not the strip.
+      const pane = this.container?.getBoundingClientRect();
+      const fraction = pane && pane.width > 0 ? (position.x - pane.left) / pane.width : width > 0 ? x / width : 0.5;
+      if (fraction < TAP_ZONE) {
+        void this.turn("prev");
+        return;
+      }
+      if (fraction > 1 - TAP_ZONE) {
+        void this.turn("next");
+        return;
+      }
+    }
+    this.tapHandler?.(position);
+  }
+
+  highlightAt(position: { x: number; y: number }): string | null {
+    const live = new Set((this.rendition?.getContents() ?? []).map((contents) => contents.document));
+    this.paintedHits = this.paintedHits.filter((hit) => live.has(hit.doc));
+    for (const hit of this.paintedHits) {
+      const frameRect = hit.doc.defaultView?.frameElement?.getBoundingClientRect();
+      const x = position.x - (frameRect?.left ?? 0);
+      const y = position.y - (frameRect?.top ?? 0);
+      for (const rect of Array.from(hit.range.getClientRects())) {
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return hit.id;
+      }
+    }
+    return null;
   }
 
   /** Pinch to change text size, applied when the fingers lift. */
@@ -920,6 +985,16 @@ export class EpubEngine implements ReaderEngine {
       if (this.resizeTimer !== null) win.clearTimeout(this.resizeTimer);
       this.resizeTimer = win.setTimeout(() => {
         this.resizeTimer = null;
+        // A phone's keyboard opening for the search box or the page box
+        // shrinks the pane, and closing it gives the space straight back.
+        // Reflowing for that relaid the book twice under the reader's finger,
+        // so while something is being typed into the pane only stays as it
+        // was laid out; a size that is still different afterwards reflows.
+        const typing = container.doc.activeElement?.matches("input, textarea") ?? false;
+        if (typing && Platform.isMobile) return;
+        const size = contentSize(container);
+        if (size === this.laidOutAt) return;
+        this.laidOutAt = size;
         try {
           this.rendition?.resize();
         } catch (error) {
@@ -927,6 +1002,7 @@ export class EpubEngine implements ReaderEngine {
         }
       }, RESIZE_SETTLE_MS);
     });
+    this.laidOutAt = contentSize(container);
     this.resizeObserver.observe(container);
   }
 
@@ -1097,6 +1173,7 @@ export class EpubEngine implements ReaderEngine {
     if (!annotations) return;
     for (const cfiRange of this.paintedRanges) annotations.remove(cfiRange, "highlight");
     this.paintedRanges.clear();
+    this.paintedHits = [];
     for (const contents of this.rendition?.getContents() ?? []) {
       this.paintContents(contents);
     }
@@ -1118,6 +1195,9 @@ export class EpubEngine implements ReaderEngine {
       if (highlight.suffix !== undefined) context.suffix = highlight.suffix;
       const range = rangeForQuote(source, highlight.exact, context);
       if (!range) continue;
+      if (!this.paintedHits.some((hit) => hit.doc === contents.document && hit.id === highlight.id)) {
+        this.paintedHits.push({ doc: contents.document, range, id: highlight.id });
+      }
       let cfiRange: string;
       try {
         cfiRange = contents.cfiFromRange(range);

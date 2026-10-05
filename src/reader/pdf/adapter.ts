@@ -784,6 +784,11 @@ export class PdfEngine implements ReaderEngine {
     );
   }
 
+  highlightAt(_position: { x: number; y: number }): string | null {
+    // The boxes are in the host document, where the view hit-tests them.
+    return null;
+  }
+
   onTap(handler: (position: { x: number; y: number }) => void): void {
     this.tapHandler = handler;
     const scrollEl = this.scrollEl;

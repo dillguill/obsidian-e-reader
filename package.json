@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "epubjs": "^0.3.93",
+    "hyphen": "^1.14.1",
     "jszip": "^3.10.1",
     "pdfjs-dist": "^6.2.108"
   }

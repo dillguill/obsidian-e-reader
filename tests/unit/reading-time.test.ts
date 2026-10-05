@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PACE_PDF_MS,
   chapterAt,
-  chapterFraction,
   chapterTicks,
   adjacentChapter,
   progressInfoLabel,
@@ -60,10 +59,6 @@ describe("chapterAt", () => {
 });
 
 describe("chapter progress", () => {
-  it("is the share of the chapter behind the reader", () => {
-    expect(chapterFraction({ label: "", start: 10, end: 20 }, 15)).toBe(0.5);
-  });
-
   it("counts the unit on screen as half read", () => {
     expect(unitsLeft(19, 20)).toBe(0.5);
     expect(unitsLeft(25, 20)).toBe(0);
@@ -72,12 +67,12 @@ describe("chapter progress", () => {
 
 describe("progressInfoLabel", () => {
   const facts = {
-    chapter: { label: "The Desert", fraction: 0.424, msLeft: 12 * 60_000 },
+    chapter: { label: "The Desert", msLeft: 12 * 60_000 },
     bookMsLeft: (5 * 60 + 4) * 60_000,
   };
 
   it("shows each kind of progress", () => {
-    expect(progressInfoLabel("chapter", facts)).toBe("The Desert · 42%");
+    expect(progressInfoLabel("chapter", facts)).toBe("The Desert");
     expect(progressInfoLabel("chapter-time", facts)).toBe("12 min left in chapter");
     expect(progressInfoLabel("book-time", facts)).toBe("5 h 4 min left in book");
   });

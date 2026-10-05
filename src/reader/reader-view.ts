@@ -126,8 +126,6 @@ const BOOKMARK_TYPE = RESERVED_ENTRY_TYPE;
  * selection at least this often, so the margin is comfortable.
  */
 const SELECTION_DISMISS_MS = 600;
-/** The middle share of the page whose tap shows or hides the toolbar on a touchscreen. */
-const CHROME_TAP_ZONE = 1 / 3;
 /** The painted mark on the search result being looked at. */
 const SEARCH_MARK_ID = "ereader-search-hit";
 const SEARCH_MARK_COLOR = "#ff9f1a";
@@ -211,6 +209,8 @@ export class ReaderView extends FileView {
   /** A jump's starting point, until the jump is seen to have landed somewhere else. */
   private pendingBack: { target: Locator; at: number } | null = null;
   private readonly savePace = debounce(() => this.saveSettings(), PACE_SAVE_DELAY_MS, true);
+  /** What became of the last tap on the page, for the layout diagnostics. */
+  private lastTap = "no tap yet";
   /** The last on-screen reach of the pane's title bar, for while it is slid away. */
   private lastHeaderReach = 0;
   /** The desktop's countdown to hiding the bars. */
@@ -1524,6 +1524,7 @@ export class ReaderView extends FileView {
       probe,
       focus: this.chromeCanHide(),
       lastHeaderReach: this.lastHeaderReach,
+      lastTap: this.lastTap,
       leafChildren: Array.from(this.containerEl.children).map((el) => el.className),
       viewHeader: box(this.containerEl.querySelector(":scope > .view-header")),
       anyViewHeader: box(doc.querySelector(".workspace-leaf.mod-active .view-header")),
@@ -1538,6 +1539,10 @@ export class ReaderView extends FileView {
       engine: this.engine?.diagnostics() ?? null,
     };
     return JSON.stringify(facts, null, 2);
+  }
+
+  private noteTap(outcome: string): void {
+    this.lastTap = `${new Date().toLocaleTimeString()} ${outcome}`;
   }
 
   /** Focus mode was switched, here or in the plugin's settings. */
@@ -1664,20 +1669,20 @@ export class ReaderView extends FileView {
   }
 
   /**
-   * On a touchscreen, a tap in the middle of the page shows or hides the
-   * toolbar, the way dedicated reading apps do. The edges are left alone —
-   * a paginated book turns its pages there — and so is any tap that is
-   * really the reader putting a selection down.
+   * On a touchscreen, a tap on the page shows or hides the menu, the way
+   * dedicated reading apps do — anywhere across it: a paginated book's edge
+   * taps turn the page before they get here. Not a tap that is really the
+   * reader putting a selection down.
    */
-  private toggleChromeFromTap(position: { x: number; y: number }): void {
+  private toggleChromeFromTap(): void {
     if (!Platform.isMobile || !this.contentRoot) return;
-    if (this.popup?.isPressed() || Date.now() - this.selectionSeenAt < SELECTION_DISMISS_MS) return;
-    const rect = this.contentRoot.getBoundingClientRect();
-    if (rect.width <= 0) return;
-    const fraction = (position.x - rect.left) / rect.width;
-    const edge = (1 - CHROME_TAP_ZONE) / 2;
-    if (fraction < edge || fraction > 1 - edge) return;
+    if (this.popup?.isPressed()) return this.noteTap("ignored: the selection popup is pressed");
+    if (Date.now() - this.selectionSeenAt < SELECTION_DISMISS_MS) return this.noteTap("ignored: just after a selection");
+    const was = this.contentRoot.hasClass("is-immersive");
     this.toggleChrome();
+    const now = this.contentRoot.hasClass("is-immersive");
+    const panel = this.search?.isOpen() || this.appearance?.isOpen();
+    this.noteTap(was === now ? `not toggled (focus mode ${this.chromeCanHide() ? "on" : "off"}, panel open: ${panel})` : `toggled to the ${now ? "reading" : "menu"} view`);
   }
 
   // ----------------------------------------------------------- bookmarks
@@ -1753,15 +1758,17 @@ export class ReaderView extends FileView {
   private showEntryMenuAt(position: { x: number; y: number }): void {
     // A tap inside an EPUB never reaches the host document, where the
     // settings panel listens for presses outside it, so it is closed here.
+    this.noteTap("reached the view");
     if (this.appearance?.isOpen()) {
       this.appearance.hide();
-      return;
+      return this.noteTap("closed the reading settings");
     }
-    if (this.engine?.getSelection()) return;
+    if (this.engine?.getSelection()) return this.noteTap("ignored: text is selected");
     const entry = this.entryAt(position);
+    if (entry) this.noteTap("on a highlight");
     const note = this.bookNote();
     if (!entry || !note) {
-      if (!entry) this.toggleChromeFromTap(position);
+      if (!entry) this.toggleChromeFromTap();
       return;
     }
     const menu = new Menu();

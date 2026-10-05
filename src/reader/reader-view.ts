@@ -1536,7 +1536,13 @@ export class ReaderView extends FileView {
         : null,
       toolbar: box(root?.querySelector(".ereader-toolbar")),
       footer: box(this.footer?.el),
-      engine: this.engine?.diagnostics() ?? null,
+      engine: (() => {
+        try {
+          return this.engine?.diagnostics() ?? null;
+        } catch (error) {
+          return { error: String(error) };
+        }
+      })(),
     };
     return JSON.stringify(facts, null, 2);
   }

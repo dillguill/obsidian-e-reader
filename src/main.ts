@@ -257,19 +257,32 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     readerCommand("zoom-out", "Zoom out", (view) => view.zoom(-1));
     readerCommand("toggle-toolbar", "Show or hide the reader toolbar", (view) => Promise.resolve(view.toggleChrome()));
     readerCommand("copy-layout-diagnostics", "Copy layout diagnostics", async (view) => {
-      const text = view.layoutDiagnostics();
+      let text: string;
       try {
-        await navigator.clipboard.writeText(text);
-        new Notice("Layout diagnostics copied");
-      } catch {
-        // A phone can refuse the clipboard; the vault never does.
-        const path = "e-reader layout diagnostics.md";
+        text = view.layoutDiagnostics();
+      } catch (error) {
+        // Whatever broke is itself the diagnosis.
+        text = JSON.stringify({ error: String(error), stack: error instanceof Error ? error.stack : null }, null, 2);
+      }
+      // Always into the vault, which a phone never refuses; the clipboard
+      // too where it is allowed.
+      const path = "e-reader layout diagnostics.md";
+      const body = "```json\n" + text + "\n```\n";
+      try {
         const file = this.app.vault.getFileByPath(path);
-        const body = "```json\n" + text + "\n```\n";
         if (file) await this.app.vault.modify(file, body);
         else await this.app.vault.create(path, body);
-        new Notice(`Layout diagnostics saved to ${path}`);
+      } catch (error) {
+        new Notice(`Could not save layout diagnostics: ${String(error)}`);
       }
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      } catch {
+        // Refused outside a gesture on some phones; the note has it.
+      }
+      new Notice(`Layout diagnostics saved to "${path}"${copied ? " and copied" : ""}`);
     });
 
     this.addCommand({

@@ -341,8 +341,10 @@ body.ereader-immersive-pdf :is(.mobile-toolbar, .mobile-tab-header, .status-bar)
 
 /* A fingertip needs a bigger target than a pointer, and the page box's text
    has to be at least 16px or iOS zooms the whole app in when it is focused. */
+/* Only the sides: the top clears the floating title bar in focus mode. */
 .is-mobile .ereader-toolbar {
-  padding: var(--size-4-1) var(--size-4-2);
+  padding-left: var(--size-4-2);
+  padding-right: var(--size-4-2);
 }
 
 .is-mobile .ereader-toolbar__button {

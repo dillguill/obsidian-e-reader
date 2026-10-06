@@ -256,34 +256,7 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     readerCommand("zoom-in", "Zoom in", (view) => view.zoom(1));
     readerCommand("zoom-out", "Zoom out", (view) => view.zoom(-1));
     readerCommand("toggle-toolbar", "Show or hide the reader toolbar", (view) => Promise.resolve(view.toggleChrome()));
-    readerCommand("copy-layout-diagnostics", "Copy layout diagnostics", async (view) => {
-      let text: string;
-      try {
-        text = view.layoutDiagnostics();
-      } catch (error) {
-        // Whatever broke is itself the diagnosis.
-        text = JSON.stringify({ error: String(error), stack: error instanceof Error ? error.stack : null }, null, 2);
-      }
-      // Always into the vault, which a phone never refuses; the clipboard
-      // too where it is allowed.
-      const path = "e-reader layout diagnostics.md";
-      const body = "```json\n" + text + "\n```\n";
-      try {
-        const file = this.app.vault.getFileByPath(path);
-        if (file) await this.app.vault.modify(file, body);
-        else await this.app.vault.create(path, body);
-      } catch (error) {
-        new Notice(`Could not save layout diagnostics: ${String(error)}`);
-      }
-      let copied = false;
-      try {
-        await navigator.clipboard.writeText(text);
-        copied = true;
-      } catch {
-        // Refused outside a gesture on some phones; the note has it.
-      }
-      new Notice(`Layout diagnostics saved to "${path}"${copied ? " and copied" : ""}`);
-    });
+    readerCommand("copy-layout-diagnostics", "Copy layout diagnostics", (view) => Promise.resolve(view.copyLayoutDiagnostics()));
 
     this.addCommand({
       id: "import-book",

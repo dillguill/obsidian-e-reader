@@ -32,7 +32,9 @@ export type PanelRow =
       canDecrease: boolean;
       canIncrease: boolean;
       onStep(direction: 1 | -1): void | Promise<void>;
-    };
+    }
+  /** A button that does something once, rather than a setting. */
+  | { kind: "action"; label: string; buttonLabel: string; run(): void };
 
 export class AppearancePanel {
   private readonly el: HTMLElement;
@@ -123,6 +125,13 @@ export class AppearancePanel {
           const more = group.createEl("button", { cls: "ereader-panel__step is-large", text: "A+", attr: { "aria-label": `Larger ${row.label.toLowerCase()}` } });
           more.disabled = !row.canIncrease;
           more.addEventListener("click", () => this.change(() => row.onStep(1)));
+          break;
+        }
+        case "action": {
+          const button = rowEl.createEl("button", { cls: "ereader-panel__action", text: row.buttonLabel, attr: { "aria-label": row.label } });
+          // Run within the click itself, so it keeps the tap's permission
+          // for things like the clipboard.
+          button.addEventListener("click", () => row.run());
           break;
         }
       }

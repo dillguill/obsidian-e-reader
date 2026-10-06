@@ -1037,7 +1037,8 @@ body.ereader-immersive-pdf :is(.mobile-toolbar, .mobile-tab-header, .status-bar)
   border-top: var(--border-width) solid var(--background-modifier-border);
 }
 
-.ereader-panel__row.is-toggle {
+.ereader-panel__row.is-toggle,
+.ereader-panel__row.is-action {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
@@ -1048,7 +1049,8 @@ body.ereader-immersive-pdf :is(.mobile-toolbar, .mobile-tab-header, .status-bar)
   color: var(--text-muted);
 }
 
-.ereader-panel__row.is-toggle .ereader-panel__label {
+.ereader-panel__row.is-toggle .ereader-panel__label,
+.ereader-panel__row.is-action .ereader-panel__label {
   font-size: var(--font-ui-small);
   color: var(--text-normal);
 }
@@ -1175,8 +1177,13 @@ body.ereader-immersive-pdf :is(.mobile-toolbar, .mobile-tab-header, .status-bar)
   font-variant-numeric: tabular-nums;
 }
 
+.ereader-panel__action {
+  font-size: var(--font-ui-small);
+}
+
 .is-mobile .ereader-panel__choice,
-.is-mobile .ereader-panel__step {
+.is-mobile .ereader-panel__step,
+.is-mobile .ereader-panel__action {
   min-height: 36px;
 }
 

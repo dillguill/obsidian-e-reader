@@ -211,6 +211,8 @@ export class ReaderView extends FileView {
   private readonly savePace = debounce(() => this.saveSettings(), PACE_SAVE_DELAY_MS, true);
   /** What became of the last tap on the page, for the layout diagnostics. */
   private lastTap = "no tap yet";
+  /** What the last few touches outside the book landed on, newest first, for the layout diagnostics. */
+  private hostTouches: string[] = [];
   /** The last on-screen reach of the pane's title bar, for while it is slid away. */
   private lastHeaderReach = 0;
   /** The desktop's countdown to hiding the bars. */
@@ -285,6 +287,26 @@ export class ReaderView extends FileView {
     this.footer = this.buildFooter(this.contentRoot);
     this.toolbar.setVisible(false);
     this.watchChrome(this.contentRoot);
+    // A touch on the book goes to its frame's own document, so one seen here
+    // landed on something else; if it was meant for the page, that is what
+    // is covering it.
+    this.registerDomEvent(
+      this.containerEl.doc,
+      "touchstart",
+      (event: TouchEvent) => {
+        const path = (el: Element | null): string => {
+          const names: string[] = [];
+          for (let node = el; node && names.length < 4; node = node.parentElement) {
+            names.push(node.tagName.toLowerCase() + (node.classList.length ? "." + Array.from(node.classList).join(".") : ""));
+          }
+          return names.join(" < ");
+        };
+        const touch = event.touches[0];
+        this.hostTouches.unshift(`${new Date().toLocaleTimeString()} at ${touch ? `${Math.round(touch.clientX)},${Math.round(touch.clientY)}` : "?"}: ${path(event.target instanceof Element ? event.target : null)}`);
+        this.hostTouches.length = Math.min(this.hostTouches.length, 5);
+      },
+      { capture: true, passive: true },
+    );
 
     this.popup = new SelectionPopup(this.contentRoot, this, {
       highlight: (type, selection) => void this.highlightFromPopup(type, selection),
@@ -1195,6 +1217,7 @@ export class ReaderView extends FileView {
       );
     }
     rows.push(...optionRows(options.filter((option) => option.section === "appearance")));
+    rows.push({ kind: "action", label: "Layout diagnostics", buttonLabel: "Copy", run: () => this.copyLayoutDiagnostics() });
     return rows;
   }
 
@@ -1525,6 +1548,14 @@ export class ReaderView extends FileView {
       focus: this.chromeCanHide(),
       lastHeaderReach: this.lastHeaderReach,
       lastTap: this.lastTap,
+      hostTouches: this.hostTouches,
+      // What a tap at each of these points would land on, with the reading
+      // settings panel (open while copying) set aside, and inside the book's
+      // frame where the point falls on it.
+      hitTest: this.hitTest(),
+      workspace: doc.querySelector(".workspace")?.className ?? null,
+      drawerBackdrop: box(doc.querySelector(".workspace-drawer-backdrop")),
+      leftDrawer: box(doc.querySelector(".workspace-drawer.mod-left")),
       leafChildren: Array.from(this.containerEl.children).map((el) => el.className),
       viewHeader: box(this.containerEl.querySelector(":scope > .view-header")),
       anyViewHeader: box(doc.querySelector(".workspace-leaf.mod-active .view-header")),
@@ -1545,6 +1576,81 @@ export class ReaderView extends FileView {
       })(),
     };
     return JSON.stringify(facts, null, 2);
+  }
+
+  /**
+   * Copies the layout diagnostics, then saves them to a note as well. The
+   * copy comes first and is not awaited before: iOS allows the clipboard only
+   * during the tap that asked for it, and any await ahead of it loses that.
+   */
+  copyLayoutDiagnostics(): void {
+    let text: string;
+    try {
+      text = this.layoutDiagnostics();
+    } catch (error) {
+      // Whatever broke is itself the diagnosis.
+      text = JSON.stringify({ error: String(error), stack: error instanceof Error ? error.stack : null }, null, 2);
+    }
+    let copy: Promise<boolean>;
+    try {
+      copy = navigator.clipboard.writeText(text).then(
+        () => true,
+        () => false,
+      );
+    } catch {
+      copy = Promise.resolve(false);
+    }
+    const path = "e-reader layout diagnostics.md";
+    const body = "```json\n" + text + "\n```\n";
+    const vault = this.app.vault;
+    const save = (async (): Promise<boolean> => {
+      const file = vault.getFileByPath(path);
+      if (file) await vault.modify(file, body);
+      else await vault.create(path, body);
+      return true;
+    })().catch((error: unknown) => {
+      console.error("[e-reader] could not save layout diagnostics", error);
+      return false;
+    });
+    void Promise.all([copy, save]).then(([copied, saved]) => {
+      const where = [copied ? "copied" : null, saved ? `saved to "${path}"` : null].filter(Boolean).join(" and ");
+      new Notice(where ? `Layout diagnostics ${where}` : "Could not copy or save layout diagnostics");
+    });
+  }
+
+  private hitTest(): Record<string, string> {
+    const doc = this.containerEl.doc;
+    const win = doc.win;
+    const name = (el: Element | null): string =>
+      el ? el.tagName.toLowerCase() + (typeof el.className === "string" && el.className ? "." + el.className.trim().split(/\s+/).join(".") : "") : "nothing";
+    const panel = this.contentRoot?.querySelector<HTMLElement>(".ereader-appearance");
+    const display = panel?.style.display ?? "";
+    if (panel) panel.style.display = "none";
+    try {
+      const points: [string, number, number][] = [
+        ["left", 0.15, 0.5],
+        ["middle", 0.5, 0.5],
+        ["right", 0.85, 0.5],
+        ["upper", 0.5, 0.3],
+        ["lower", 0.5, 0.75],
+      ];
+      return Object.fromEntries(
+        points.map(([label, fx, fy]) => {
+          const x = Math.round(win.innerWidth * fx);
+          const y = Math.round(win.innerHeight * fy);
+          const hit = doc.elementFromPoint(x, y);
+          let text = `${x},${y}: ${name(hit)}`;
+          if (hit instanceof HTMLIFrameElement) {
+            const rect = hit.getBoundingClientRect();
+            const inner = hit.contentDocument?.elementFromPoint(x - rect.left, y - rect.top) ?? null;
+            text += ` [frame at ${Math.round(rect.left)},${Math.round(rect.top)} ${Math.round(rect.width)}x${Math.round(rect.height)} -> ${name(inner)}]`;
+          }
+          return [label, text];
+        }),
+      );
+    } finally {
+      if (panel) panel.style.display = display;
+    }
   }
 
   private noteTap(outcome: string): void {

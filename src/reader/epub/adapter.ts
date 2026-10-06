@@ -363,6 +363,8 @@ export class EpubEngine implements ReaderEngine {
   private lastCfi: string | null = null;
   private contextMenuHandler: ((position: { x: number; y: number }) => boolean) | null = null;
   private tapHandler: ((position: { x: number; y: number }) => void) | null = null;
+  /** What became of the last touch inside the book, for the layout diagnostics. */
+  private tapTrace = "no touch in the book yet";
   private pageGestureHandler: ((gesture: "turn" | "up" | "down") => void) | null = null;
   private selectionEndHandler: (() => void) | null = null;
   private selectionChangeHandler: (() => void) | null = null;
@@ -452,7 +454,11 @@ export class EpubEngine implements ReaderEngine {
       flow: epubFlow(this.flowMode),
       spread: this.spreadMode,
       minSpreadWidth: MIN_SPREAD_WIDTH_PX,
-      allowScriptedContent: false,
+      // iOS runs no event listener inside a frame sandboxed without
+      // `allow-scripts` (WebKit bug 218086), so taps, selections and keys in
+      // the book would never arrive. foliate-js, which FleurEPUB renders
+      // with, allows scripts for the same reason.
+      allowScriptedContent: true,
     });
     this.rendition = rendition;
     rendition.on("relocated", (location) => {
@@ -730,14 +736,16 @@ export class EpubEngine implements ReaderEngine {
     doc.addEventListener("touchstart", (event: TouchEvent) => {
       const touch = event.touches.length === 1 ? event.touches[0] : undefined;
       touchFrom = touch ? { x: touch.clientX, y: touch.clientY, at: Date.now() } : null;
+      this.traceTap(`touchstart (${event.touches.length} touches)`);
     }, { passive: true, signal: this.listeners?.signal });
     doc.addEventListener("touchend", (event: TouchEvent) => {
       const from = touchFrom;
       touchFrom = null;
       const touch = event.changedTouches[0];
-      if (!from || !touch || event.touches.length > 0) return;
-      if (Date.now() - from.at > TOUCH_TAP_MAX_MS) return;
-      if (Math.hypot(touch.clientX - from.x, touch.clientY - from.y) > TAP_SLOP_PX) return;
+      if (!from || !touch || event.touches.length > 0) return this.traceTap("touchend: not a single touch");
+      if (Date.now() - from.at > TOUCH_TAP_MAX_MS) return this.traceTap(`touchend: held ${Date.now() - from.at}ms`);
+      const moved = Math.hypot(touch.clientX - from.x, touch.clientY - from.y);
+      if (moved > TAP_SLOP_PX) return this.traceTap(`touchend: moved ${Math.round(moved)}px`);
       this.touchTapAt = Date.now();
       this.pageTapped(contents, touch.clientX, touch.clientY, event.target);
     }, { passive: true, signal: this.listeners?.signal });
@@ -796,9 +804,9 @@ export class EpubEngine implements ReaderEngine {
    */
   private pageTapped(contents: EpubContents, x: number, y: number, target: EventTarget | null): void {
     // A link, or a live selection, means the tap was meant for the page.
-    if (isOnLink(target)) return;
+    if (isOnLink(target)) return this.traceTap("tap on a link");
     const selection = contents.window.getSelection();
-    if (selection && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed) return;
+    if (selection && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed) return this.traceTap("tap with text selected");
     const frameRect = contents.window.frameElement?.getBoundingClientRect();
     const position = { x: x + (frameRect?.left ?? 0), y: y + (frameRect?.top ?? 0) };
 
@@ -809,17 +817,24 @@ export class EpubEngine implements ReaderEngine {
       const pane = this.container?.getBoundingClientRect();
       const fraction = pane && pane.width > 0 ? (position.x - pane.left) / pane.width : width > 0 ? x / width : 0.5;
       if (fraction < TAP_ZONE) {
+        this.traceTap(`tap at ${Math.round(fraction * 100)}% across: previous page`);
         void this.turn("prev");
         this.pageGestureHandler?.("turn");
         return;
       }
       if (fraction > 1 - TAP_ZONE) {
+        this.traceTap(`tap at ${Math.round(fraction * 100)}% across: next page`);
         void this.turn("next");
         this.pageGestureHandler?.("turn");
         return;
       }
     }
+    this.traceTap(this.tapHandler ? "tap sent to the view" : "tap with no view listening");
     this.tapHandler?.(position);
+  }
+
+  private traceTap(outcome: string): void {
+    this.tapTrace = `${new Date().toLocaleTimeString()} ${outcome}`;
   }
 
   onPageGesture(handler: (gesture: "turn" | "up" | "down") => void): void {
@@ -829,11 +844,12 @@ export class EpubEngine implements ReaderEngine {
   diagnostics(): Record<string, unknown> {
     const contents = this.rendition?.getContents()[0];
     const doc = contents?.document;
-    if (!doc) return { section: null };
+    if (!doc) return { section: null, tapTrace: this.tapTrace };
     const root = doc.documentElement;
     const p = doc.querySelector("p");
     const style = p ? doc.defaultView?.getComputedStyle(p) : null;
     return {
+      tapTrace: this.tapTrace,
       contentType: doc.contentType,
       namespace: root.namespaceURI,
       lang: root.getAttribute("lang"),

@@ -14,6 +14,19 @@
 import { type StatusSettings, normalizeStatus } from "../core/status";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
 import { type SpreadMode, isSpreadMode } from "../reader/spread";
+import {
+  type BookFont,
+  type LineSpacing,
+  type Margins,
+  type ReadingTheme,
+  type TextAlign,
+  TEXT_ALIGNS,
+  isBookFont,
+  isLineSpacing,
+  isMargins,
+  isReadingTheme,
+} from "../reader/typography";
+import { DEFAULT_PACE_EPUB_MS, DEFAULT_PACE_PDF_MS, clampPace } from "../reader/reading-time";
 import { clampScale } from "../reader/zoom";
 
 /**
@@ -124,10 +137,52 @@ export interface ReaderPreferences {
   pdfScale: number;
   pdfFit: PdfFit;
   pdfSpread: SpreadMode;
-  pdfAdaptToTheme: boolean;
   /** Text size for reflowable books, as a multiplier of the book's own size. */
   epubTextScale: number;
   epubFlow: EpubFlow;
+  /** Line spacing for reflowable books; "normal" leaves it to the book. */
+  epubLineSpacing: LineSpacing;
+  /** Space either side of a reflowable book's text. */
+  epubMargins: Margins;
+  epubFont: BookFont;
+  /** How running text is aligned; "book" leaves it to the book. */
+  epubAlign: TextAlign;
+  /**
+   * Hyphenation, on by default as in Apple Books: without it a justified
+   * line on a phone can only break between whole words, and spreads the
+   * rest of the line into wide gaps.
+   */
+  epubHyphenation: boolean;
+  /** Two pages side by side in paginated flow once the pane is wide enough, or always one. */
+  epubSpread: EpubSpread;
+  /** The page's palette, for both formats. "auto" follows the vault's theme. */
+  readingTheme: ReadingTheme;
+  /** The line under the page with the chapter, time left and percentage. */
+  showFooter: boolean;
+  /** What the progress line's label shows; a tap on it moves to the next. */
+  footerInfo: FooterInfo;
+  /**
+   * Focus mode: the menu hides while reading (scrolling or turning pages on a
+   * phone, the pointer resting on a desktop) and the progress line takes its
+   * place. Kept per kind of device, because one vault is read on both and a
+   * phone wants it far more than a desktop.
+   */
+  focusModeMobile: boolean;
+  focusModeDesktop: boolean;
+  /**
+   * Zoom, fit and spreads per PDF, by the path of the file the reader has
+   * open: a scanned textbook and a novel want different ones. The top-level
+   * `pdfScale`, `pdfFit` and `pdfSpread` are the last ones used, which a PDF
+   * opened for the first time starts from.
+   */
+  pdfBooks: Record<string, PdfView>;
+  /**
+   * How long the reader takes over one unit, learned as they read, for the
+   * time-left estimates: an EPUB location (about 1,600 characters) or a PDF
+   * page.
+   */
+  paceEpubMs: number;
+  pacePdfMs: number;
   /** Whether saved highlights are painted into the document. */
   showHighlights: boolean;
   /**
@@ -157,6 +212,7 @@ function paletteColor(index: number): string {
 }
 
 export type EpubFlow = "scrolled" | "paginated";
+export type EpubSpread = "auto" | "none";
 
 /**
  * Whether the PDF scale is pinned to the pane rather than to a number. A
@@ -165,6 +221,65 @@ export type EpubFlow = "scrolled" | "paginated";
  * re-applied whenever the pane is resized or the device rotated.
  */
 export type PdfFit = "none" | "width" | "height" | "page";
+/** Whether focus mode is on for this kind of device. */
+export function focusModeOn(reader: ReaderPreferences, mobile: boolean): boolean {
+  return mobile ? reader.focusModeMobile : reader.focusModeDesktop;
+}
+
+export function setFocusMode(reader: ReaderPreferences, mobile: boolean, on: boolean): void {
+  if (mobile) reader.focusModeMobile = on;
+  else reader.focusModeDesktop = on;
+}
+
+/** The second row of the progress line; the first always shows the book's percentage. */
+export type FooterInfo = "chapter" | "chapter-time" | "book-time";
+export const FOOTER_INFOS: readonly FooterInfo[] = ["chapter", "chapter-time", "book-time"];
+
+function mergeFooterInfo(info: unknown, legacyTime: unknown, fallback: FooterInfo): FooterInfo {
+  if (typeof info === "string" && (FOOTER_INFOS as readonly string[]).includes(info)) return info as FooterInfo;
+  // 0.4.0-beta.19 also had the book's percentage, which now always shows.
+  if (info === "book") return "chapter";
+  // 0.4.0-beta.14–18 switched only the time left between chapter and book.
+  if (legacyTime === "book") return "book-time";
+  if (legacyTime === "chapter") return "chapter-time";
+  return fallback;
+}
+
+export interface PdfView {
+  scale: number;
+  fit: PdfFit;
+  spread: SpreadMode;
+}
+
+/** The most PDFs whose view is remembered; the least recently changed ones are dropped first. */
+export const MAX_REMEMBERED_PDFS = 200;
+
+/**
+ * Records `view` as `path`'s, moving it to the end so the oldest entries are
+ * the ones {@link MAX_REMEMBERED_PDFS} drops.
+ */
+export function rememberPdfView(books: Record<string, PdfView>, path: string, view: PdfView): Record<string, PdfView> {
+  const next: Record<string, PdfView> = {};
+  const keys = Object.keys(books).filter((key) => key !== path);
+  for (const key of keys.slice(Math.max(0, keys.length - (MAX_REMEMBERED_PDFS - 1)))) {
+    const kept = books[key];
+    if (kept) next[key] = kept;
+  }
+  next[path] = { ...view };
+  return next;
+}
+
+function mergePdfBooks(value: unknown): Record<string, PdfView> {
+  const books: Record<string, PdfView> = {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return books;
+  for (const [path, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const view = raw as Record<string, unknown>;
+    if (typeof view["scale"] !== "number" || !Number.isFinite(view["scale"]) || !isPdfFit(view["fit"]) || !isSpreadMode(view["spread"])) continue;
+    books[path] = { scale: clampScale(view["scale"]), fit: view["fit"], spread: view["spread"] };
+  }
+  return books;
+}
 
 /** One reader-configurable highlight kind and the colour it is painted in. */
 export interface AnnotationType {
@@ -250,13 +365,30 @@ export const DEFAULT_SETTINGS: Settings = {
     pdfScale: 1,
     pdfFit: "width",
     pdfSpread: "single",
-    pdfAdaptToTheme: false,
     epubTextScale: 1,
     epubFlow: "scrolled",
+    epubLineSpacing: "normal",
+    epubMargins: "normal",
+    epubFont: "book",
+    epubAlign: "book",
+    epubHyphenation: true,
+    epubSpread: "auto",
+    readingTheme: "auto",
+    showFooter: true,
+    footerInfo: "chapter",
+    focusModeMobile: true,
+    focusModeDesktop: false,
+    pdfBooks: {},
+    paceEpubMs: DEFAULT_PACE_EPUB_MS,
+    pacePdfMs: DEFAULT_PACE_PDF_MS,
     showHighlights: true,
     activeAnnotationType: "idea",
   },
 };
+
+function mergePace(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? clampPace(value) : fallback;
+}
 
 function isPdfFit(value: unknown): value is PdfFit {
   return value === "none" || value === "width" || value === "height" || value === "page";
@@ -432,9 +564,30 @@ function mergeReaderPreferences(saved: Record<string, unknown>, types: Annotatio
     pdfScale: mergeScale(from["pdfScale"], defaults.pdfScale),
     pdfFit: isPdfFit(from["pdfFit"]) ? from["pdfFit"] : defaults.pdfFit,
     pdfSpread: isSpreadMode(from["pdfSpread"]) ? from["pdfSpread"] : defaults.pdfSpread,
-    pdfAdaptToTheme: mergeBoolean(from["pdfAdaptToTheme"], defaults.pdfAdaptToTheme),
     epubTextScale: mergeScale(from["epubTextScale"], defaults.epubTextScale),
     epubFlow: from["epubFlow"] === "paginated" || from["epubFlow"] === "scrolled" ? from["epubFlow"] : defaults.epubFlow,
+    epubLineSpacing: isLineSpacing(from["epubLineSpacing"]) ? from["epubLineSpacing"] : defaults.epubLineSpacing,
+    epubMargins: isMargins(from["epubMargins"]) ? from["epubMargins"] : defaults.epubMargins,
+    epubFont: isBookFont(from["epubFont"]) ? from["epubFont"] : defaults.epubFont,
+    // 0.4.0-beta.22 and earlier had a justify switch whose "off" left it to the book.
+    epubAlign: (TEXT_ALIGNS as readonly unknown[]).includes(from["epubAlign"])
+      ? (from["epubAlign"] as TextAlign)
+      : from["epubJustify"] === true
+        ? "justify"
+        : defaults.epubAlign,
+    // A new name, so the old switch's saved "off" — its default until now —
+    // does not keep hyphenation off; a reader who had turned it on keeps it.
+    epubHyphenation: mergeBoolean(from["epubHyphenation"], from["epubHyphenate"] === true || defaults.epubHyphenation),
+    epubSpread: from["epubSpread"] === "none" || from["epubSpread"] === "auto" ? from["epubSpread"] : defaults.epubSpread,
+    readingTheme: isReadingTheme(from["readingTheme"]) ? from["readingTheme"] : defaults.readingTheme,
+    showFooter: mergeBoolean(from["showFooter"], defaults.showFooter),
+    footerInfo: mergeFooterInfo(from["footerInfo"], from["footerTime"], defaults.footerInfo),
+    focusModeMobile: mergeBoolean(from["focusModeMobile"], defaults.focusModeMobile),
+    // 0.4.0-beta.14–19 called the desktop's "Hide toolbar while reading".
+    focusModeDesktop: mergeBoolean(from["focusModeDesktop"] ?? from["autoHideChrome"], defaults.focusModeDesktop),
+    pdfBooks: mergePdfBooks(from["pdfBooks"]),
+    paceEpubMs: mergePace(from["paceEpubMs"], defaults.paceEpubMs),
+    pacePdfMs: mergePace(from["pacePdfMs"], defaults.pacePdfMs),
     showHighlights: mergeBoolean(from["showHighlights"], defaults.showHighlights),
     activeAnnotationType: mergeActiveType(from["activeAnnotationType"], types),
   };

@@ -18,13 +18,25 @@
 // epub.js type may leak past this module — callers only see
 // ReaderEngine/OutlineNode/... (../engine.ts).
 
-import type { App } from "obsidian";
+import { type App, Platform } from "obsidian";
 import type { Locator } from "../../core/types";
-import type { EpubFlow } from "../../settings/settings-model";
-import { activeRange, rangeForQuote, searchableText, snapshotFromRange } from "../dom-selection";
-import type { DisplayOption, EngineSelection, OutlineNode, PageState, PaintedHighlight, ReaderEngine } from "../engine";
+import type { EpubFlow, EpubSpread } from "../../settings/settings-model";
+import { activeRange, rangeForQuote, rangeFromOffsets, searchableText, snapshotFromRange } from "../dom-selection";
+import type {
+  DisplayOption,
+  EngineSelection,
+  OutlineNode,
+  PageState,
+  PaintedHighlight,
+  ReaderEngine,
+  SearchHandlers,
+} from "../engine";
+import { findMatches, hitFromText, yieldToUi } from "../search";
 import { type Point, isPinchWorthApplying, pinchDistance, pinchScale } from "../pinch";
+import { swipeDirection, verticalSwipe } from "../gestures";
 import { fractionToPercent } from "../progress";
+import { PROSE_ELEMENTS, type Typography, marginPadding, typographyCss } from "../typography";
+import { canHyphenate, setSoftHyphens } from "../soft-hyphens";
 import { clampScale } from "../zoom";
 
 interface EpubNavItem {
@@ -46,6 +58,8 @@ interface EpubSection {
   cfiFromRange(range: Range): string;
   /** Set by `load`; the section's parsed document. Undefined once unloaded. */
   document?: Document;
+  /** The section's resolved URL in the archive, which `load` requests. */
+  url: string;
 }
 
 interface EpubSpine {
@@ -67,8 +81,19 @@ interface EpubLocations {
   total: number;
 }
 
+/** Marks a paragraph the "Left" alignment set flush left, so it can be undone. */
+const LEFT_ALIGNED_ATTR = "data-ereader-left";
+
+/** The language a section's `<html>` declares, as `lang` or `xml:lang`. */
+function declaredLanguage(doc: Document): string | null {
+  const root = doc.documentElement;
+  return root.lang || root.getAttribute("xml:lang") || root.getAttributeNS("http://www.w3.org/XML/1998/namespace", "lang");
+}
+
 interface EpubBook {
   ready: Promise<unknown>;
+  /** The package document, read by the time `ready` resolves. */
+  packaging?: { metadata?: { language?: string } };
   navigation: EpubNavigation;
   spine: EpubSpine;
   locations: EpubLocations;
@@ -91,6 +116,8 @@ interface EpubContents {
   document: Document;
   window: Window;
   cfiFromRange(range: Range): string;
+  /** epub.js's own event emitter; `linkClicked` fires before it follows an internal link. */
+  on(event: "linkClicked", callback: (href: string) => void): void;
 }
 
 interface EpubHook {
@@ -121,6 +148,8 @@ interface EpubRendition {
   themes: EpubThemes;
   annotations: EpubAnnotations;
   flow(flow: string): void;
+  /** "none" keeps one page; "auto" shows two side by side from `min` pixels wide. */
+  spread(spread: string, min?: number): void;
   destroy(): void;
 }
 
@@ -128,30 +157,41 @@ interface EpubRendition {
 export interface EpubPreferences {
   textScale: number;
   flow: EpubFlow;
+  spread: EpubSpread;
 }
 
 export interface EpubEngineOptions extends EpubPreferences {
+  typography: Typography;
   onPreferencesChanged(preferences: EpubPreferences): void;
 }
 
+/** The size of an element's content box, padding excluded, as "WxH" — what the book is laid out in. */
+function contentSize(el: HTMLElement): string {
+  const style = el.win.getComputedStyle(el);
+  const px = (value: string): number => Number.parseFloat(value) || 0;
+  const width = el.clientWidth - px(style.paddingLeft) - px(style.paddingRight);
+  const height = el.clientHeight - px(style.paddingTop) - px(style.paddingBottom);
+  return `${Math.round(width)}x${Math.round(height)}`;
+}
+
 /**
- * Loads a section for inspection and leaves it as it was found.
+ * A section's document, for reading without displaying it.
  *
- * `Section.unload()` clears the section's parsed document, and epub.js's
- * rendered view holds the SAME Section objects the spine does — so unloading
- * one that is currently on screen pulls the document out from under the
- * reader and the page goes blank. Searching walks every section in the book,
- * which always includes the one being read, so a section that was already
- * loaded is left loaded.
+ * It is a copy of its own, fetched the same way `Section.load` fetches it,
+ * and never the Section's. epub.js's rendered view holds the SAME Section
+ * objects the spine does, so loading one here and unloading it afterwards
+ * pulled the document out from under the reader whenever that section was
+ * being displayed at the time — and searching walks every section while the
+ * reader jumps to its results, which is how a first search used to blank or
+ * freeze the page until a few taps re-rendered it. A copy cannot do that,
+ * and is dropped when it is no longer used. The CFIs built against it are
+ * the same, since a Section builds them from its spine position, not from
+ * its document.
  */
-async function withSection<T>(book: EpubBook, section: EpubSection, use: () => T): Promise<T> {
-  const wasLoaded = section.document !== undefined;
-  await section.load((url) => book.load(url));
-  try {
-    return use();
-  } finally {
-    if (!wasLoaded) section.unload();
-  }
+async function withSection<T>(book: EpubBook, section: EpubSection, use: (doc: Document) => T): Promise<T> {
+  const doc = section.document ?? ((await book.load(section.url)) as Document | undefined);
+  if (!doc?.documentElement) throw new Error(`could not read ${section.url}`);
+  return use(doc);
 }
 
 /**
@@ -193,8 +233,8 @@ async function cfiForHref(book: EpubBook, href: string, EpubCFI: EpubCfiClass): 
   const section = book.spine.get(href);
   if (!section) return null;
   try {
-    return await withSection(book, section, () => {
-      const root = section.document?.documentElement;
+    return await withSection(book, section, (doc) => {
+      const root = doc.documentElement;
       if (!root) return null;
       const target = anchorElement(root, href);
       if (!target) return null;
@@ -207,13 +247,10 @@ async function cfiForHref(book: EpubBook, href: string, EpubCFI: EpubCfiClass): 
     // returns never settles and the caller waits forever on a blank page
     // with nothing thrown and nothing logged. Far better to drop the entry
     // here, where the outline can simply omit it.
-      const doc = root.ownerDocument;
-      if (doc) {
-        const range = new EpubCFI(cfi).toRange(doc);
-        if (!range) {
-          console.warn("[e-reader] dropping a TOC entry whose CFI does not resolve", href, cfi);
-          return null;
-        }
+      const range = new EpubCFI(cfi).toRange(doc);
+      if (!range) {
+        console.warn("[e-reader] dropping a TOC entry whose CFI does not resolve", href, cfi);
+        return null;
       }
       return cfi;
     });
@@ -244,6 +281,10 @@ const TAP_ZONE = 0.3;
 
 /** A tap that moved this far is a drag — a selection, not a page turn. */
 const TAP_SLOP_PX = 8;
+/** A touch held longer than this is a press (selecting), not a tap. */
+const TOUCH_TAP_MAX_MS = 400;
+/** How long after a touch tap the browser's own synthesised `click` is ignored. */
+const TOUCH_CLICK_MS = 800;
 
 /**
  * How far past the end of a chapter the reader has to keep pushing before it
@@ -281,6 +322,18 @@ function epubFlow(mode: EpubFlow): string {
 
 /** Marks the `<style>` element this plugin owns inside each rendered section. */
 const THEME_STYLE_ID = "ereader-theme";
+/** epub.js's own default: below this a pane shows one page even with spreads on. */
+const MIN_SPREAD_WIDTH_PX = 800;
+
+/**
+ * Whether an event landed on a link. Duck-typed rather than `instanceof
+ * Element`: a section's nodes come from its iframe's own realm, whose
+ * `Element` is not the host window's, so `instanceof` is always false there.
+ */
+function isOnLink(target: EventTarget | null): boolean {
+  const closest = (target as Partial<Element> | null)?.closest;
+  return typeof closest === "function" && closest.call(target, "a[href]") !== null;
+}
 
 /** Turns a CFI string into a Range, so a generated one can be proven usable. */
 interface EpubCfiClass {
@@ -310,15 +363,29 @@ export class EpubEngine implements ReaderEngine {
   private lastCfi: string | null = null;
   private contextMenuHandler: ((position: { x: number; y: number }) => boolean) | null = null;
   private tapHandler: ((position: { x: number; y: number }) => void) | null = null;
+  /** What became of the last touch inside the book, for the layout diagnostics. */
+  private tapTrace = "no touch in the book yet";
+  private pageGestureHandler: ((gesture: "turn" | "up" | "down") => void) | null = null;
   private selectionEndHandler: (() => void) | null = null;
   private selectionChangeHandler: (() => void) | null = null;
   private keyDownHandler: ((event: KeyboardEvent) => boolean) | null = null;
   private changeHandler: (() => void) | null = null;
   private textScale: number;
   private flowMode: EpubFlow;
+  private spreadMode: EpubSpread;
+  private typography: Typography;
+  private linkHandler: (() => void) | null = null;
   private highlights: readonly PaintedHighlight[] = [];
   /** Every CFI range currently drawn, so a repaint can take them all down first. */
   private paintedRanges = new Set<string>();
+  /**
+   * The text each drawn highlight covers, per section document, for telling
+   * which one a tap landed on. Measured from the text itself rather than from
+   * epub.js's overlay, whose position is its own business.
+   */
+  private paintedHits: { doc: Document; range: Range; id: string }[] = [];
+  /** A touch that was a tap is handled on release; the `click` the browser may synthesise after it is ignored. */
+  private touchTapAt = 0;
   /** Set while a page/chapter turn is in flight, so repeat gestures do not stack. */
   private turning = false;
   /** Scroll travel accumulated past the end of the chapter, in pixels. */
@@ -340,6 +407,8 @@ export class EpubEngine implements ReaderEngine {
   private listeners: AbortController | null = null;
   /** Reflows the book when the pane changes size — see watchForResize. */
   private resizeObserver: ResizeObserver | null = null;
+  /** The pane's size the book was last laid out for, as "WxH". */
+  private laidOutAt = "";
   private resizeTimer: number | null = null;
   /** Every match of the query in force, in reading order. */
 
@@ -349,6 +418,18 @@ export class EpubEngine implements ReaderEngine {
   ) {
     this.textScale = clampScale(options.textScale);
     this.flowMode = options.flow;
+    this.spreadMode = options.spread;
+    this.typography = { ...options.typography };
+  }
+
+  private preferences(): EpubPreferences {
+    return { textScale: this.textScale, flow: this.flowMode, spread: this.spreadMode };
+  }
+
+  /** Margins sit outside the section's iframe — see marginPadding. */
+  private applyMargins(): void {
+    const padding = marginPadding(this.typography.margins);
+    this.container?.setCssStyles({ paddingLeft: padding, paddingRight: padding });
   }
 
   async open(path: string, container: HTMLElement): Promise<void> {
@@ -360,6 +441,8 @@ export class EpubEngine implements ReaderEngine {
     const book = ePub(data) as unknown as EpubBook;
     this.book = book;
     this.container = container;
+    // Before rendering, so the first layout is already the right width.
+    this.applyMargins();
     await book.ready;
 
     // Default flow renders one section at a time, which lands on the cover and
@@ -369,7 +452,13 @@ export class EpubEngine implements ReaderEngine {
       height: "100%",
       manager: "default",
       flow: epubFlow(this.flowMode),
-      allowScriptedContent: false,
+      spread: this.spreadMode,
+      minSpreadWidth: MIN_SPREAD_WIDTH_PX,
+      // iOS runs no event listener inside a frame sandboxed without
+      // `allow-scripts` (WebKit bug 218086), so taps, selections and keys in
+      // the book would never arrive. foliate-js, which FleurEPUB renders
+      // with, allows scripts for the same reason.
+      allowScriptedContent: true,
     });
     this.rendition = rendition;
     rendition.on("relocated", (location) => {
@@ -396,16 +485,6 @@ export class EpubEngine implements ReaderEngine {
         });
         if (claimed) event.preventDefault();
       }, options);
-      // A tap is how an existing highlight is reached on a touchscreen.
-      contents.document.addEventListener("click", (event: MouseEvent) => {
-        const handler = this.tapHandler;
-        if (!handler) return;
-        const frameRect = contents.window.frameElement?.getBoundingClientRect();
-        handler({
-          x: event.clientX + (frameRect?.left ?? 0),
-          y: event.clientY + (frameRect?.top ?? 0),
-        });
-      }, options);
       // Selection gestures, like the context menu, do not cross the iframe
       // boundary and have to be attached per section.
       const fireSelectionEnd = (): void => this.selectionEndHandler?.();
@@ -417,6 +496,9 @@ export class EpubEngine implements ReaderEngine {
       contents.document.addEventListener("keydown", (event: KeyboardEvent) => {
         if (this.keyDownHandler?.(event)) event.preventDefault();
       }, options);
+      // The reader's place before an internal link is followed is where
+      // "Back" returns to. epub.js follows the link itself, a moment later.
+      contents.on("linkClicked", () => this.linkHandler?.());
       this.addNavigationGestures(contents);
       // A section that arrives later still gets the vault's theme and
       // whatever highlights belong to it.
@@ -430,6 +512,7 @@ export class EpubEngine implements ReaderEngine {
     // covers everything in the pane that is NOT the section's iframe.
     this.addScrollIntentListeners(container);
     this.addPinchListeners(container);
+    this.addSwipeListeners(container, () => false);
     this.watchForResize(container);
     await rendition.display();
 
@@ -500,7 +583,7 @@ export class EpubEngine implements ReaderEngine {
     if (next === this.textScale) return;
     this.textScale = next;
     this.rendition?.themes.fontSize(`${Math.round(next * 100)}%`);
-    this.options.onPreferencesChanged({ textScale: this.textScale, flow: this.flowMode });
+    this.options.onPreferencesChanged(this.preferences());
     this.changeHandler?.();
     // Reflowing moves every CFI-anchored box; epub.js redraws its own
     // annotations, but the quote-to-range search has to run again.
@@ -521,19 +604,98 @@ export class EpubEngine implements ReaderEngine {
       apply: () => {
         if (this.flowMode === mode) return;
         this.flowMode = mode;
-        this.options.onPreferencesChanged({ textScale: this.textScale, flow: this.flowMode });
+        this.options.onPreferencesChanged(this.preferences());
         // epub.js's own flow() re-displays at the current CFI, so the
         // reader keeps their place across the switch.
         this.rendition?.flow(epubFlow(mode));
         this.changeHandler?.();
       },
     });
-    // "by chapter" is not decoration: one section renders at a time, so the
-    // reader should not expect one continuous scroll through the whole book.
+    // Scrolled flow holds one chapter at a time (scrolled-doc), continuing
+    // into the next as the reader scrolls past its end.
+    // Spreads only exist in paginated flow; scrolled always shows one column.
+    const spreadOption: DisplayOption[] =
+      this.flowMode === "paginated"
+        ? [
+            {
+              section: "spread",
+              id: "spread-auto",
+              label: "Two pages when wide",
+              icon: "book-open",
+              checked: this.spreadMode === "auto",
+              apply: () => {
+                this.spreadMode = this.spreadMode === "auto" ? "none" : "auto";
+                this.options.onPreferencesChanged(this.preferences());
+                this.rendition?.spread(this.spreadMode, MIN_SPREAD_WIDTH_PX);
+                this.changeHandler?.();
+              },
+            },
+          ]
+        : [];
     return [
-      flowOption("scrolled", "Scrolled (by chapter)", "move-vertical"),
+      flowOption("scrolled", "Scrolled", "move-vertical"),
       flowOption("paginated", "Paginated", "book-open"),
+      ...spreadOption,
     ];
+  }
+
+  /**
+   * Line spacing, font, justification and hyphenation restyle each section in
+   * place; margins resize the host, which the resize observer turns into
+   * epub.js's own reflow.
+   */
+  setTypography(typography: Typography): void {
+    const marginsChanged = typography.margins !== this.typography.margins;
+    this.typography = { ...typography };
+    if (marginsChanged) this.applyMargins();
+    this.refreshTheme();
+  }
+
+  onLinkFollowed(handler: () => void): void {
+    this.linkHandler = handler;
+  }
+
+  /**
+   * Walks every section of the spine for `query`, reporting matches as they
+   * are found so the first results show while the rest of the book is still
+   * being read. Each section is loaded on its own — not the rendered view —
+   * so the search reaches chapters the reader has not opened.
+   */
+  async search(query: string, handlers: SearchHandlers, signal: AbortSignal): Promise<void> {
+    const book = this.book;
+    if (!book) return;
+    const sections = book.spine.spineItems;
+    let full = false;
+    for (let i = 0; i < sections.length; i++) {
+      if (signal.aborted || full) return;
+      const section = sections[i] as EpubSection;
+      try {
+        await withSection(book, section, (doc) => {
+          const body = doc.body;
+          if (!body) return;
+          const source = searchableText(body);
+          for (const match of findMatches(source.index.text, query)) {
+            if (signal.aborted) return;
+            const range = rangeFromOffsets(source, match.start, match.end);
+            if (!range) continue;
+            let cfi: string;
+            try {
+              cfi = section.cfiFromRange(range);
+            } catch {
+              continue;
+            }
+            if (!handlers.hit(hitFromText(source.index.text, match, { kind: "epub", cfi }))) {
+              full = true;
+              return;
+            }
+          }
+        });
+      } catch (error) {
+        console.debug("[e-reader] could not search a section", error);
+      }
+      handlers.progress((i + 1) / sections.length);
+      await yieldToUi();
+    }
   }
 
   // ----------------------------------------------------------- navigation
@@ -559,27 +721,179 @@ export class EpubEngine implements ReaderEngine {
     doc.addEventListener("mousedown", (event: MouseEvent) => {
       downAt = { x: event.clientX, y: event.clientY };
     }, options);
-
     doc.addEventListener("click", (event: MouseEvent) => {
       const from = downAt;
       downAt = null;
-      if (this.flowMode !== "paginated" || event.button !== 0) return;
+      if (event.button !== 0 || Date.now() - this.touchTapAt < TOUCH_CLICK_MS) return;
       if (from && Math.hypot(event.clientX - from.x, event.clientY - from.y) > TAP_SLOP_PX) return;
-      // A link, or a live selection, means the tap was meant for the page.
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest("a[href]")) return;
-      const selection = contents.window.getSelection();
-      if (selection && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed) return;
-
-      const width = doc.documentElement.clientWidth;
-      if (width <= 0) return;
-      const fraction = event.clientX / width;
-      if (fraction < TAP_ZONE) void this.turn("prev");
-      else if (fraction > 1 - TAP_ZONE) void this.turn("next");
+      this.pageTapped(contents, event.clientX, event.clientY, event.target);
     }, options);
+
+    // A touchscreen's tap is read from the touch itself. A WebView does not
+    // reliably synthesise a `click` inside the section's document for a tap
+    // on plain text, which is why tapping a highlight used to do nothing.
+    let touchFrom: { x: number; y: number; at: number } | null = null;
+    doc.addEventListener("touchstart", (event: TouchEvent) => {
+      const touch = event.touches.length === 1 ? event.touches[0] : undefined;
+      touchFrom = touch ? { x: touch.clientX, y: touch.clientY, at: Date.now() } : null;
+      this.traceTap(`touchstart (${event.touches.length} touches)`);
+    }, { passive: true, signal: this.listeners?.signal });
+    doc.addEventListener("touchend", (event: TouchEvent) => {
+      const from = touchFrom;
+      touchFrom = null;
+      const touch = event.changedTouches[0];
+      if (!from || !touch || event.touches.length > 0) return this.traceTap("touchend: not a single touch");
+      if (Date.now() - from.at > TOUCH_TAP_MAX_MS) return this.traceTap(`touchend: held ${Date.now() - from.at}ms`);
+      const moved = Math.hypot(touch.clientX - from.x, touch.clientY - from.y);
+      if (moved > TAP_SLOP_PX) return this.traceTap(`touchend: moved ${Math.round(moved)}px`);
+      this.touchTapAt = Date.now();
+      this.pageTapped(contents, touch.clientX, touch.clientY, event.target);
+    }, { passive: true, signal: this.listeners?.signal });
 
     this.addScrollIntentListeners(doc);
     this.addPinchListeners(doc);
+    this.addSwipeListeners(doc, () => {
+      const selection = contents.window.getSelection();
+      return selection !== null && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed;
+    });
+  }
+
+  /**
+   * Swipe sideways to turn a paginated page, the way every reading app does.
+   * A single finger only, and never while it is dragging out a selection.
+   */
+  private addSwipeListeners(target: Document | HTMLElement, selecting: () => boolean): void {
+    const signal = this.listeners?.signal;
+    let start: { x: number; y: number; at: number } | null = null;
+    target.addEventListener(
+      "touchstart",
+      ((event: TouchEvent) => {
+        const touch = event.touches.length === 1 ? event.touches[0] : undefined;
+        start = touch ? { x: touch.clientX, y: touch.clientY, at: Date.now() } : null;
+      }) as EventListener,
+      { passive: true, signal },
+    );
+    target.addEventListener(
+      "touchend",
+      ((event: TouchEvent) => {
+        const from = start;
+        start = null;
+        const touch = event.changedTouches[0];
+        if (!from || !touch || this.flowMode !== "paginated" || event.touches.length > 0 || selecting()) return;
+        const dx = touch.clientX - from.x;
+        const dy = touch.clientY - from.y;
+        const ms = Date.now() - from.at;
+        const direction = swipeDirection(dx, dy, ms);
+        if (direction) {
+          void this.turn(direction);
+          this.pageGestureHandler?.("turn");
+          return;
+        }
+        const vertical = verticalSwipe(dx, dy, ms);
+        if (vertical) this.pageGestureHandler?.(vertical);
+      }) as EventListener,
+      { passive: true, signal },
+    );
+  }
+
+  /**
+   * A tap on the page, in the section's own coordinates. On a highlight it
+   * is for the highlight; otherwise the left and right edges of a paginated
+   * page turn it, and anything else is the view's (the middle shows or hides
+   * the bars on a touchscreen).
+   */
+  private pageTapped(contents: EpubContents, x: number, y: number, target: EventTarget | null): void {
+    // A link, or a live selection, means the tap was meant for the page.
+    if (isOnLink(target)) return this.traceTap("tap on a link");
+    const selection = contents.window.getSelection();
+    if (selection && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed) return this.traceTap("tap with text selected");
+    const frameRect = contents.window.frameElement?.getBoundingClientRect();
+    const position = { x: x + (frameRect?.left ?? 0), y: y + (frameRect?.top ?? 0) };
+
+    if (this.flowMode === "paginated" && this.highlightAt(position) === null) {
+      const width = contents.document.documentElement.clientWidth;
+      // In paginated flow the section is one wide strip of columns, so the
+      // edge is measured on the pane the reader sees, not the strip.
+      const pane = this.container?.getBoundingClientRect();
+      const fraction = pane && pane.width > 0 ? (position.x - pane.left) / pane.width : width > 0 ? x / width : 0.5;
+      if (fraction < TAP_ZONE) {
+        this.traceTap(`tap at ${Math.round(fraction * 100)}% across: previous page`);
+        void this.turn("prev");
+        this.pageGestureHandler?.("turn");
+        return;
+      }
+      if (fraction > 1 - TAP_ZONE) {
+        this.traceTap(`tap at ${Math.round(fraction * 100)}% across: next page`);
+        void this.turn("next");
+        this.pageGestureHandler?.("turn");
+        return;
+      }
+    }
+    this.traceTap(this.tapHandler ? "tap sent to the view" : "tap with no view listening");
+    this.tapHandler?.(position);
+  }
+
+  private traceTap(outcome: string): void {
+    this.tapTrace = `${new Date().toLocaleTimeString()} ${outcome}`;
+  }
+
+  onPageGesture(handler: (gesture: "turn" | "up" | "down") => void): void {
+    this.pageGestureHandler = handler;
+  }
+
+  diagnostics(): Record<string, unknown> {
+    const contents = this.rendition?.getContents()[0];
+    const doc = contents?.document;
+    if (!doc) return { section: null, tapTrace: this.tapTrace };
+    const root = doc.documentElement;
+    const p = doc.querySelector("p");
+    const style = p ? doc.defaultView?.getComputedStyle(p) : null;
+    return {
+      tapTrace: this.tapTrace,
+      contentType: doc.contentType,
+      namespace: root.namespaceURI,
+      lang: root.getAttribute("lang"),
+      xmlLang: root.getAttribute("xml:lang") ?? root.getAttributeNS("http://www.w3.org/XML/1998/namespace", "lang"),
+      packageLanguage: this.book?.packaging?.metadata?.language ?? null,
+      themeStyle: doc.getElementById(THEME_STYLE_ID) !== null,
+      bookStyles: doc.querySelectorAll("style").length,
+      paragraph: style
+        ? {
+            lang: p?.closest("[lang]")?.getAttribute("lang") ?? null,
+            textAlign: style.textAlign,
+            hyphens: style.hyphens,
+            webkitHyphens: style.getPropertyValue("-webkit-hyphens"),
+            textWrap: style.getPropertyValue("text-wrap"),
+            wordSpacing: style.wordSpacing,
+            fontSize: style.fontSize,
+            fontFamily: style.fontFamily,
+            width: p?.clientWidth,
+          }
+        : null,
+      typography: this.typography,
+      // Which elements hold the running text, and how each kind is set.
+      textBlocks: Object.fromEntries(
+        Array.from(new Set(Array.from(doc.body.querySelectorAll("*")).map((el) => el.tagName.toLowerCase()))).map((tag) => {
+          const el = doc.body.querySelector(tag);
+          const css = el ? doc.defaultView?.getComputedStyle(el) : null;
+          return [tag, css ? `${css.textAlign} ${css.getPropertyValue("-webkit-hyphens")}` : ""];
+        }),
+      ),
+    };
+  }
+
+  highlightAt(position: { x: number; y: number }): string | null {
+    const live = new Set((this.rendition?.getContents() ?? []).map((contents) => contents.document));
+    this.paintedHits = this.paintedHits.filter((hit) => live.has(hit.doc));
+    for (const hit of this.paintedHits) {
+      const frameRect = hit.doc.defaultView?.frameElement?.getBoundingClientRect();
+      const x = position.x - (frameRect?.left ?? 0);
+      const y = position.y - (frameRect?.top ?? 0);
+      for (const rect of Array.from(hit.range.getClientRects())) {
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return hit.id;
+      }
+    }
+    return null;
   }
 
   /** Pinch to change text size, applied when the fingers lift. */
@@ -755,6 +1069,16 @@ export class EpubEngine implements ReaderEngine {
       if (this.resizeTimer !== null) win.clearTimeout(this.resizeTimer);
       this.resizeTimer = win.setTimeout(() => {
         this.resizeTimer = null;
+        // A phone's keyboard opening for the search box or the page box
+        // shrinks the pane, and closing it gives the space straight back.
+        // Reflowing for that relaid the book twice under the reader's finger,
+        // so while something is being typed into the pane only stays as it
+        // was laid out; a size that is still different afterwards reflows.
+        const typing = container.doc.activeElement?.matches("input, textarea") ?? false;
+        if (typing && Platform.isMobile) return;
+        const size = contentSize(container);
+        if (size === this.laidOutAt) return;
+        this.laidOutAt = size;
         try {
           this.rendition?.resize();
         } catch (error) {
@@ -762,6 +1086,7 @@ export class EpubEngine implements ReaderEngine {
         }
       }, RESIZE_SETTLE_MS);
     });
+    this.laidOutAt = contentSize(container);
     this.resizeObserver.observe(container);
   }
 
@@ -838,7 +1163,7 @@ export class EpubEngine implements ReaderEngine {
     const lineHeight = read("--line-height-normal", "1.5");
     return [
       `html, body { background: ${background} !important; color: ${text} !important; }`,
-      `body { font-family: ${font}; line-height: ${lineHeight}; }`,
+      `body { line-height: ${lineHeight}; }`,
       `body *:not(img):not(svg):not(svg *) { color: inherit !important; background-color: transparent !important; }`,
       `a, a * { color: ${accent} !important; }`,
       `hr, table, td, th, blockquote { border-color: ${faint} !important; }`,
@@ -853,6 +1178,7 @@ export class EpubEngine implements ReaderEngine {
       // Wide content is kept inside the page rather than widening it, which
       // is what lets the container suppress horizontal scrolling outright.
       `pre, code { white-space: pre-wrap !important; word-break: break-word; }`,
+      typographyCss(this.typography, font),
       `table { max-width: 100% !important; }`,
       // Mobile turns selection off broadly; without the prefixed form the
       // section inherits that and cannot be selected, so there is nothing to
@@ -876,6 +1202,42 @@ export class EpubEngine implements ReaderEngine {
     // this last in `head` — and so winning on equal specificity — after the
     // book's own stylesheets are inlined a moment later.
     head.appendChild(styleEl);
+    this.declareLanguage(doc);
+    setSoftHyphens(doc, this.typography.hyphenate && canHyphenate(declaredLanguage(doc)));
+    this.alignLeft(doc);
+  }
+
+  /**
+   * WebKit hyphenates only text whose language it knows, and many books
+   * declare one in their package but not on each chapter's `<html>`. The
+   * package's language, or English, fills the gap.
+   */
+  private declareLanguage(doc: Document): void {
+    const root = doc.documentElement;
+    if (declaredLanguage(doc)) return;
+    root.lang = this.book?.packaging?.metadata?.language?.trim() || "en";
+  }
+
+  /**
+   * "Left" alignment: the paragraphs the book justifies, and only those, are
+   * set flush left, so its centred titles and right-aligned attributions
+   * stay where it put them. Which ones the book justifies is only known
+   * from computed style, so this is done per element rather than in CSS,
+   * and undone first, so switching back to the book's own is exact. Run
+   * again once the book's stylesheets are inlined.
+   */
+  private alignLeft(doc: Document): void {
+    for (const el of Array.from(doc.querySelectorAll<HTMLElement>(`[${LEFT_ALIGNED_ATTR}]`))) {
+      el.style.removeProperty("text-align");
+      el.removeAttribute(LEFT_ALIGNED_ATTR);
+    }
+    const win = doc.defaultView;
+    if (this.typography.align !== "left" || !win) return;
+    for (const el of Array.from(doc.querySelectorAll<HTMLElement>(PROSE_ELEMENTS))) {
+      if (win.getComputedStyle(el).textAlign !== "justify") continue;
+      el.style.setProperty("text-align", "left", "important");
+      el.setAttribute(LEFT_ALIGNED_ATTR, "");
+    }
   }
 
   /**
@@ -931,6 +1293,7 @@ export class EpubEngine implements ReaderEngine {
     if (!annotations) return;
     for (const cfiRange of this.paintedRanges) annotations.remove(cfiRange, "highlight");
     this.paintedRanges.clear();
+    this.paintedHits = [];
     for (const contents of this.rendition?.getContents() ?? []) {
       this.paintContents(contents);
     }
@@ -952,6 +1315,9 @@ export class EpubEngine implements ReaderEngine {
       if (highlight.suffix !== undefined) context.suffix = highlight.suffix;
       const range = rangeForQuote(source, highlight.exact, context);
       if (!range) continue;
+      if (!this.paintedHits.some((hit) => hit.doc === contents.document && hit.id === highlight.id)) {
+        this.paintedHits.push({ doc: contents.document, range, id: highlight.id });
+      }
       let cfiRange: string;
       try {
         cfiRange = contents.cfiFromRange(range);
@@ -1051,6 +1417,7 @@ export class EpubEngine implements ReaderEngine {
     this.listeners = null;
     this.contextMenuHandler = null;
     this.tapHandler = null;
+    this.pageGestureHandler = null;
     this.selectionEndHandler = null;
     this.selectionChangeHandler = null;
     this.keyDownHandler = null;

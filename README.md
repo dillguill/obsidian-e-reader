@@ -47,22 +47,62 @@ settings. Read later puts a bookmark on the cover; filter a Bases view on the
 status for a reading queue. Reading progress is tracked separately.
 
 **Reader.** EPUB and PDF, both remembering where you were, with a toolbar
-shaped like Obsidian's own PDF viewer: zoom or text size, a display menu, and
-a page box you can type into. PDFs offer fit-to-width, fit-to-height, two-page
-spreads and a dark-theme mode; EPUBs offer scrolled or paginated reading, tap
-the edge of a page to turn it, and render in your vault's own theme rather
-than whatever the book shipped with. The reader reports the book note as its
-file, so Obsidian's own Properties pane and everything else that follows the
-active file work on it unchanged.
+that is the same on desktop and phone: previous and next page buttons around a
+page box you can type into (a page number for PDFs, a percentage for EPUBs),
+then search, reading settings, and buttons that open the contents and the
+book's highlights. PDFs offer
+fit-to-width, fit-to-height and two-page spreads, and are inverted to match a
+dark vault; EPUBs
+offer scrolled or paginated reading (two pages side by side on a wide pane, or
+always one), tap the edge of a page to turn it, and render in your vault's own
+theme rather than whatever the book shipped with. A PDF remembers its own zoom,
+fit and spreads, so a scanned textbook and a novel can each keep theirs. The reader reports the book
+note as its file, so Obsidian's own Properties pane and everything else that
+follows the active file work on it unchanged.
 
-The left and right arrow keys and Page Up/Page Down turn the page, and **Next
-page**, **Previous page**, **Zoom in** and **Zoom out** are commands you can
-bind to any hotkey.
+**Reading settings** (the **T** button) choose a theme for the page — match
+Obsidian, Light, Sepia or Dark — the zoom or text size, the layout (PDF fit
+and spreads, EPUB flow and two-page spreads) and, for EPUBs, the font (the book's own, your
+Obsidian font, a serif or a sans), text size, line spacing, margins,
+alignment (the book's own, left or justified) and hyphenation, which is on
+to start with so justified lines on a phone don't open wide gaps. English
+books are hyphenated by the reader itself, with the standard TeX patterns,
+since Obsidian's iPhone app ignores the browser's own hyphenation.
+
+**Search** (the search button, or Cmd/Ctrl-F in the reader) finds every match
+in the book as you type, listed with its page or chapter; pick one, or step
+through them with Enter and Shift-Enter, and the match is marked on the page.
+Jumping anywhere — a search result, a contents entry, a link, a typed page —
+leaves a **Back to …** button that returns you to where you were reading.
+
+**Focus mode.** On a phone the book fills the screen, from just under the
+status bar to the progress line. Tap the middle of the page and the menu goes
+away: the toolbar, the pane's title bar and Obsidian's own bottom bar; tap it
+again to bring the menu back. While you read, a thin progress line along the
+bottom shows the whole book, with a tick wherever a contents entry starts and
+the book's percentage beside it; the label under it cycles, when tapped,
+through the chapter's name, the time left in the chapter and the time
+left in the book. The time is learned from how fast you actually turn pages.
+On a desktop, focus mode hides the menu once the pointer is still; move it,
+or move it to the top of the pane, to bring the menu back. Focus mode is on
+for phones and off for desktops to start with; switch it in reading settings
+(**T**) or the plugin's settings. With it off, the menu stays and the page
+sits under it. Opening a book you had read further in elsewhere offers to
+jump to the furthest page you reached.
+
+Pinch zooms on a touchscreen, and a sideways swipe turns a paginated EPUB's
+page.
+
+The left and right arrow keys and Page Up/Page Down turn the page (Space and
+Shift-Space too in an EPUB), and Shift with an arrow key goes to the next or
+previous chapter. **Next page**, **Previous page**, **Next chapter**,
+**Previous chapter**, **Zoom in**, **Zoom out** and **Show or hide the reader
+toolbar** are commands you can bind to any hotkey.
 
 **Highlights and notes.** Select text and a small bar opens beside it: tap a
 colour to highlight as that type, or copy the text. Right-click works too, and
 the **Highlight selection** command repeats the last type you chose. Saved highlights are painted back into the
-book in the colour of their type, and right-clicking one offers to recolour,
+book in the colour of their type, and right-clicking or tapping one offers to recolour,
 copy or delete it. Each is written into the book note as a callout you can
 read, edit and link to:
 

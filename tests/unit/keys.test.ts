@@ -11,6 +11,13 @@ const press = (key: string, modifiers: Partial<Record<"shiftKey" | "altKey" | "c
 });
 
 describe("keyAction", () => {
+  it("searches on Cmd-F or Ctrl-F, but not with other modifiers", () => {
+    expect(keyAction(press("f", { metaKey: true }))).toBe("search");
+    expect(keyAction(press("F", { ctrlKey: true }))).toBe("search");
+    expect(keyAction(press("f", { ctrlKey: true, shiftKey: true }))).toBeNull();
+    expect(keyAction(press("f"))).toBeNull();
+  });
+
   it("turns forward on Right and PageDown", () => {
     expect(keyAction(press("ArrowRight"))).toBe("next");
     expect(keyAction(press("PageDown"))).toBe("next");
@@ -31,11 +38,17 @@ describe("keyAction", () => {
   it("leaves scrolling keys to the platform", () => {
     expect(keyAction(press("ArrowDown"))).toBeNull();
     expect(keyAction(press("ArrowUp"))).toBeNull();
-    expect(keyAction(press(" "))).toBeNull();
   });
 
-  it("ignores Shift+arrow, which extends a selection", () => {
-    expect(keyAction(press("ArrowRight", { shiftKey: true }))).toBeNull();
+  it("advances on Space and goes back on Shift-Space", () => {
+    expect(keyAction(press(" "))).toBe("advance");
+    expect(keyAction(press(" ", { shiftKey: true }))).toBe("retreat");
+  });
+
+  it("moves by chapter on Shift-Left and Shift-Right", () => {
+    expect(keyAction(press("ArrowRight", { shiftKey: true }))).toBe("next-chapter");
+    expect(keyAction(press("ArrowLeft", { shiftKey: true }))).toBe("prev-chapter");
+    expect(keyAction(press("PageDown", { shiftKey: true }))).toBeNull();
   });
 
   it("ignores any press with a hotkey modifier", () => {

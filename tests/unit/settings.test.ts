@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_SETTINGS, SETTINGS_VERSION, mergeSettings } from "../../src/settings/settings-model";
+import { DEFAULT_SETTINGS, MAX_REMEMBERED_PDFS, SETTINGS_VERSION, mergeSettings, rememberPdfView } from "../../src/settings/settings-model";
 import { RESERVED_ENTRY_TYPE } from "../../src/core/types";
 import { MAX_SCALE, MIN_SCALE } from "../../src/reader/zoom";
+import { DEFAULT_PACE_EPUB_MS, DEFAULT_PACE_PDF_MS } from "../../src/reader/reading-time";
 
 describe("DEFAULT_SETTINGS", () => {
   it("uses the marker property `type` with value `book`", () => {
@@ -169,9 +170,22 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
         pdfScale: 1.25,
         pdfFit: "none",
         pdfSpread: "even",
-        pdfAdaptToTheme: true,
         epubTextScale: 1.1,
         epubFlow: "paginated",
+        epubLineSpacing: "relaxed",
+        epubMargins: "wide",
+        epubFont: "serif",
+        epubAlign: "left",
+        epubHyphenation: false,
+        epubSpread: "none",
+        readingTheme: "sepia",
+        showFooter: false,
+        footerInfo: "book-time",
+        focusModeMobile: false,
+        focusModeDesktop: true,
+        pdfBooks: { "Books/Scan.pdf": { scale: 1.5, fit: "none", spread: "odd" } },
+        paceEpubMs: 50000,
+        pacePdfMs: 90000,
         showHighlights: false,
         activeAnnotationType: "question",
       },
@@ -234,15 +248,79 @@ describe("import settings", () => {
   });
 });
 
+describe("progress line label", () => {
+  it("carries over the earlier chapter/book time switch", () => {
+    expect(mergeSettings({ reader: { footerTime: "book" } }).reader.footerInfo).toBe("book-time");
+    expect(mergeSettings({ reader: { footerInfo: "book" } }).reader.footerInfo).toBe("chapter");
+    expect(mergeSettings({ reader: { footerInfo: "nonsense" } }).reader.footerInfo).toBe("chapter");
+  });
+});
+
+describe("text alignment and hyphenation", () => {
+  it("carries the old justify switch over", () => {
+    expect(mergeSettings({ reader: { epubJustify: true } }).reader.epubAlign).toBe("justify");
+    expect(mergeSettings({ reader: { epubJustify: false } }).reader.epubAlign).toBe("book");
+  });
+
+  it("hyphenates unless turned off under the new name", () => {
+    expect(mergeSettings({ reader: { epubHyphenate: false } }).reader.epubHyphenation).toBe(true);
+    expect(mergeSettings({ reader: { epubHyphenation: false } }).reader.epubHyphenation).toBe(false);
+  });
+});
+
+describe("focus mode", () => {
+  it("is on for phones and off for desktops by default", () => {
+    expect(mergeSettings({}).reader.focusModeMobile).toBe(true);
+    expect(mergeSettings({}).reader.focusModeDesktop).toBe(false);
+  });
+
+  it("carries over the desktop's earlier auto-hide", () => {
+    expect(mergeSettings({ reader: { autoHideChrome: true } }).reader.focusModeDesktop).toBe(true);
+  });
+});
+
+describe("per-PDF views", () => {
+  const view = { scale: 1.2, fit: "none" as const, spread: "single" as const };
+
+  it("drops a saved view that is not one", () => {
+    const merged = mergeSettings({ reader: { pdfBooks: { "a.pdf": view, "b.pdf": { scale: "big" }, "c.pdf": null } } });
+    expect(merged.reader.pdfBooks).toEqual({ "a.pdf": view });
+  });
+
+  it("moves a changed book to the end and forgets the oldest past the limit", () => {
+    let books = {};
+    for (let i = 0; i < MAX_REMEMBERED_PDFS; i++) books = rememberPdfView(books, `${i}.pdf`, view);
+    books = rememberPdfView(books, "0.pdf", { ...view, scale: 2 });
+    books = rememberPdfView(books, "new.pdf", view);
+    const keys = Object.keys(books);
+    expect(keys).toHaveLength(MAX_REMEMBERED_PDFS);
+    expect(keys[0]).toBe("2.pdf");
+    expect(keys.slice(-2)).toEqual(["0.pdf", "new.pdf"]);
+  });
+});
+
 describe("remembered reader preferences", () => {
   it("defaults to actual size, single pages, scrolled text, and highlights shown", () => {
     expect(DEFAULT_SETTINGS.reader).toEqual({
       pdfScale: 1,
       pdfFit: "width",
       pdfSpread: "single",
-      pdfAdaptToTheme: false,
       epubTextScale: 1,
       epubFlow: "scrolled",
+      epubLineSpacing: "normal",
+      epubMargins: "normal",
+      epubFont: "book",
+      epubAlign: "book",
+      epubHyphenation: true,
+      epubSpread: "auto",
+      readingTheme: "auto",
+      showFooter: true,
+      footerInfo: "chapter",
+      focusModeMobile: true,
+      focusModeDesktop: false,
+      pdfBooks: {},
+      paceEpubMs: DEFAULT_PACE_EPUB_MS,
+      pacePdfMs: DEFAULT_PACE_PDF_MS,
       showHighlights: true,
       activeAnnotationType: DEFAULT_SETTINGS.annotationTypes[0]?.name,
     });
@@ -267,6 +345,17 @@ describe("remembered reader preferences", () => {
     const merged = mergeSettings({ reader: { pdfSpread: "triple", epubFlow: "sideways" } });
     expect(merged.reader.pdfSpread).toBe("single");
     expect(merged.reader.epubFlow).toBe("scrolled");
+  });
+
+  it("falls back for an unrecognised typography choice, theme or spread", () => {
+    const merged = mergeSettings({
+      reader: { epubLineSpacing: "double", epubMargins: 3, epubFont: "comic", readingTheme: "neon", epubSpread: "both" },
+    });
+    expect(merged.reader.epubLineSpacing).toBe("normal");
+    expect(merged.reader.epubMargins).toBe("normal");
+    expect(merged.reader.epubFont).toBe("book");
+    expect(merged.reader.readingTheme).toBe("auto");
+    expect(merged.reader.epubSpread).toBe("auto");
   });
 });
 

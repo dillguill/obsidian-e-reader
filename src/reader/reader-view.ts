@@ -13,7 +13,7 @@
 // FileView.setState drive; do the actual book loading from `onLoadFile`.
 
 import type { ViewStateResult, WorkspaceLeaf } from "obsidian";
-import { FileView, Menu, Notice, Platform, Scope, TFile, setIcon } from "obsidian";
+import { FileView, Menu, Notice, Platform, Scope, TFile, apiVersion, debounce, setIcon, setTooltip } from "obsidian";
 import { addEntry, fillSections, foldHighlightNotes, listEntries, migrateBookmarks, removeEntry, setEntryType } from "../annotations/store";
 import { linksToBook } from "../annotations/highlight-notes";
 import { addCopyItems } from "../annotations/entry-menu";
@@ -34,10 +34,74 @@ import { highlightColor } from "./highlight-style";
 import { isTypingTarget, keyAction } from "./keys";
 import { type PopupPlacement, SelectionPopup } from "./selection-popup";
 import { ReaderToolbar } from "./toolbar";
-import { toolbarState } from "./toolbar-model";
-import { stepScale } from "./zoom";
+import { progressLabel, targetFromInput, toolbarState } from "./toolbar-model";
+import { MAX_SCALE, MIN_SCALE, stepScale } from "./zoom";
+import { AppearancePanel, type PanelRow } from "./appearance-panel";
+import { SearchPanel } from "./search-panel";
+import type { SearchHit } from "./search";
+import {
+  BOOK_FONTS,
+  FONT_LABELS,
+  LINE_SPACINGS,
+  LINE_SPACING_LABELS,
+  MARGINS,
+  MARGIN_LABELS,
+  READING_THEMES,
+  type ReadingTheme,
+  TEXT_ALIGNS,
+  TEXT_ALIGN_LABELS,
+  type TextAlign,
+  THEME_LABELS,
+  type Typography,
+} from "./typography";
+import { FOOTER_INFOS, focusModeOn, rememberPdfView, setFocusMode } from "../settings/settings-model";
+import {
+  type ChapterStart,
+  adjacentChapter,
+  chapterAt,
+  chapterTicks,
+  nextPace,
+  progressInfoLabel,
+  unitsLeft,
+} from "./reading-time";
 
 export const READER_VIEW_TYPE = "ereader-reader";
+
+/** What the reading-settings panel calls each group of the engine's options. */
+const OPTION_GROUP_LABELS: Record<DisplayOption["section"], string> = {
+  zoom: "Fit",
+  spread: "Pages",
+  layout: "Layout",
+  appearance: "",
+};
+
+/**
+ * The engines describe their options as a flat list of checked items in
+ * sections. In the panel, a section of several items is one choice among
+ * them, and an item on its own is a switch.
+ */
+function optionRows(options: readonly DisplayOption[]): PanelRow[] {
+  const rows: PanelRow[] = [];
+  const sections = [...new Set(options.map((option) => option.section))];
+  for (const section of sections) {
+    const group = options.filter((option) => option.section === section);
+    if (group.length === 1 || section === "appearance") {
+      for (const option of group) {
+        rows.push({ kind: "toggle", label: option.label, value: option.checked, onChange: () => option.apply() });
+      }
+      continue;
+    }
+    rows.push({
+      kind: "choice",
+      label: OPTION_GROUP_LABELS[section],
+      options: group.map((option) => ({ value: option.id, label: option.label })),
+      // A PDF stepped off every fit by the zoom control has none selected.
+      value: group.find((option) => option.checked)?.id ?? "",
+      onChange: (id) => group.find((option) => option.id === id)?.apply(),
+    });
+  }
+  return rows;
+}
 
 export interface ReaderViewState {
   /** The book note's path. FileView reads this and calls `loadFile` itself. */
@@ -56,6 +120,35 @@ const POSITION_FLUSH_INTERVAL_MS = 2000;
  */
 const TOUCH_SELECTION_POLL_MS = 250;
 const BOOKMARK_TYPE = RESERVED_ENTRY_TYPE;
+/**
+ * A tap this soon after a selection was last seen is the reader dismissing
+ * that selection, not asking for the toolbar. The touch poll sees a live
+ * selection at least this often, so the margin is comfortable.
+ */
+const SELECTION_DISMISS_MS = 600;
+/** The painted mark on the search result being looked at. */
+const SEARCH_MARK_ID = "ereader-search-hit";
+const SEARCH_MARK_COLOR = "#ff9f1a";
+/** On a desktop in focus mode, the bars hide after the pointer has been still this long. */
+const CHROME_IDLE_MS = 2500;
+/** How long the bars take to slide in or out (styles.css). */
+const CHROME_SLIDE_MS = 180;
+/** In focus mode on a phone, the text's distance from the status bar, and from the progress line. */
+const FOCUS_TOP_GAP_PX = 6;
+const FOCUS_BOTTOM_GAP_PX = 8;
+/** The learned reading pace is saved this long after it last changed. */
+const PACE_SAVE_DELAY_MS = 30_000;
+const THEME_CLASSES: Record<ReadingTheme, string> = {
+  auto: "",
+  light: "ereader-theme-light",
+  sepia: "ereader-theme-sepia",
+  dark: "ereader-theme-dark",
+};
+
+/** Space on a button or switch presses it; it is not the reader asking for the next page. */
+function isControl(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.closest("button, [role='button'], [role='switch'], [role='radio']") !== null;
+}
 
 function isReaderViewState(state: unknown): state is ReaderViewState {
   return typeof state === "object" && state !== null;
@@ -66,7 +159,6 @@ export class ReaderView extends FileView {
   private contentRoot: HTMLElement | null = null;
   private toolbar: ReaderToolbar | null = null;
   private lastWritten: ReadingPosition | null = null;
-  private jumpOffer: { el: HTMLElement; target: Locator } | null = null;
   private lastFlushAt = 0;
   private loadToken = 0;
   /** The open book's table of contents. Built once per book — for an EPUB it
@@ -86,6 +178,45 @@ export class ReaderView extends FileView {
   private lastEntrySignature: string | null = null;
   /** The bar of highlight swatches that opens over a selection. */
   private popup: SelectionPopup | null = null;
+  /** When a selection was last seen in the book, for telling a dismissing tap apart. */
+  private selectionSeenAt = 0;
+  private search: SearchPanel | null = null;
+  private appearance: AppearancePanel | null = null;
+  /** The search result being looked at, painted over the page alongside the highlights. */
+  private searchMark: PaintedHighlight | null = null;
+  private footer: {
+    el: HTMLElement;
+    labelEl: HTMLElement;
+    percentEl: HTMLElement;
+    barEl: HTMLElement;
+    ticksEl: HTMLElement;
+    /** The chapter list the ticks were last drawn for. */
+    ticksFor: ChapterStart[] | null;
+  } | null = null;
+  /** Which engine is open, for the pace the time-left estimates use. */
+  private format: "epub" | "pdf" | null = null;
+  /** The contents placed on the page/location scale, rebuilt when that scale changes. */
+  private chapterStarts: { total: number; starts: ChapterStart[] } | null = null;
+  /** Where the reader last stood, and when, for learning their pace from page turns. */
+  private paceAnchor: { unit: number; at: number } | null = null;
+  /**
+   * The one floating chip over the page: on opening, the offer to jump on to
+   * the furthest place read; after a jump, the way back to where the reader
+   * was. Both are the same kind of thing — a place to go — so they share a
+   * look and a slot, and a jump replaces the offer with the way back.
+   */
+  private chip: { el: HTMLElement; kind: "resume" | "back"; target: Locator } | null = null;
+  /** A jump's starting point, until the jump is seen to have landed somewhere else. */
+  private pendingBack: { target: Locator; at: number } | null = null;
+  private readonly savePace = debounce(() => this.saveSettings(), PACE_SAVE_DELAY_MS, true);
+  /** What became of the last tap on the page, for the layout diagnostics. */
+  private lastTap = "no tap yet";
+  /** What the last few touches outside the book landed on, newest first, for the layout diagnostics. */
+  private hostTouches: string[] = [];
+  /** The last on-screen reach of the pane's title bar, for while it is slid away. */
+  private lastHeaderReach = 0;
+  /** The desktop's countdown to hiding the bars. */
+  private idleTimer: number | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -93,6 +224,8 @@ export class ReaderView extends FileView {
     private readonly saveSettings: () => void,
     private readonly events: ReaderEvents,
     private readonly attachFile: (note: TFile) => Promise<boolean>,
+    private readonly openContents: () => void,
+    private readonly openHighlights: () => void,
   ) {
     super(leaf);
     this.navigation = true;
@@ -126,13 +259,54 @@ export class ReaderView extends FileView {
     // `loadBook` empties and rebuilds; rebuilding it per book would drop the
     // listeners with it.
     this.toolbar = new ReaderToolbar(this.contentRoot, this, {
-      zoomIn: () => void this.zoom(1),
-      zoomOut: () => void this.zoom(-1),
-      goToPage: (page) => void this.goToPage(page),
-      displayOptions: () => this.displayOptions(),
+      goToPage: (value) => void this.goToPage(value),
       toggleBookmark: () => void this.toggleBookmark(),
+      turnPage: (direction) => void this.turnPage(direction),
+      openContents: () => this.openContents(),
+      openHighlights: () => this.openHighlights(),
+      toggleSearch: () => this.toggleSearch(),
+      toggleAppearance: (anchorEl) => {
+        this.search?.hide();
+        this.measureChrome();
+        this.appearance?.toggle(() => this.appearanceRows(), anchorEl);
+      },
     });
+
+    this.search = new SearchPanel(this.contentRoot, this, {
+      // The contents first: results are labelled with their chapter, and an
+      // EPUB's contents are read from the same sections the search walks.
+      search: async (query, handlers, signal) => {
+        await this.outline();
+        if (!signal.aborted) await this.engine?.search(query, handlers, signal);
+      },
+      label: (hit) => this.searchLabel(hit),
+      open: (hit) => void this.openSearchHit(hit),
+      closed: () => void this.clearSearchMark(),
+    });
+    this.appearance = new AppearancePanel(this.contentRoot, this);
+    this.footer = this.buildFooter(this.contentRoot);
     this.toolbar.setVisible(false);
+    this.watchChrome(this.contentRoot);
+    // A touch on the book goes to its frame's own document, so one seen here
+    // landed on something else; if it was meant for the page, that is what
+    // is covering it.
+    this.registerDomEvent(
+      this.containerEl.doc,
+      "touchstart",
+      (event: TouchEvent) => {
+        const path = (el: Element | null): string => {
+          const names: string[] = [];
+          for (let node = el; node && names.length < 4; node = node.parentElement) {
+            names.push(node.tagName.toLowerCase() + (node.classList.length ? "." + Array.from(node.classList).join(".") : ""));
+          }
+          return names.join(" < ");
+        };
+        const touch = event.touches[0];
+        this.hostTouches.unshift(`${new Date().toLocaleTimeString()} at ${touch ? `${Math.round(touch.clientX)},${Math.round(touch.clientY)}` : "?"}: ${path(event.target instanceof Element ? event.target : null)}`);
+        this.hostTouches.length = Math.min(this.hostTouches.length, 5);
+      },
+      { capture: true, passive: true },
+    );
 
     this.popup = new SelectionPopup(this.contentRoot, this, {
       highlight: (type, selection) => void this.highlightFromPopup(type, selection),
@@ -143,7 +317,12 @@ export class ReaderView extends FileView {
     });
     // Scrolling moves the selection out from under the popup. `scroll` does
     // not bubble, so it is caught on the way down instead.
-    this.registerDomEvent(this.contentRoot, "scroll", () => this.repositionPopup(), { capture: true });
+    this.registerDomEvent(
+      this.contentRoot,
+      "scroll",
+      () => this.repositionPopup(),
+      { capture: true },
+    );
     if (Platform.isMobile) {
       this.registerInterval(window.setInterval(() => this.pollTouchSelection(), TOUCH_SELECTION_POLL_MS));
     }
@@ -152,9 +331,12 @@ export class ReaderView extends FileView {
     // — reach the view through its Scope while it is the active leaf. Presses
     // inside an EPUB's iframes arrive through the engine instead.
     const scope = this.scope ?? (this.scope = new Scope(this.app.scope));
-    for (const key of ["ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Escape"]) {
-      scope.register([], key, (event) => (this.handleKey(event) ? false : true));
+    // Any modifiers: keyAction decides, so Shift-arrows (chapters) and
+    // Shift-Space reach it too, and a press it does not take carries on.
+    for (const key of ["ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Escape", " "]) {
+      scope.register(null, key, (event) => (this.handleKey(event) ? false : true));
     }
+    scope.register(["Mod"], "f", (event) => (this.handleKey(event) ? false : true));
 
     this.registerInterval(
       window.setInterval(() => {
@@ -178,6 +360,21 @@ export class ReaderView extends FileView {
     // An EPUB renders inside iframes that inherit none of the vault's CSS, so
     // a theme switch has to be pushed into them.
     this.registerEvent(this.app.workspace.on("css-change", () => this.engine?.refreshTheme()));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.syncAppChrome()));
+    this.register(() =>
+      this.containerEl.doc.body.removeClass("ereader-immersive-epub", "ereader-immersive-pdf", "ereader-focus-active"),
+    );
+    // A PDF's remembered zoom follows it when it is renamed or moved.
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        const reader = this.getSettings().reader;
+        const view = reader.pdfBooks[oldPath];
+        if (!view) return;
+        delete reader.pdfBooks[oldPath];
+        reader.pdfBooks[file.path] = view;
+        this.saveSettings();
+      }),
+    );
 
     if (this.file) await this.loadBook(this.file);
   }
@@ -197,6 +394,7 @@ export class ReaderView extends FileView {
 
   override async onUnloadFile(file: TFile): Promise<void> {
     this.closePopup(false);
+    this.resetBookChrome();
     await this.flushPosition(true);
     this.engine?.destroy();
     this.engine = null;
@@ -207,10 +405,14 @@ export class ReaderView extends FileView {
     this.lastFlushAt = 0;
     this.toolbar?.setVisible(false);
     this.clearViewport();
+    this.syncAppChrome();
   }
 
   override async onClose(): Promise<void> {
     this.closePopup(false);
+    if (this.idleTimer !== null) window.clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    this.savePace.run();
     await this.flushPosition(true);
     this.engine?.destroy();
     this.engine = null;
@@ -247,7 +449,7 @@ export class ReaderView extends FileView {
   }
 
   private clearViewport(): void {
-    this.closeJumpOffer();
+    this.closeChip();
     this.viewportEl()?.remove();
     this.contentRoot?.querySelector(".ereader-reader__empty")?.remove();
   }
@@ -292,6 +494,10 @@ export class ReaderView extends FileView {
     this.lastEntrySignature = null;
     this.closePopup(false);
     this.toolbar?.setVisible(false);
+    root.removeClass("is-immersive");
+    root.removeClass("is-epub", "is-pdf");
+    this.syncAppChrome();
+    this.resetBookChrome();
     this.clearViewport();
 
     // Opening an .epub straight from the file explorer gives us the book
@@ -325,12 +531,31 @@ export class ReaderView extends FileView {
 
     let engine: ReaderEngine;
     try {
-      engine = attachment.extension === "epub" ? this.newEpubEngine() : this.newPdfEngine();
+      this.format = attachment.extension === "epub" ? "epub" : "pdf";
+      root.addClass(`is-${this.format}`);
+      this.applyTheme();
+      engine = this.format === "epub" ? this.newEpubEngine() : this.newPdfEngine(file.path);
       const viewport = root.createDiv({ cls: "ereader-reader__viewport" });
-      await engine.open(attachment.path, viewport);
+      // Above the footer, which lives for the life of the view.
+      if (this.footer) root.insertBefore(viewport, this.footer.el);
+      // The bars are in place before the page is laid out, so it is laid out
+      // once, clear of them.
+      this.toolbar?.setVisible(true);
+      this.showFooterPlaceholder();
+      this.measureChrome();
+      // A large book takes a moment to read and lay out; say that it is coming.
+      const loading = root.createDiv({ cls: "ereader-reader__loading", attr: { "aria-label": "Opening book" } });
+      loading.createDiv({ cls: "ereader-reader__spinner" });
+      try {
+        await engine.open(attachment.path, viewport);
+      } finally {
+        loading.remove();
+      }
     } catch (error) {
       console.error("[e-reader] failed to open book", error);
       this.clearViewport();
+      this.toolbar?.setVisible(false);
+      this.footer?.el.hide();
       root.createDiv({ cls: "ereader-reader__empty", text: `Could not open ${attachment.name}: ${String(error)}` });
       new Notice(`E-Reader: could not open ${attachment.name}`);
       return;
@@ -348,12 +573,16 @@ export class ReaderView extends FileView {
     engine.onSelectionEnd(() => this.onSelectionEnd());
     engine.onSelectionChange(() => this.onSelectionChange());
     engine.onKeyDown((event) => this.handleKey(event));
+    engine.onLinkFollowed(() => this.recordJump());
     engine.onChange(() => {
       this.dropJumpOfferIfReached();
+      this.settleBack();
+      this.trackPace();
       this.updateToolbar();
       this.repositionPopup();
     });
     this.toolbar?.setVisible(true);
+    this.noteActivity();
 
     const properties = this.getSettings().properties;
     const restored = this.readStoredLocator(file, properties.lastRead);
@@ -370,6 +599,11 @@ export class ReaderView extends FileView {
     this.lastFlushAt = Date.now();
     this.announcePosition();
     this.updateToolbar();
+    // The chapter in the footer needs the contents, which for an EPUB means
+    // loading every section the contents name — so it arrives when it is ready.
+    void this.outline().then(() => {
+      if (this.engine === engine) this.updateToolbar();
+    });
     if (file.extension === "md") {
       // Bookmarks written into the note before 0.4.0 move to the bookmarks
       // property, highlights betas kept in notes of their own move back into
@@ -388,19 +622,23 @@ export class ReaderView extends FileView {
     await this.refreshEntries();
   }
 
-  private newPdfEngine(): ReaderEngine {
+  /**
+   * A PDF opens at the zoom, fit and spreads it was last read at, and one
+   * never opened before at the last ones used on any PDF.
+   */
+  private newPdfEngine(path: string): ReaderEngine {
     const preferences = this.getSettings().reader;
+    const view = preferences.pdfBooks[path] ?? { scale: preferences.pdfScale, fit: preferences.pdfFit, spread: preferences.pdfSpread };
     return createPdfEngine(this.app, {
-      scale: preferences.pdfScale,
-      fit: preferences.pdfFit,
-      spread: preferences.pdfSpread,
-      adaptToTheme: preferences.pdfAdaptToTheme,
+      scale: view.scale,
+      fit: view.fit,
+      spread: view.spread,
       onPreferencesChanged: (next) => {
         const reader = this.getSettings().reader;
         reader.pdfScale = next.scale;
         reader.pdfFit = next.fit;
         reader.pdfSpread = next.spread;
-        reader.pdfAdaptToTheme = next.adaptToTheme;
+        reader.pdfBooks = rememberPdfView(reader.pdfBooks, path, next);
         this.saveSettings();
       },
     });
@@ -411,10 +649,13 @@ export class ReaderView extends FileView {
     return createEpubEngine(this.app, {
       textScale: preferences.epubTextScale,
       flow: preferences.epubFlow,
+      spread: preferences.epubSpread,
+      typography: this.typography(),
       onPreferencesChanged: (next) => {
         const reader = this.getSettings().reader;
         reader.epubTextScale = next.textScale;
         reader.epubFlow = next.flow;
+        reader.epubSpread = next.spread;
         this.saveSettings();
       },
     });
@@ -462,8 +703,14 @@ export class ReaderView extends FileView {
     else new Notice("E-Reader: that highlight is no longer in this book's notes.");
   }
 
-  /** Scrolls this reader to `locator`. Used by the sidebar panes. */
-  async goToLocator(locator: Locator): Promise<void> {
+  /**
+   * Scrolls this reader to `locator`. Used by the sidebar panes, which are
+   * jumps the reader may want to come back from, so the place left behind is
+   * offered as "Back" unless `record` is false.
+   */
+  async goToLocator(locator: Locator, record = true): Promise<void> {
+    if (record) this.recordJump();
+    this.paceAnchor = null;
     try {
       await this.engine?.goTo(locator);
       this.announcePosition();
@@ -471,6 +718,8 @@ export class ReaderView extends FileView {
     } catch (error) {
       console.error("[e-reader] failed to navigate to a locator", error);
     }
+    this.settleBack();
+    this.pendingBack = null;
   }
 
   /** The current selection in the rendered document, or null. */
@@ -478,7 +727,7 @@ export class ReaderView extends FileView {
     return this.engine?.getSelection() ?? null;
   }
 
-  // ------------------------------------------------------------- toolbar
+  // ------------------------------------------------------------- options
 
   /**
    * The engine's own options plus the reader-level ones. Whether saved
@@ -497,6 +746,32 @@ export class ReaderView extends FileView {
         checked: this.getSettings().reader.showHighlights,
         apply: () => this.toggleHighlights(),
       },
+      {
+        section: "appearance",
+        id: "focus-mode",
+        label: "Focus mode",
+        icon: "eye-off",
+        checked: focusModeOn(this.getSettings().reader, Platform.isMobile),
+        apply: () => {
+          const reader = this.getSettings().reader;
+          setFocusMode(reader, Platform.isMobile, !focusModeOn(reader, Platform.isMobile));
+          this.saveSettings();
+          this.applyFocusMode();
+        },
+      },
+      {
+        section: "appearance",
+        id: "show-footer",
+        label: "Show progress in focus mode",
+        icon: "clock",
+        checked: this.getSettings().reader.showFooter,
+        apply: () => {
+          const reader = this.getSettings().reader;
+          reader.showFooter = !reader.showFooter;
+          this.saveSettings();
+          this.updateToolbar();
+        },
+      },
     ];
   }
 
@@ -510,10 +785,12 @@ export class ReaderView extends FileView {
     this.toolbar.update(
       toolbarState({
         pages: engine.pageState(),
-        scale: engine.scale(),
         bookmarked: this.currentBookmark() !== null,
+        progress: engine.progress(),
       }),
     );
+    this.toolbar.setPanesAvailable(this.getSettings().panes);
+    this.updateFooter();
   }
 
   /** Steps the zoom (PDF) or text size (EPUB). Used by the toolbar and the zoom commands. */
@@ -524,8 +801,16 @@ export class ReaderView extends FileView {
     this.updateToolbar();
   }
 
-  private async goToPage(page: number): Promise<void> {
-    await this.engine?.goToPage(page);
+  /** A value typed into the toolbar's box: a page, or a percentage through a reflowable book. */
+  private async goToPage(value: number): Promise<void> {
+    const engine = this.engine;
+    const pages = engine?.pageState();
+    if (!engine || !pages) return;
+    this.recordJump();
+    this.paceAnchor = null;
+    await engine.goToPage(targetFromInput(value, pages));
+    this.settleBack();
+    this.pendingBack = null;
     this.announcePosition();
     this.updateToolbar();
   }
@@ -544,6 +829,20 @@ export class ReaderView extends FileView {
     this.updateToolbar();
   }
 
+  /** To the start of the next chapter, or of this or the previous one. Used by Shift-arrows and the chapter commands. */
+  async goToChapter(direction: 1 | -1): Promise<void> {
+    const engine = this.engine;
+    const pages = engine?.pageState();
+    if (!engine || !pages) return;
+    await this.outline();
+    const starts = this.chapterStartsFor(engine, pages.total);
+    const index = adjacentChapter(starts, pages.current, direction);
+    const target = index === null ? null : rowsFromOutline(this.cachedOutline ?? [])[index]?.target;
+    if (target?.kind !== "book") return;
+    this.closePopup(false);
+    await this.goToLocator(target.locator, false);
+  }
+
   /**
    * Applies a key press from either route — the view's Scope or an EPUB's
    * iframe. Returns whether it was taken, so the caller suppresses the
@@ -556,8 +855,31 @@ export class ReaderView extends FileView {
       void this.turnPage(action === "next" ? 1 : -1);
       return true;
     }
+    // A scrolled PDF's own Space, a screenful, reads better than jumping a
+    // whole page that may be taller than the pane.
+    if ((action === "advance" || action === "retreat") && this.format === "epub" && !isControl(event.target)) {
+      void this.turnPage(action === "advance" ? 1 : -1);
+      return true;
+    }
+    // Shift-arrows extend a selection when there is one.
+    if ((action === "next-chapter" || action === "prev-chapter") && !this.engine?.getSelection()) {
+      void this.goToChapter(action === "next-chapter" ? 1 : -1);
+      return true;
+    }
+    if (action === "search") {
+      this.openSearch();
+      return true;
+    }
     if (action === "dismiss" && this.popup?.current()) {
       this.closePopup(true);
+      return true;
+    }
+    if (action === "dismiss" && this.appearance?.isOpen()) {
+      this.appearance.hide();
+      return true;
+    }
+    if (action === "dismiss" && this.search?.isOpen()) {
+      this.search.hide();
       return true;
     }
     return false;
@@ -587,6 +909,7 @@ export class ReaderView extends FileView {
   private onSelectionChange(): void {
     if (this.popup?.isPressed()) return;
     const selection = this.engine?.getSelection() ?? null;
+    if (selection) this.selectionSeenAt = Date.now();
     const open = this.popup?.current() ?? null;
     if (!selection || (open && open.exact !== selection.exact)) this.popup?.hide();
   }
@@ -598,6 +921,7 @@ export class ReaderView extends FileView {
     if (!engine || !popup || popup.isPressed()) return;
     const selection = engine.getSelection();
     const open = popup.current();
+    if (selection) this.selectionSeenAt = Date.now();
     if (!selection) {
       if (open) popup.hide();
       return;
@@ -661,6 +985,8 @@ export class ReaderView extends FileView {
     if (!note || !engine) {
       this.entries = [];
       this.lastEntrySignature = null;
+      // A bare book file has no highlights, but a search result is still marked.
+      if (engine) await engine.paintHighlights(this.searchMark ? [this.searchMark] : []).catch(() => undefined);
       this.updateToolbar();
       return;
     }
@@ -677,7 +1003,9 @@ export class ReaderView extends FileView {
     const palette = this.getSettings()
       .annotationTypes.map((type) => `${type.name}:${type.color}`)
       .join(",");
-    const signature = `${showHighlights}\u0000${palette}\u0000${entries
+    const mark = this.searchMark;
+    const markSignature = mark ? `${mark.exact}\u0001${mark.prefix ?? ""}\u0001${JSON.stringify(mark.hint ?? null)}` : "";
+    const signature = `${showHighlights}\u0000${palette}\u0000${markSignature}\u0000${entries
       .map((entry) => [entry.id, entry.type, entry.exact, entry.anchor.prefix ?? "", entry.anchor.suffix ?? ""].join("\u0001"))
       .join("\u0002")}`;
     if (signature === this.lastEntrySignature) return;
@@ -698,6 +1026,7 @@ export class ReaderView extends FileView {
             ...(entry.anchor.hint === undefined ? {} : { hint: entry.anchor.hint }),
           }))
       : [];
+    if (mark) painted.push(mark);
     try {
       await engine.paintHighlights(painted);
     } catch (error) {
@@ -718,6 +1047,754 @@ export class ReaderView extends FileView {
     reader.showHighlights = !reader.showHighlights;
     this.saveSettings();
     await this.refreshEntries();
+  }
+
+  // -------------------------------------------------------------- search
+
+  private openSearch(): void {
+    if (!this.engine) return;
+    this.appearance?.hide();
+    // Results are labelled with their chapter, which needs the contents.
+    void this.outline();
+    this.measureChrome();
+    this.search?.open();
+  }
+
+  private toggleSearch(): void {
+    if (this.search?.isOpen()) this.search.hide();
+    else this.openSearch();
+  }
+
+  /** `Page 12` for a PDF; the chapter for an EPUB, whose locations mean nothing to a reader. */
+  private searchLabel(hit: SearchHit): string {
+    if (hit.locator.kind === "pdf") return `Page ${hit.locator.page}`;
+    return this.chapterTitleAt(hit.locator) ?? "";
+  }
+
+  private chapterTitleAt(locator: Locator): string | null {
+    if (!this.cachedOutline) return null;
+    const rows = rowsFromOutline(this.cachedOutline);
+    return rows[activeRowIndex(rows, locator)]?.label.trim() || null;
+  }
+
+  private async openSearchHit(hit: SearchHit): Promise<void> {
+    this.recordJump();
+    this.searchMark = {
+      id: SEARCH_MARK_ID,
+      type: "search",
+      exact: hit.exact,
+      prefix: hit.prefix,
+      suffix: hit.suffix,
+      hint: hit.locator,
+      color: SEARCH_MARK_COLOR,
+    };
+    await this.goToLocator(hit.locator, false);
+    await this.repaint();
+    // A PDF locator only names the page; the mark says where on it.
+    if (hit.locator.kind === "pdf") this.scrollMarkIntoView();
+  }
+
+  private async clearSearchMark(): Promise<void> {
+    if (!this.searchMark) return;
+    this.searchMark = null;
+    await this.repaint();
+  }
+
+  private async repaint(): Promise<void> {
+    this.lastEntrySignature = null;
+    await this.refreshEntries();
+  }
+
+  /** The page may still be drawing, and is painted as it finishes, so this looks for a moment. */
+  private scrollMarkIntoView(attempt = 0): void {
+    const mark = this.contentRoot?.querySelector<HTMLElement>(`.ereader-hl[data-id="${SEARCH_MARK_ID}"]`);
+    if (mark) {
+      mark.scrollIntoView({ block: "center" });
+      return;
+    }
+    if (attempt < 10) window.setTimeout(() => this.scrollMarkIntoView(attempt + 1), 100);
+  }
+
+  // ---------------------------------------------------------- appearance
+
+  private typography(): Typography {
+    const reader = this.getSettings().reader;
+    return {
+      font: reader.epubFont,
+      lineSpacing: reader.epubLineSpacing,
+      margins: reader.epubMargins,
+      align: reader.epubAlign,
+      hyphenate: reader.epubHyphenation,
+    };
+  }
+
+  /**
+   * The reading theme is a set of colour variables on the reader's root (see
+   * styles.css), which the toolbar, the panels and a PDF's page filter read
+   * directly. An EPUB's sections are iframes and read them once, so they are
+   * restyled too.
+   */
+  private applyTheme(): void {
+    const root = this.contentRoot;
+    if (!root) return;
+    const theme = this.getSettings().reader.readingTheme;
+    for (const cls of Object.values(THEME_CLASSES)) if (cls !== "") root.removeClass(cls);
+    if (THEME_CLASSES[theme] !== "") root.addClass(THEME_CLASSES[theme]);
+    this.engine?.refreshTheme();
+  }
+
+  private changeTypography(change: () => void): void {
+    change();
+    this.saveSettings();
+    this.engine?.setTypography(this.typography());
+  }
+
+  private appearanceRows(): PanelRow[] {
+    const reader = this.getSettings().reader;
+    const rows: PanelRow[] = [
+      {
+        kind: "choice",
+        label: "Theme",
+        options: READING_THEMES.map((theme) => ({ value: theme, label: THEME_LABELS[theme], cls: `ereader-swatch is-${theme}` })),
+        value: reader.readingTheme,
+        onChange: (value) => {
+          reader.readingTheme = value as ReadingTheme;
+          this.saveSettings();
+          this.applyTheme();
+        },
+      },
+    ];
+    const engine = this.engine;
+    if (engine) {
+      const scale = engine.scale();
+      rows.push({
+        kind: "stepper",
+        label: this.format === "epub" ? "Text size" : "Zoom",
+        valueLabel: `${Math.round(scale * 100)}%`,
+        canDecrease: scale > MIN_SCALE,
+        canIncrease: scale < MAX_SCALE,
+        onStep: (direction) => this.zoom(direction),
+      });
+    }
+    const options = this.displayOptions();
+    rows.push(...optionRows(options.filter((option) => option.section !== "appearance")));
+    if (this.format === "epub") {
+      rows.push(
+        {
+          kind: "choice",
+          label: "Font",
+          options: BOOK_FONTS.map((font) => ({ value: font, label: FONT_LABELS[font], cls: `ereader-font is-${font}` })),
+          value: reader.epubFont,
+          onChange: (value) => this.changeTypography(() => (reader.epubFont = value as Typography["font"])),
+        },
+        {
+          kind: "choice",
+          label: "Line spacing",
+          options: LINE_SPACINGS.map((spacing) => ({ value: spacing, label: LINE_SPACING_LABELS[spacing] })),
+          value: reader.epubLineSpacing,
+          onChange: (value) => this.changeTypography(() => (reader.epubLineSpacing = value as Typography["lineSpacing"])),
+        },
+        {
+          kind: "choice",
+          label: "Margins",
+          options: MARGINS.map((margins) => ({ value: margins, label: MARGIN_LABELS[margins] })),
+          value: reader.epubMargins,
+          onChange: (value) => this.changeTypography(() => (reader.epubMargins = value as Typography["margins"])),
+        },
+        {
+          kind: "choice",
+          label: "Alignment",
+          options: TEXT_ALIGNS.map((align) => ({ value: align, label: TEXT_ALIGN_LABELS[align] })),
+          value: reader.epubAlign,
+          onChange: (value) => this.changeTypography(() => (reader.epubAlign = value as TextAlign)),
+        },
+        {
+          kind: "toggle",
+          label: "Hyphenate",
+          value: reader.epubHyphenation,
+          onChange: (value) => this.changeTypography(() => (reader.epubHyphenation = value)),
+        },
+      );
+    }
+    rows.push(...optionRows(options.filter((option) => option.section === "appearance")));
+    rows.push({ kind: "action", label: "Layout diagnostics", buttonLabel: "Copy", run: () => this.copyLayoutDiagnostics() });
+    return rows;
+  }
+
+  // -------------------------------------------------------------- footer
+
+  private buildFooter(root: HTMLElement): NonNullable<ReaderView["footer"]> {
+    const el = root.createDiv({ cls: "ereader-footer" });
+    // The whole book, with a tick wherever a contents entry starts.
+    const trackEl = el.createDiv({ cls: "ereader-footer__track", attr: { "aria-hidden": "true" } });
+    const barEl = trackEl.createDiv({ cls: "ereader-footer__bar" });
+    const ticksEl = trackEl.createDiv({ cls: "ereader-footer__ticks" });
+    const percentEl = el.createSpan({ cls: "ereader-footer__percent" });
+    const labelEl = el.createDiv({ cls: "ereader-footer__label" });
+    // A tap moves the second row on to the next kind of progress.
+    el.addEventListener("click", () => {
+      const reader = this.getSettings().reader;
+      reader.footerInfo = FOOTER_INFOS[(FOOTER_INFOS.indexOf(reader.footerInfo) + 1) % FOOTER_INFOS.length] ?? "chapter";
+      this.saveSettings();
+      this.updateFooter();
+    });
+    el.hide();
+    return { el, labelEl, percentEl, barEl, ticksEl, ticksFor: null };
+  }
+
+  /**
+   * The progress line: the book as a bar, and a label showing the chapter's
+   * progress, the book's, or the time left in either. Time is units left ×
+   * the pace learned from the reader's own page turns (reading-time.ts).
+   */
+  private updateFooter(): void {
+    const footer = this.footer;
+    if (!footer) return;
+    const engine = this.engine;
+    const pages = engine?.pageState() ?? null;
+    if (!engine || !this.getSettings().reader.showFooter) {
+      footer.el.hide();
+      return;
+    }
+    if (!pages) {
+      this.showFooterPlaceholder();
+      return;
+    }
+    footer.el.show();
+    const pace = this.pace();
+    const starts = this.chapterStartsFor(engine, pages.total);
+    const chapter = chapterAt(starts, pages.current, pages.total);
+    const progress = engine.progress();
+    footer.barEl.setCssStyles({ width: `${Math.min(100, Math.max(0, progress))}%` });
+    if (footer.ticksFor !== starts) {
+      footer.ticksFor = starts;
+      footer.ticksEl.empty();
+      for (const tick of chapterTicks(starts, pages.total)) {
+        const el = footer.ticksEl.createDiv({ cls: "ereader-footer__tick" });
+        el.toggleClass("is-nested", tick.depth > 0);
+        el.setCssStyles({ left: `${tick.at * 100}%` });
+      }
+    }
+    const facts = {
+      chapter: chapter
+        ? {
+            label: chapter.label.trim(),
+            msLeft: unitsLeft(pages.current, chapter.end) * pace,
+          }
+        : null,
+      bookMsLeft: unitsLeft(pages.current, pages.total + 1) * pace,
+    };
+    footer.percentEl.setText(progressLabel(pages, progress));
+    footer.labelEl.setText(progressInfoLabel(this.getSettings().reader.footerInfo, facts));
+    setTooltip(footer.el, "Tap for the chapter, or the time left in it or the book", { placement: "top" });
+  }
+
+  /**
+   * The progress line before there is anything to put in it: while the book
+   * opens, and while an EPUB's pages are counted in the background. Showing
+   * it at once also means its height is known before the page is laid out.
+   */
+  private showFooterPlaceholder(): void {
+    const footer = this.footer;
+    if (!footer || !this.getSettings().reader.showFooter) return;
+    footer.el.show();
+    footer.labelEl.setText("Calculating…");
+    footer.percentEl.setText("");
+    footer.barEl.setCssStyles({ width: "0" });
+    footer.ticksEl.empty();
+    footer.ticksFor = null;
+    setTooltip(footer.el, "Counting the pages in this book", { placement: "top" });
+  }
+
+  /** The contents placed on the page/location scale; empty until the contents are read. */
+  private chapterStartsFor(engine: ReaderEngine, total: number): ChapterStart[] {
+    if (this.chapterStarts?.total === total) return this.chapterStarts.starts;
+    if (!this.cachedOutline) return [];
+    const starts = rowsFromOutline(this.cachedOutline).map((row) => ({
+      label: row.label,
+      unit: row.target.kind === "book" ? engine.pageNumberFor(row.target.locator) : null,
+      depth: row.depth,
+    }));
+    this.chapterStarts = { total, starts };
+    return starts;
+  }
+
+  private pace(): number {
+    const reader = this.getSettings().reader;
+    return this.format === "pdf" ? reader.pacePdfMs : reader.paceEpubMs;
+  }
+
+  /** Learns the reader's pace from each step forward; a jump resets the anchor instead. */
+  private trackPace(): void {
+    const unit = this.engine?.pageState()?.current;
+    if (unit === undefined) return;
+    const anchor = this.paceAnchor;
+    if (anchor?.unit === unit) return;
+    const now = Date.now();
+    this.paceAnchor = { unit, at: now };
+    if (!anchor) return;
+    const next = nextPace(this.pace(), anchor.unit, unit, now - anchor.at);
+    if (next === null) return;
+    const reader = this.getSettings().reader;
+    if (this.format === "pdf") reader.pacePdfMs = next;
+    else reader.paceEpubMs = next;
+    this.savePace();
+  }
+
+  // ---------------------------------------------------------------- back
+
+  /**
+   * Remembers where the reader is before a jump — a contents entry, a typed
+   * page, a link, a search result — so the place can be offered back. A jump
+   * made while "Back" is already showing keeps the first place: that is the
+   * one the reader was reading at.
+   */
+  private recordJump(): void {
+    this.paceAnchor = null;
+    if (this.chip?.kind === "back") return;
+    const from = this.engine?.currentLocator();
+    if (from) this.pendingBack = { target: from, at: Date.now() };
+  }
+
+  /** Shows "Back" once a jump has landed somewhere else; a jump to the same page offers nothing. */
+  private settleBack(): void {
+    const pending = this.pendingBack;
+    const engine = this.engine;
+    const chip = this.chip;
+    if (chip?.kind === "back" && engine) {
+      const here = engine.pageState()?.current;
+      if (here !== undefined && engine.pageNumberFor(chip.target) === here) this.closeChip();
+    }
+    if (!pending || !engine) return;
+    // A link that went nowhere leaves its record behind; it must not turn the
+    // next ordinary page turn into a "Back".
+    if (Date.now() - pending.at > 3000) {
+      this.pendingBack = null;
+      return;
+    }
+    const here = engine.pageState()?.current;
+    const there = engine.pageNumberFor(pending.target);
+    if (here === undefined || there === null || here === there) return;
+    this.pendingBack = null;
+    this.showBackChip(pending.target);
+  }
+
+  private showBackChip(target: Locator): void {
+    if (this.chip?.kind === "back") return;
+    this.showChip("back", target, "undo-2", this.backLabel(target));
+  }
+
+  /** Puts a place to go in the chip slot, replacing whatever was there. */
+  private showChip(kind: "resume" | "back", target: Locator, icon: string, label: string): void {
+    const root = this.contentRoot;
+    if (!root) return;
+    this.closeChip();
+    this.measureChrome();
+    const chip = root.createDiv({ cls: "ereader-chip" });
+    const go = chip.createEl("button", { cls: "ereader-chip__go" });
+    setIcon(go.createSpan({ cls: "ereader-chip__icon" }), icon);
+    go.createSpan({ cls: "ereader-chip__label", text: label });
+    go.addEventListener("click", () => {
+      this.closeChip();
+      // Taking the resume offer is a jump like any other, with a way back.
+      void this.goToLocator(target, kind === "resume");
+    });
+    const dismiss = chip.createEl("button", { cls: "clickable-icon ereader-chip__dismiss", attr: { "aria-label": "Dismiss" } });
+    setIcon(dismiss, "x");
+    dismiss.addEventListener("click", () => this.closeChip());
+    this.chip = { el: chip, kind, target };
+  }
+
+  private backLabel(target: Locator): string {
+    if (target.kind === "pdf") return `Back to page ${target.page}`;
+    const title = this.chapterTitleAt(target);
+    return title ? `Back to ${title}` : "Back";
+  }
+
+  private closeChip(): void {
+    this.chip?.el.remove();
+    this.chip = null;
+  }
+
+  /**
+   * Publishes what the page keeps clear of, and where the toolbar and the
+   * panels sit, for styles.css. In focus mode the book is laid out once over
+   * the whole pane, so the bars coming and going never reflows it: on a
+   * phone that runs from just under the status bar to just above the
+   * progress line, with the pane's title bar, the toolbar and Obsidian's
+   * bottom bar floating over the page while the menu is out. Out of focus
+   * mode, the page sits between the bars and the progress line never shows.
+   */
+  private measureChrome(): void {
+    const root = this.contentRoot;
+    if (!root) return;
+    const focus = this.chromeCanHide();
+    const phoneFocus = focus && Platform.isMobile;
+    root.toggleClass("is-hideable", focus);
+    const safe = Platform.isMobile ? this.safeArea(root) : { top: 0, bottom: 0 };
+    const headerHeight = phoneFocus ? this.headerReach(root, safe.top) : 0;
+    const toolbarHeight = root.querySelector<HTMLElement>(".ereader-toolbar")?.offsetHeight ?? 0;
+    const footer = this.footer?.el;
+    const footerHeight = focus && footer?.isShown() ? footer.offsetHeight : 0;
+    let top = toolbarHeight;
+    let bottom = safe.bottom;
+    if (phoneFocus) {
+      top = safe.top + FOCUS_TOP_GAP_PX;
+      if (footerHeight > 0) bottom = footerHeight + FOCUS_BOTTOM_GAP_PX;
+    } else if (focus) {
+      top = 0;
+      bottom = footerHeight;
+    }
+    root.setCssProps({
+      "--ereader-header-h": `${headerHeight}px`,
+      "--ereader-toolbar-h": `${toolbarHeight}px`,
+      "--ereader-bottom-inset": `${this.bottomInset(root)}px`,
+      "--ereader-safe-bottom": `${safe.bottom}px`,
+      "--ereader-top-h": `${top}px`,
+      "--ereader-bottom-h": `${bottom}px`,
+    });
+  }
+
+  /**
+   * How far into the reader the pane's floating title bar reaches, at least
+   * clear of the status bar. Obsidian places the bar with more than its
+   * layout box says, so it is measured on screen, while it is showing; slid
+   * away, it keeps the last measurement.
+   */
+  private headerReach(root: HTMLElement, safeTop: number): number {
+    const header = this.containerEl.querySelector<HTMLElement>(":scope > .view-header");
+    const body = this.containerEl.doc.body;
+    const shown = !body.hasClass("ereader-immersive-epub") && !body.hasClass("ereader-immersive-pdf");
+    // Not mid-slide either: the bar is measured where it comes to rest.
+    if (header && shown && header.getAnimations().length === 0) {
+      this.lastHeaderReach = Math.round(header.getBoundingClientRect().bottom - root.getBoundingClientRect().top);
+    }
+    return Math.max(safeTop, this.lastHeaderReach);
+  }
+
+  /**
+   * How much of the reader runs under a phone's status bar and home
+   * indicator: the device's safe-area insets, less whatever Obsidian
+   * already keeps between them and the pane.
+   */
+  private safeArea(root: HTMLElement): { top: number; bottom: number } {
+    const probe = root.createDiv({ cls: "ereader-safe-probe" });
+    const style = root.win.getComputedStyle(probe);
+    const insetTop = parseFloat(style.paddingTop) || 0;
+    const insetBottom = parseFloat(style.paddingBottom) || 0;
+    probe.remove();
+    const rect = root.getBoundingClientRect();
+    const height = root.doc.documentElement.clientHeight;
+    return {
+      top: Math.max(0, Math.round(insetTop - rect.top)),
+      bottom: Math.max(0, Math.round(insetBottom - (height - rect.bottom))),
+    };
+  }
+
+  /** Whether the menu hides while reading: focus mode, kept per kind of device. */
+  private chromeCanHide(): boolean {
+    return focusModeOn(this.getSettings().reader, Platform.isMobile);
+  }
+
+  /**
+   * Where everything the layout depends on actually is on this device, as
+   * JSON: the safe-area insets as the reader reads them, Obsidian's own
+   * spacing variables, and the boxes of the title bar, the bottom bar, the
+   * reader and its toolbar. For fixing the layout from a phone's real
+   * numbers rather than guesses.
+   */
+  layoutDiagnostics(): string {
+    const root = this.contentRoot;
+    const doc = this.containerEl.doc;
+    const win = doc.win;
+    const box = (el: Element | null | undefined): unknown => {
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      const style = win.getComputedStyle(el);
+      return {
+        cls: el.className,
+        rect: [rect.left, rect.top, rect.width, rect.height].map(Math.round),
+        position: style.position,
+        transform: style.transform,
+        marginTop: style.marginTop,
+        paddingTop: style.paddingTop,
+        paddingBottom: style.paddingBottom,
+        zIndex: style.zIndex,
+        animations: el.getAnimations().length,
+      };
+    };
+    const bodyStyle = win.getComputedStyle(doc.body);
+    const vars = (style: CSSStyleDeclaration, names: string[]): Record<string, string> =>
+      Object.fromEntries(names.map((name) => [name, style.getPropertyValue(name).trim()]));
+    let probe: Record<string, string> | null = null;
+    if (root) {
+      const el = root.createDiv({ cls: "ereader-safe-probe" });
+      const style = win.getComputedStyle(el);
+      probe = { top: style.paddingTop, bottom: style.paddingBottom };
+      el.style.paddingTop = "env(safe-area-inset-top)";
+      el.style.paddingBottom = "env(safe-area-inset-bottom)";
+      probe["envTop"] = win.getComputedStyle(el).paddingTop;
+      probe["envBottom"] = win.getComputedStyle(el).paddingBottom;
+      el.remove();
+    }
+    const facts = {
+      obsidian: apiVersion,
+      platform: { mobile: Platform.isMobile, phone: Platform.isPhone, ios: Platform.isIosApp, android: Platform.isAndroidApp },
+      userAgent: navigator.userAgent,
+      window: { inner: [win.innerWidth, win.innerHeight], client: doc.documentElement.clientHeight, visual: win.visualViewport?.height ?? null },
+      bodyClasses: doc.body.className,
+      bodyVars: vars(bodyStyle, ["--safe-area-inset-top", "--safe-area-inset-bottom", "--view-top-spacing", "--view-header-height", "--mobile-navbar-height", "--header-height"]),
+      probe,
+      focus: this.chromeCanHide(),
+      lastHeaderReach: this.lastHeaderReach,
+      lastTap: this.lastTap,
+      hostTouches: this.hostTouches,
+      // What a tap at each of these points would land on, with the reading
+      // settings panel (open while copying) set aside, and inside the book's
+      // frame where the point falls on it.
+      hitTest: this.hitTest(),
+      workspace: doc.querySelector(".workspace")?.className ?? null,
+      drawerBackdrop: box(doc.querySelector(".workspace-drawer-backdrop")),
+      leftDrawer: box(doc.querySelector(".workspace-drawer.mod-left")),
+      leafChildren: Array.from(this.containerEl.children).map((el) => el.className),
+      viewHeader: box(this.containerEl.querySelector(":scope > .view-header")),
+      anyViewHeader: box(doc.querySelector(".workspace-leaf.mod-active .view-header")),
+      viewContent: box(this.containerEl.querySelector(":scope > .view-content")),
+      navbar: box(doc.querySelector(".mobile-navbar")),
+      reader: box(root),
+      readerVars: root
+        ? vars(win.getComputedStyle(root), ["--ereader-top-h", "--ereader-bottom-h", "--ereader-header-h", "--ereader-toolbar-h", "--ereader-safe-bottom", "--ereader-bottom-inset"])
+        : null,
+      toolbar: box(root?.querySelector(".ereader-toolbar")),
+      footer: box(this.footer?.el),
+      engine: (() => {
+        try {
+          return this.engine?.diagnostics() ?? null;
+        } catch (error) {
+          return { error: String(error) };
+        }
+      })(),
+    };
+    return JSON.stringify(facts, null, 2);
+  }
+
+  /**
+   * Copies the layout diagnostics, then saves them to a note as well. The
+   * copy comes first and is not awaited before: iOS allows the clipboard only
+   * during the tap that asked for it, and any await ahead of it loses that.
+   */
+  copyLayoutDiagnostics(): void {
+    let text: string;
+    try {
+      text = this.layoutDiagnostics();
+    } catch (error) {
+      // Whatever broke is itself the diagnosis.
+      text = JSON.stringify({ error: String(error), stack: error instanceof Error ? error.stack : null }, null, 2);
+    }
+    let copy: Promise<boolean>;
+    try {
+      copy = navigator.clipboard.writeText(text).then(
+        () => true,
+        () => false,
+      );
+    } catch {
+      copy = Promise.resolve(false);
+    }
+    const path = "e-reader layout diagnostics.md";
+    const body = "```json\n" + text + "\n```\n";
+    const vault = this.app.vault;
+    const save = (async (): Promise<boolean> => {
+      const file = vault.getFileByPath(path);
+      if (file) await vault.modify(file, body);
+      else await vault.create(path, body);
+      return true;
+    })().catch((error: unknown) => {
+      console.error("[e-reader] could not save layout diagnostics", error);
+      return false;
+    });
+    void Promise.all([copy, save]).then(([copied, saved]) => {
+      const where = [copied ? "copied" : null, saved ? `saved to "${path}"` : null].filter(Boolean).join(" and ");
+      new Notice(where ? `Layout diagnostics ${where}` : "Could not copy or save layout diagnostics");
+    });
+  }
+
+  private hitTest(): Record<string, string> {
+    const doc = this.containerEl.doc;
+    const win = doc.win;
+    const name = (el: Element | null): string =>
+      el ? el.tagName.toLowerCase() + (typeof el.className === "string" && el.className ? "." + el.className.trim().split(/\s+/).join(".") : "") : "nothing";
+    const panel = this.contentRoot?.querySelector<HTMLElement>(".ereader-appearance");
+    const display = panel?.style.display ?? "";
+    if (panel) panel.style.display = "none";
+    try {
+      const points: [string, number, number][] = [
+        ["left", 0.15, 0.5],
+        ["middle", 0.5, 0.5],
+        ["right", 0.85, 0.5],
+        ["upper", 0.5, 0.3],
+        ["lower", 0.5, 0.75],
+      ];
+      return Object.fromEntries(
+        points.map(([label, fx, fy]) => {
+          const x = Math.round(win.innerWidth * fx);
+          const y = Math.round(win.innerHeight * fy);
+          const hit = doc.elementFromPoint(x, y);
+          let text = `${x},${y}: ${name(hit)}`;
+          if (hit instanceof HTMLIFrameElement) {
+            const rect = hit.getBoundingClientRect();
+            const inner = hit.contentDocument?.elementFromPoint(x - rect.left, y - rect.top) ?? null;
+            text += ` [frame at ${Math.round(rect.left)},${Math.round(rect.top)} ${Math.round(rect.width)}x${Math.round(rect.height)} -> ${name(inner)}]`;
+          }
+          return [label, text];
+        }),
+      );
+    } finally {
+      if (panel) panel.style.display = display;
+    }
+  }
+
+  private noteTap(outcome: string): void {
+    this.lastTap = `${new Date().toLocaleTimeString()} ${outcome}`;
+  }
+
+  /** Focus mode was switched, here or in the plugin's settings. */
+  applyFocusMode(): void {
+    if (!this.chromeCanHide()) this.setChromeHidden(false);
+    this.measureChrome();
+    this.syncAppChrome();
+    this.noteActivity();
+  }
+
+  /**
+   * How much of the bottom of the reader Obsidian's phone navigation bar
+   * covers, for the back chip to sit clear of while the menu is out.
+   */
+  private bottomInset(root: HTMLElement): number {
+    if (!Platform.isMobile) return 0;
+    const navbar = root.doc.querySelector<HTMLElement>(".mobile-navbar");
+    if (!navbar) return 0;
+    const bar = navbar.getBoundingClientRect();
+    const pane = root.getBoundingClientRect();
+    if (bar.height <= 0 || bar.top >= pane.bottom || bar.bottom <= pane.top) return 0;
+    return Math.max(0, Math.round(pane.bottom - bar.top));
+  }
+
+  /** Everything that belongs to one open book, cleared when it closes or another opens. */
+  private resetBookChrome(): void {
+    this.search?.reset();
+    this.searchMark = null;
+    this.appearance?.hide();
+    this.chapterStarts = null;
+    this.paceAnchor = null;
+    this.pendingBack = null;
+    this.closeChip();
+    this.footer?.el.hide();
+    this.savePace.run();
+  }
+
+  // ---------------------------------------------------------- immersive
+
+  /**
+   * Hides the toolbar and footer to give the page the whole pane, or brings
+   * them back. Not remembered: a book always opens with its controls showing.
+   */
+  toggleChrome(): void {
+    const root = this.contentRoot;
+    if (!root) return;
+    this.setChromeHidden(!root.hasClass("is-immersive"));
+  }
+
+  private setChromeHidden(hidden: boolean): void {
+    const root = this.contentRoot;
+    if (!root || root.hasClass("is-immersive") === hidden) return;
+    if (hidden && !this.chromeCanHide()) return;
+    // Bars hidden under an open panel would leave it floating over nothing.
+    if (hidden && (this.search?.isOpen() || this.appearance?.isOpen())) return;
+    root.toggleClass("is-immersive", hidden);
+    this.syncAppChrome();
+    // The title bar slides back in; the toolbar settles under it once it has.
+    if (!hidden) window.setTimeout(() => this.measureChrome(), CHROME_SLIDE_MS + 50);
+  }
+
+  /**
+   * On a phone in focus mode the reader is pinned over the whole screen
+   * while it is the pane in front (styles.css), and Obsidian's own bars
+   * (the pane's title bar, and the one along the bottom: search, new note,
+   * tabs, menu) go and come back with the reader's. They belong to the whole
+   * app, so they are only ever changed through classes on the body, dropped
+   * the moment another pane takes over or the reader closes.
+   */
+  private syncAppChrome(): void {
+    const body = this.containerEl.doc.body;
+    const focus =
+      Platform.isMobile && this.chromeCanHide() && this.app.workspace.getActiveViewOfType(ReaderView) === this;
+    const hide = focus && this.engine !== null && this.contentRoot?.hasClass("is-immersive") === true;
+    this.contentRoot?.toggleClass("is-pinned", focus);
+    body.toggleClass("ereader-focus-active", focus);
+    body.toggleClass("ereader-immersive-epub", hide && this.format === "epub");
+    body.toggleClass("ereader-immersive-pdf", hide && this.format === "pdf");
+  }
+
+  /**
+   * Keeps the heights the page and the panels keep clear of up to date. The
+   * bars float over the page (see styles.css), so their size changing — the
+   * toolbar showing, the footer turned on, a narrow pane wrapping them — is
+   * the one thing that moves the page.
+   */
+  private watchChrome(root: HTMLElement): void {
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(() => this.measureChrome());
+      const toolbarEl = root.querySelector<HTMLElement>(".ereader-toolbar");
+      if (toolbarEl) observer.observe(toolbarEl);
+      if (this.footer) observer.observe(this.footer.el);
+      // The pane itself and Obsidian's phone bar, for the footer's lift.
+      observer.observe(root);
+      const navbar = root.doc.querySelector<HTMLElement>(".mobile-navbar");
+      if (navbar) observer.observe(navbar);
+      this.register(() => observer.disconnect());
+    }
+    if (Platform.isMobile) return;
+    // A desktop's bars can hide themselves once the pointer is still, and
+    // come back when it moves, or reaches the top of the pane.
+    this.registerDomEvent(root, "mousemove", () => this.noteActivity());
+    const reveal = root.createDiv({ cls: "ereader-reader__reveal" });
+    this.registerDomEvent(reveal, "mouseenter", () => this.noteActivity());
+  }
+
+  /** The pointer moved: show the bars, and on a desktop in focus mode, start the countdown to hiding them. */
+  private noteActivity(): void {
+    if (Platform.isMobile || !this.chromeCanHide()) return;
+    this.setChromeHidden(false);
+    if (this.idleTimer !== null) window.clearTimeout(this.idleTimer);
+    this.idleTimer = window.setTimeout(() => {
+      this.idleTimer = null;
+      const root = this.contentRoot;
+      if (!root || !this.engine || !this.chromeCanHide()) return;
+      // Not while the pointer rests on a bar, or something in one has focus.
+      const bars = [root.querySelector(".ereader-toolbar"), this.footer?.el];
+      if (bars.some((el) => el?.matches(":hover") || el?.contains(root.doc.activeElement))) {
+        this.noteActivity();
+        return;
+      }
+      this.setChromeHidden(true);
+    }, CHROME_IDLE_MS);
+  }
+
+  /**
+   * On a touchscreen, a tap on the page shows or hides the menu, the way
+   * dedicated reading apps do — anywhere across it: a paginated book's edge
+   * taps turn the page before they get here. Not a tap that is really the
+   * reader putting a selection down.
+   */
+  private toggleChromeFromTap(): void {
+    if (!Platform.isMobile || !this.contentRoot) return;
+    if (this.popup?.isPressed()) return this.noteTap("ignored: the selection popup is pressed");
+    if (Date.now() - this.selectionSeenAt < SELECTION_DISMISS_MS) return this.noteTap("ignored: just after a selection");
+    const was = this.contentRoot.hasClass("is-immersive");
+    this.toggleChrome();
+    const now = this.contentRoot.hasClass("is-immersive");
+    const panel = this.search?.isOpen() || this.appearance?.isOpen();
+    this.noteTap(was === now ? `not toggled (focus mode ${this.chromeCanHide() ? "on" : "off"}, panel open: ${panel})` : `toggled to the ${now ? "reading" : "menu"} view`);
   }
 
   // ----------------------------------------------------------- bookmarks
@@ -763,6 +1840,11 @@ export class ReaderView extends FileView {
   private entryAt(position: { x: number; y: number }): Entry | null {
     const root = this.contentRoot;
     if (!root) return null;
+    const hit = this.engine?.highlightAt(position) ?? null;
+    if (hit !== null) {
+      const entry = this.entries.find((candidate) => candidate.id === hit);
+      if (entry) return entry;
+    }
     for (const el of Array.from(root.querySelectorAll<HTMLElement>(".ereader-hl[data-id]"))) {
       const rect = el.getBoundingClientRect();
       if (position.x < rect.left || position.x > rect.right) continue;
@@ -786,10 +1868,21 @@ export class ReaderView extends FileView {
    * asking about whatever sits under the release.
    */
   private showEntryMenuAt(position: { x: number; y: number }): void {
-    if (this.engine?.getSelection()) return;
+    // A tap inside an EPUB never reaches the host document, where the
+    // settings panel listens for presses outside it, so it is closed here.
+    this.noteTap("reached the view");
+    if (this.appearance?.isOpen()) {
+      this.appearance.hide();
+      return this.noteTap("closed the reading settings");
+    }
+    if (this.engine?.getSelection()) return this.noteTap("ignored: text is selected");
     const entry = this.entryAt(position);
+    if (entry) this.noteTap("on a highlight");
     const note = this.bookNote();
-    if (!entry || !note) return;
+    if (!entry || !note) {
+      if (!entry) this.toggleChromeFromTap();
+      return;
+    }
     const menu = new Menu();
     this.addEntryItems(menu, note, entry, this.getSettings().annotationTypes);
     menu.showAtPosition(position);
@@ -912,7 +2005,7 @@ export class ReaderView extends FileView {
     // Saving a highlight with painting switched off looks exactly like it
     // failing: the entry lands in the note and nothing appears on the page.
     if (type !== BOOKMARK_TYPE && !this.getSettings().reader.showHighlights) {
-      new Notice("E-Reader: highlight saved. Turn on “Show saved highlights” in the display menu to see it in the book.");
+      new Notice("E-Reader: highlight saved. Turn on “Show saved highlights” in reading settings (Aa) to see it in the book.");
     }
     try {
       const page = hint ? (this.engine?.pageNumberFor(hint) ?? undefined) : undefined;
@@ -956,39 +2049,20 @@ export class ReaderView extends FileView {
    * offer, or reading on past that point, writes nothing.
    */
   private offerJump(target: Locator): void {
-    const root = this.contentRoot;
-    if (!root || !this.engine) return;
-    this.closeJumpOffer();
-    const page = this.engine.pageNumberFor(target);
-    const bar = root.createDiv({ cls: "ereader-reader__resume" });
-    bar.createSpan({ text: page === null ? "You read further in this book." : `You read up to page ${page}.` });
-    const jump = bar.createEl("button", { cls: "mod-cta", text: "Jump there" });
-    jump.addEventListener("click", () => {
-      this.closeJumpOffer();
-      void this.goToLocator(target);
-    });
-    const dismiss = bar.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "Dismiss" } });
-    setIcon(dismiss, "x");
-    dismiss.addEventListener("click", () => this.closeJumpOffer());
-    // Just under the toolbar, whose height depends on the theme and whether
-    // its buttons wrap.
-    const toolbarEl = root.querySelector<HTMLElement>(".ereader-toolbar");
-    if (toolbarEl) bar.style.top = `${toolbarEl.offsetHeight + 8}px`;
-    this.jumpOffer = { el: bar, target };
-  }
-
-  private closeJumpOffer(): void {
-    this.jumpOffer?.el.remove();
-    this.jumpOffer = null;
+    if (!this.engine) return;
+    const title = target.kind === "pdf" ? null : this.chapterTitleAt(target);
+    const label =
+      target.kind === "pdf" ? `Jump to page ${target.page}, the furthest you read` : title ? `Jump to ${title}, the furthest you read` : "Jump to the furthest you read";
+    this.showChip("resume", target, "fast-forward", label);
   }
 
   /** Reading on to the offered place makes the offer moot. */
   private dropJumpOfferIfReached(): void {
-    const offer = this.jumpOffer;
+    const offer = this.chip;
     const current = this.engine?.currentLocator();
-    if (!offer || !current) return;
+    if (offer?.kind !== "resume" || !current) return;
     const order = compareLocators(current, offer.target);
-    if (order !== null && order >= 0) this.closeJumpOffer();
+    if (order !== null && order >= 0) this.closeChip();
   }
 
   private currentPosition(): ReadingPosition | null {

@@ -130,7 +130,15 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     this.registerView(
       READER_VIEW_TYPE,
       (leaf) =>
-        new ReaderView(leaf, () => this.settings, () => void this.saveSettings(), this.readerEvents, (note) => this.attachFile(note)),
+        new ReaderView(
+          leaf,
+          () => this.settings,
+          () => void this.saveSettings(),
+          this.readerEvents,
+          (note) => this.attachFile(note),
+          () => void this.revealPane(OUTLINE_VIEW_TYPE),
+          () => void this.revealPane(HIGHLIGHTS_VIEW_TYPE),
+        ),
     );
     // Both panes are registered whatever the settings say: `registerView` has
     // no public counterpart to undo it, so the toggles gate the commands and
@@ -243,8 +251,12 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     };
     readerCommand("next-page", "Next page", (view) => view.turnPage(1));
     readerCommand("previous-page", "Previous page", (view) => view.turnPage(-1));
+    readerCommand("next-chapter", "Next chapter", (view) => view.goToChapter(1));
+    readerCommand("previous-chapter", "Previous chapter", (view) => view.goToChapter(-1));
     readerCommand("zoom-in", "Zoom in", (view) => view.zoom(1));
     readerCommand("zoom-out", "Zoom out", (view) => view.zoom(-1));
+    readerCommand("toggle-toolbar", "Show or hide the reader toolbar", (view) => Promise.resolve(view.toggleChrome()));
+    readerCommand("copy-layout-diagnostics", "Copy layout diagnostics", (view) => Promise.resolve(view.copyLayoutDiagnostics()));
 
     this.addCommand({
       id: "import-book",
@@ -753,6 +765,12 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
   }
 
   /** Closes any pane the reader has just switched off. Called from the settings tab. */
+  applyFocusMode(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(READER_VIEW_TYPE)) {
+      if (leaf.view instanceof ReaderView) leaf.view.applyFocusMode();
+    }
+  }
+
   applyPaneSettings(): void {
     if (!this.settings.panes.outline) this.app.workspace.detachLeavesOfType(OUTLINE_VIEW_TYPE);
     if (!this.settings.panes.highlights) this.app.workspace.detachLeavesOfType(HIGHLIGHTS_VIEW_TYPE);

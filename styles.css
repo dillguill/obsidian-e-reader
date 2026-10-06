@@ -240,15 +240,31 @@
    the PDF view specifically and themes style them assuming a real PDF is
    behind them, so the handful of layout rules is restated rather than
    borrowed. The generic chrome (`clickable-icon`) still is Obsidian's. */
+/* The toolbar and the progress line float over the page rather than taking
+   space from it, so hiding them (a tap, scrolling, the desktop's idle timer)
+   never resizes the page: a resize reflows an EPUB and refits a PDF, and
+   would do both every time they came and went. In focus mode the book is
+   laid out over the whole pane and the menu covers its top while it is out,
+   the way a reading app's does; out of it, the page keeps clear of the
+   toolbar. The view publishes what the page keeps clear of as
+   --ereader-top-h and --ereader-bottom-h, and on a phone in focus mode how
+   far down the pane's floating title bar reaches as --ereader-header-h: the
+   toolbar's background runs up behind it, so the page never shows between
+   the two. */
 .ereader-toolbar {
-  flex: 0 0 auto;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  transition: transform 180ms ease, opacity 180ms ease;
   background: var(--background-primary);
   border-bottom: var(--border-width) solid var(--background-modifier-border);
   display: flex;
   align-items: stretch;
   justify-content: space-between;
   gap: var(--size-4-2);
-  padding: var(--size-4-1) var(--size-4-3);
+  padding: calc(var(--ereader-header-h, 0px) + var(--size-4-1)) var(--size-4-3) var(--size-4-1);
   overflow-x: auto;
 }
 
@@ -258,14 +274,102 @@
   gap: var(--size-4-1);
 }
 
-.ereader-toolbar__divider {
-  width: var(--border-width);
-  height: var(--icon-size);
-  background-color: var(--background-modifier-border);
+/* Immersive reading: the bars slide off the page. */
+.ereader-reader.is-immersive .ereader-toolbar {
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
 }
 
-.ereader-toolbar__spacer {
-  width: var(--size-4-3);
+/* On a phone in focus mode the reader is pinned over the whole screen while
+   it is the pane in front, the way FleurEPUB and R-Reader do it
+   (github.com/gibsonchan-5/fleur-epub, styles.css): Obsidian's spacing above
+   a phone's views and its floating bars then take nothing from the page.
+   Unlike theirs it stays pinned while the menu comes and goes, so the book
+   is laid out once; the pane's title bar and Obsidian's bottom bar float
+   over it with the toolbar while the menu is out. */
+.ereader-reader.is-pinned {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-cover);
+  background: var(--background-primary);
+}
+
+body.ereader-focus-active .workspace-leaf.mod-active .view-header,
+body.ereader-focus-active .mobile-navbar {
+  z-index: var(--layer-status-bar);
+}
+
+/* In the reading view they go with the reader's own bars, slid away and
+   faded; the editing toolbar, the tab header and the status bar too. */
+body.ereader-immersive-epub .mobile-navbar,
+body.ereader-immersive-pdf .mobile-navbar {
+  transform: translateY(100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+body.ereader-immersive-epub .workspace-leaf.mod-active .view-header,
+body.ereader-immersive-pdf .workspace-leaf.mod-active .view-header {
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+body.ereader-immersive-epub :is(.mobile-toolbar, .mobile-tab-header, .status-bar),
+body.ereader-immersive-pdf :is(.mobile-toolbar, .mobile-tab-header, .status-bar) {
+  display: none;
+}
+
+/* On a desktop with the bars hidden, the top edge of the pane brings them
+   back when the pointer reaches it. */
+.ereader-reader__reveal {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 12px;
+  z-index: 4;
+  display: none;
+}
+
+.ereader-reader.is-immersive .ereader-reader__reveal {
+  display: block;
+}
+
+/* A fingertip needs a bigger target than a pointer, and the page box's text
+   has to be at least 16px or iOS zooms the whole app in when it is focused. */
+/* Only the sides: the top clears the floating title bar in focus mode. */
+.is-mobile .ereader-toolbar {
+  padding-left: var(--size-4-2);
+  padding-right: var(--size-4-2);
+}
+
+.is-mobile .ereader-toolbar__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+}
+
+.is-mobile .ereader-toolbar__page {
+  font-size: 16px;
+}
+
+.is-phone .ereader-toolbar__button {
+  min-width: 36px;
+}
+
+.is-phone .ereader-toolbar,
+.is-phone .ereader-toolbar__group {
+  gap: 0;
+}
+
+.is-phone .ereader-toolbar__page {
+  width: 6ch;
 }
 
 .ereader-toolbar__page {
@@ -340,7 +444,7 @@
 .ereader-popup.is-docked {
   left: 50%;
   top: auto;
-  bottom: calc(var(--size-4-4) + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--size-4-4) + max(env(safe-area-inset-bottom, 0px), var(--ereader-bottom-inset, 0px)));
   transform: translateX(-50%);
   max-width: calc(100% - 2 * var(--size-4-4));
   overflow-x: auto;
@@ -366,6 +470,47 @@
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
+}
+
+/* An EPUB's pages fill the pane, less what it keeps clear of. That never
+   changes as the bars come and go, because changing it would reflow it. */
+.ereader-reader.is-epub .ereader-reader__viewport {
+  padding-top: var(--ereader-top-h, 0px);
+  padding-bottom: var(--ereader-bottom-h, 0px);
+}
+
+/* Reads a phone's safe-area insets for the view to measure against. */
+.ereader-safe-probe {
+  position: fixed;
+  visibility: hidden;
+  pointer-events: none;
+  padding-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  padding-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+}
+
+/* A book opening. */
+.ereader-reader__loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.ereader-reader__spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--background-modifier-border);
+  border-top-color: var(--interactive-accent);
+  border-radius: 50%;
+  animation: ereader-spin 0.8s linear infinite;
+}
+
+@keyframes ereader-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* epub.js's own container div (renderTo's {width:'100%',height:'100%'}
@@ -494,6 +639,12 @@
      the padding and left a dead strip down each side. The page is meant to
      meet the edges of the pane. */
   padding: var(--size-4-4) 0;
+  /* A PDF scrolls under the bars, so it has the whole pane once they hide;
+     the padding keeps the first and last pages clear of them, and a page
+     jumped to lands below the toolbar. */
+  padding-top: calc(var(--ereader-top-h, 0px) + var(--size-4-4));
+  padding-bottom: calc(var(--ereader-bottom-h, 0px) + var(--size-4-4));
+  scroll-padding-top: var(--ereader-top-h, 0px);
 }
 
 .ereader-reader__pdf-page {
@@ -545,10 +696,12 @@
   mix-blend-mode: multiply;
 }
 
-/* "Adapt to theme": the filter goes on the whole page, not just the canvas,
-   so painted highlights invert along with the page they sit on rather than
-   turning black over an inverted one. */
-.theme-dark .ereader-reader__pdf-scroll.is-themed .ereader-reader__pdf-page {
+/* Matching a dark Obsidian theme inverts a PDF's pages, so a white page does
+   not glare out of a dark vault. The filter goes on the whole page, not just
+   the canvas, so painted highlights invert along with the page they sit on
+   rather than turning black over an inverted one. A fixed reading theme
+   (below) overrides this. */
+.theme-dark .ereader-reader__pdf-scroll .ereader-reader__pdf-page {
   filter: invert(1) hue-rotate(180deg);
 }
 
@@ -680,36 +833,6 @@
   width: 10px;
 }
 
-/* The offer to jump to the furthest-read position (FR-015b). It floats over
-   the page rather than pushing it down, so accepting or dismissing it does
-   not shift the text the reader has just started on. */
-.ereader-reader__resume {
-  position: absolute;
-  top: var(--size-4-12);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  gap: var(--size-4-2);
-  max-width: calc(100% - var(--size-4-8));
-  padding: var(--size-4-1) var(--size-4-1) var(--size-4-1) var(--size-4-3);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-l);
-  background: var(--background-primary);
-  box-shadow: var(--shadow-s);
-  font-size: var(--font-ui-small);
-  color: var(--text-normal);
-}
-
-.ereader-reader__resume span {
-  flex: 1 1 auto;
-}
-
-.ereader-reader__resume button {
-  flex: none;
-}
-
 /* Read later: a bookmark in the corner opposite the finished check. */
 .ereader-badge.is-read-later {
   right: auto;
@@ -767,6 +890,8 @@
 
 .ereader-reader__no-file-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: var(--size-4-2);
   margin-top: var(--size-4-2);
 }
@@ -814,3 +939,487 @@
   margin-top: 4px;
   color: var(--text-faint);
 }
+
+/* Reading themes. Each is a palette set on the reader's root, so the page,
+   the toolbar and the panels all follow it, and an EPUB's sections read it
+   back when they are styled (epub/adapter.ts, themeCss). "Match Obsidian"
+   sets nothing. The icon colours are restated because the app resolves them
+   from --text-muted once, at the body, where these do not reach. */
+.ereader-reader.ereader-theme-light {
+  --background-primary: #ffffff;
+  --background-secondary: #f4f4f4;
+  --background-modifier-border: #e2e2e2;
+  --background-modifier-hover: rgba(0, 0, 0, 0.06);
+  --background-modifier-form-field: #ffffff;
+  --text-normal: #1d1d1f;
+  --text-muted: #5f5f63;
+  --text-faint: #9a9aa0;
+  --text-selection: rgba(66, 133, 244, 0.25);
+  --icon-color: #5f5f63;
+  --icon-color-hover: #1d1d1f;
+  --icon-color-active: var(--text-accent);
+  color-scheme: light;
+}
+
+.ereader-reader.ereader-theme-sepia {
+  --background-primary: #f5ecd9;
+  --background-secondary: #ece0c6;
+  --background-modifier-border: #dccbaa;
+  --background-modifier-hover: rgba(91, 70, 54, 0.08);
+  --background-modifier-form-field: #fbf5e8;
+  --text-normal: #5b4636;
+  --text-muted: #7c6650;
+  --text-faint: #a48f76;
+  --text-selection: rgba(178, 120, 50, 0.25);
+  --icon-color: #7c6650;
+  --icon-color-hover: #5b4636;
+  --icon-color-active: #5b4636;
+  color-scheme: light;
+}
+
+.ereader-reader.ereader-theme-dark {
+  --background-primary: #1a1a1a;
+  --background-secondary: #242424;
+  --background-modifier-border: #363636;
+  --background-modifier-hover: rgba(255, 255, 255, 0.07);
+  --background-modifier-form-field: #242424;
+  --text-normal: #d8d8d8;
+  --text-muted: #a3a3a3;
+  --text-faint: #6f6f6f;
+  --text-selection: rgba(120, 160, 255, 0.3);
+  --icon-color: #a3a3a3;
+  --icon-color-hover: #d8d8d8;
+  --icon-color-active: var(--text-accent);
+  color-scheme: dark;
+}
+
+/* A PDF's page is an image, so a fixed theme filters it rather than
+   recolouring it. These win over the dark-vault inversion above, which only
+   applies while the reader is matching Obsidian. */
+.ereader-reader.ereader-theme-light .ereader-reader__pdf-scroll .ereader-reader__pdf-page {
+  filter: none;
+}
+
+.ereader-reader.ereader-theme-sepia .ereader-reader__pdf-scroll .ereader-reader__pdf-page {
+  filter: sepia(0.35) brightness(0.96) contrast(0.95);
+}
+
+.ereader-reader.ereader-theme-dark .ereader-reader__pdf-scroll .ereader-reader__pdf-page {
+  filter: invert(1) hue-rotate(180deg) brightness(0.9);
+}
+
+/* Floating panels: reading settings and search. Both hang under the toolbar
+   at the right, the way the native app's popovers sit under their buttons. */
+.ereader-panel {
+  position: absolute;
+  top: calc(var(--ereader-toolbar-h, 44px) + var(--size-4-2));
+  right: var(--size-4-2);
+  z-index: var(--layer-popover);
+  width: min(340px, calc(100% - 2 * var(--size-4-2)));
+  max-height: calc(100% - var(--ereader-toolbar-h, 44px) - 2 * var(--size-4-4));
+  overflow-y: auto;
+  padding: var(--size-4-3);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border: var(--border-width) solid var(--background-modifier-border);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-l);
+}
+
+.ereader-panel__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+  padding: var(--size-4-2) 0;
+}
+
+.ereader-panel__row + .ereader-panel__row {
+  border-top: var(--border-width) solid var(--background-modifier-border);
+}
+
+.ereader-panel__row.is-toggle,
+.ereader-panel__row.is-action {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ereader-panel__label {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.ereader-panel__row.is-toggle .ereader-panel__label,
+.ereader-panel__row.is-action .ereader-panel__label {
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+}
+
+/* Segmented choices. */
+.ereader-panel__choices {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+
+.ereader-panel__choice {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: var(--size-4-1) var(--size-2-2);
+  border: none;
+  border-radius: var(--radius-s);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.ereader-panel__choice:hover {
+  color: var(--text-normal);
+}
+
+.ereader-panel__choice.is-active {
+  background: var(--background-primary);
+  color: var(--text-normal);
+  box-shadow: var(--shadow-s);
+}
+
+.ereader-panel__choice:focus-visible,
+.ereader-panel__step:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+
+/* Theme swatches preview their own palette, whatever the panel is in. */
+.ereader-panel__choice.ereader-swatch {
+  border: var(--border-width) solid transparent;
+}
+
+.ereader-swatch.is-light {
+  background: #ffffff;
+  color: #1d1d1f;
+}
+
+.ereader-swatch.is-sepia {
+  background: #f5ecd9;
+  color: #5b4636;
+}
+
+.ereader-swatch.is-dark {
+  background: #1a1a1a;
+  color: #d8d8d8;
+}
+
+.ereader-panel__choice.ereader-swatch:hover {
+  color: inherit;
+}
+
+.ereader-panel__choice.ereader-swatch.is-light:hover,
+.ereader-panel__choice.ereader-swatch.is-light.is-active {
+  color: #1d1d1f;
+}
+
+.ereader-panel__choice.ereader-swatch.is-sepia:hover,
+.ereader-panel__choice.ereader-swatch.is-sepia.is-active {
+  color: #5b4636;
+}
+
+.ereader-panel__choice.ereader-swatch.is-dark:hover,
+.ereader-panel__choice.ereader-swatch.is-dark.is-active {
+  color: #d8d8d8;
+}
+
+.ereader-panel__choice.ereader-swatch.is-light.is-active,
+.ereader-panel__choice.ereader-swatch.is-sepia.is-active,
+.ereader-panel__choice.ereader-swatch.is-dark.is-active,
+.ereader-panel__choice.ereader-swatch.is-auto.is-active {
+  border-color: var(--interactive-accent);
+}
+
+/* Font choices are shown in their own face. */
+.ereader-font.is-obsidian {
+  font-family: var(--font-text);
+}
+
+.ereader-font.is-serif {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+}
+
+.ereader-font.is-sans {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+}
+
+.ereader-panel__stepper {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
+.ereader-panel__step {
+  flex: 1 1 0;
+  font-size: var(--font-ui-small);
+}
+
+.ereader-panel__step.is-large {
+  font-size: var(--font-ui-large);
+}
+
+.ereader-panel__value {
+  min-width: 5ch;
+  text-align: center;
+  font-size: var(--font-ui-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.ereader-panel__action {
+  font-size: var(--font-ui-small);
+}
+
+.is-mobile .ereader-panel__choice,
+.is-mobile .ereader-panel__step,
+.is-mobile .ereader-panel__action {
+  min-height: 36px;
+}
+
+/* Search. */
+.ereader-search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2);
+  overflow: hidden;
+}
+
+.ereader-search__header {
+  display: flex;
+  align-items: center;
+  gap: var(--size-2-2);
+}
+
+.ereader-search__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.is-mobile .ereader-search__input {
+  font-size: 16px;
+}
+
+.ereader-search__button.is-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.ereader-search__status {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ereader-search__status:empty {
+  display: none;
+}
+
+.ereader-search__results {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 calc(-1 * var(--size-4-2));
+}
+
+.ereader-search__results:empty {
+  display: none;
+}
+
+.ereader-search__result {
+  padding: var(--size-4-2) var(--size-4-3);
+  cursor: pointer;
+  border-radius: var(--radius-s);
+}
+
+.ereader-search__result:hover {
+  background: var(--background-modifier-hover);
+}
+
+.ereader-search__result.is-active {
+  background: var(--background-secondary);
+  box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+.ereader-search__where {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ereader-search__where:empty {
+  display: none;
+}
+
+.ereader-search__excerpt {
+  font-size: var(--font-ui-small);
+  line-height: var(--line-height-tight);
+}
+
+.ereader-search__excerpt mark {
+  background: rgba(255, 159, 26, 0.45);
+  color: inherit;
+  border-radius: 2px;
+}
+
+/* A phone's search is a strip across the top: the results fill the pane
+   until one is picked, then fold away to show the page under the arrows. */
+.is-phone .ereader-panel {
+  left: var(--size-4-2);
+  right: var(--size-4-2);
+  width: auto;
+}
+
+.ereader-search.is-collapsed .ereader-search__results {
+  display: none;
+}
+
+/* The progress line: a thin bar of the whole book, with a tick at every
+   contents entry, and the book's percentage beside it; under them, one label
+   a tap cycles (the chapter, the time left in it, the time left in the
+   book). It belongs to focus mode's reading view, so it shows only while the
+   menu is hidden — the toolbar's page box is the progress when it is out.
+   The space it takes at the bottom is kept either way, so showing it never
+   moves the page. */
+.ereader-footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: var(--size-4-3);
+  row-gap: var(--size-2-1);
+  padding: var(--size-2-3) var(--size-4-4) calc(var(--size-2-3) + var(--ereader-safe-bottom, 0px));
+  background: var(--background-primary);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 180ms ease;
+}
+
+.ereader-reader:not(.is-hideable) .ereader-footer {
+  display: none;
+}
+
+.ereader-reader.is-hideable:not(.is-immersive) .ereader-footer {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ereader-footer__track {
+  position: relative;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ereader-footer__bar {
+  height: 100%;
+  width: 0;
+  background: var(--interactive-accent);
+  opacity: 0.7;
+  transition: width 150ms ease;
+}
+
+.ereader-footer__ticks {
+  position: absolute;
+  inset: 0;
+}
+
+/* A gap cut in the bar where an entry starts; a nested entry's is fainter. */
+.ereader-footer__tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--background-primary);
+}
+
+.ereader-footer__tick.is-nested {
+  width: 1px;
+  margin-left: 0;
+  opacity: 0.5;
+}
+
+.ereader-footer__percent {
+  min-width: 3ch;
+  text-align: right;
+}
+
+.ereader-footer__label {
+  grid-column: 1 / -1;
+  text-align: center;
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The chip over the page: "Jump to the furthest you read" on opening a book,
+   "Back to …" after a jump. Bottom left, clear of the docked selection bar
+   (centred) and the footer. */
+.ereader-chip {
+  position: absolute;
+  left: var(--size-4-3);
+  /* Clear of the progress line, and of Obsidian's floating bar on a phone. */
+  bottom: calc(max(var(--ereader-bottom-h, 0px), var(--ereader-bottom-inset, 0px)) + var(--size-4-3));
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  max-width: calc(100% - 2 * var(--size-4-3));
+  border: var(--border-width) solid var(--background-modifier-border);
+  border-radius: var(--radius-l);
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+}
+
+.ereader-chip__go {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-1);
+  min-width: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  cursor: pointer;
+}
+
+.ereader-chip__label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ereader-chip__icon {
+  display: flex;
+  color: var(--icon-color);
+}
+
+.is-mobile .ereader-chip__go,
+.is-mobile .ereader-chip__dismiss {
+  min-height: 40px;
+}
+

@@ -4,6 +4,10 @@
 // module — callers (reader-view.ts, toolbar.ts) only ever see this interface.
 
 import type { Locator } from "../core/types";
+import type { SearchHandlers } from "./search";
+import type { Typography } from "./typography";
+
+export type { SearchHandlers } from "./search";
 
 export interface OutlineNode {
   label: string;
@@ -111,6 +115,21 @@ export interface ReaderEngine {
    */
   onTap(handler: (position: { x: number; y: number }) => void): void;
   /**
+   * The id of the painted highlight under `position` (host-document client
+   * coordinates), or null. An engine that cannot tell returns null and the
+   * view hit-tests the painted overlay itself.
+   */
+  highlightAt(position: { x: number; y: number }): string | null;
+  /** Facts about how the page is rendered, for the layout diagnostics command. */
+  diagnostics(): Record<string, unknown>;
+  /**
+   * A paginated book's page was turned by the reader (a tap at the edge, a
+   * swipe), or the reader swiped up or down on it — the gestures that stand
+   * in for scrolling where nothing scrolls. An engine whose pages scroll
+   * never calls it.
+   */
+  onPageGesture(handler: (gesture: "turn" | "up" | "down") => void): void;
+  /**
    * Registers a handler for the end of a selection gesture inside the
    * rendered document — a mouse or touch release, NOT a settled selection.
    * The selection popup opens on the release itself rather than on a
@@ -193,6 +212,27 @@ export interface ReaderEngine {
    * `css-change`. A no-op for engines that render in the host document.
    */
   refreshTheme(): void;
+
+  // -------------------------------------------------------------- search
+
+  /**
+   * Searches the whole book for `query`, reporting each match through
+   * `handlers` as it is found, in reading order. Stops early when `signal`
+   * aborts or `handlers.hit` returns false.
+   */
+  search(query: string, handlers: SearchHandlers, signal: AbortSignal): Promise<void>;
+
+  // ---------------------------------------------------------- typography
+
+  /** Font, spacing, margins and so on. A no-op for a fixed-layout book. */
+  setTypography(typography: Typography): void;
+
+  /**
+   * Registers a handler fired just before the engine follows a link inside
+   * the book, while it is still at the place the link was followed from, so
+   * the reader can offer a way back. Engines without in-book links ignore it.
+   */
+  onLinkFollowed(handler: () => void): void;
 
   /** Releases the worker/listeners/object URLs this engine holds. Idempotent. */
   destroy(): void;

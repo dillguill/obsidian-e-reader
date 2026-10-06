@@ -8,13 +8,15 @@
 // and saying so is better than appearing broken.
 
 import type { App, Plugin, TFile, TFolder } from "obsidian";
-import { AbstractInputSuggest, Notice, PluginSettingTab, Setting } from "obsidian";
+import { AbstractInputSuggest, Notice, Platform, PluginSettingTab, Setting } from "obsidian";
 import { isBookNote } from "../core/book-note";
 import { normalizeStatus } from "../core/status";
 import { RESERVED_ENTRY_TYPE } from "../core/types";
 import {
   DEFAULT_SETTINGS,
   HIGHLIGHT_PALETTE,
+  focusModeOn,
+  setFocusMode,
   type PropertyNames,
   type ReaderChoice,
   type Settings,
@@ -26,6 +28,8 @@ export interface SettingsHost {
   saveSettings(): Promise<void>;
   /** Applies the pane toggles right away — detaching a pane that was just turned off. */
   applyPaneSettings(): void;
+  /** Applies focus mode to the open readers right away. */
+  applyFocusMode(): void;
   /** Imports whatever already sits in the inbox folder. */
   scanInbox(): void;
   /** Asks for a new name for a highlight type and renames it in every book. */
@@ -119,6 +123,17 @@ export class EReaderSettingTab extends PluginSettingTab {
             this.host.settings.readers.pdf = value === "default" ? "default" : "plugin";
             this.save();
           }),
+      );
+
+    new Setting(containerEl)
+      .setName("Focus mode")
+      .setDesc("Hide the menu while reading and show a progress line at the bottom. Set separately on phones and on desktops.")
+      .addToggle((toggle) =>
+        toggle.setValue(focusModeOn(this.host.settings.reader, Platform.isMobile)).onChange((value) => {
+          setFocusMode(this.host.settings.reader, Platform.isMobile, value);
+          this.save();
+          this.host.applyFocusMode();
+        }),
       );
 
     new Setting(containerEl)

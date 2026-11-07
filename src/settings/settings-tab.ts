@@ -30,8 +30,6 @@ export interface SettingsHost {
   applyPaneSettings(): void;
   /** Applies focus mode to the open readers right away. */
   applyFocusMode(): void;
-  /** Imports whatever already sits in the inbox folder. */
-  scanInbox(): void;
   /** Asks for a new name for a highlight type and renames it in every book. */
   renameHighlightType(from: string, onDone: () => void): void;
 }
@@ -70,16 +68,6 @@ export class EReaderSettingTab extends PluginSettingTab {
     this.addPropertiesSection(containerEl);
     this.addAnnotationTypesSection(containerEl);
     this.addHighlightFormatSection(containerEl);
-  }
-
-  /**
-   * The inbox is scanned when the settings close, not as its folder is
-   * typed: every prefix of "Books/Inbox" is a folder too, and "Books" would
-   * have imported the whole library a keystroke early.
-   */
-  override hide(): void {
-    super.hide();
-    this.host.scanInbox();
   }
 
   private save(): void {
@@ -230,13 +218,6 @@ export class EReaderSettingTab extends PluginSettingTab {
       "Obsidian's attachment location",
       () => settings.filesFolder,
       (value) => (settings.filesFolder = value),
-    );
-    folderSetting(
-      "Inbox folder",
-      "EPUBs that land here are imported automatically; for PDFs you are asked which are books. Empty turns this off.",
-      "Off",
-      () => settings.inboxFolder,
-      (value) => (settings.inboxFolder = value),
     );
 
     new Setting(containerEl)

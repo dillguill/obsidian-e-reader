@@ -159,7 +159,7 @@ describe("mergeSettings tolerates missing/partial/corrupt saved data", () => {
       status: { useTags: false, property: "shelves", readLater: "Next up", wishlist: "Want" },
       readers: { epub: "plugin", pdf: "default" },
       panes: { outline: false, highlights: true, hideNativeOutline: true },
-      import: { notesFolder: "Books", filesFolder: "Books/files", inboxFolder: "Inbox", lookUpMetadata: false, ignoredPdfs: ["Inbox/receipt.pdf"] },
+      import: { notesFolder: "Books", filesFolder: "Books/files", lookUpMetadata: false },
       highlights: {
         template: "Templates/Highlight.md",
         folder: "Notes/Highlights",
@@ -223,23 +223,19 @@ describe("sidebar pane toggles", () => {
 });
 
 describe("import settings", () => {
-  it("ships with notes in Library, files where Obsidian puts attachments, no inbox, and lookup on", () => {
+  it("ships with notes in Library, files where Obsidian puts attachments, and lookup on", () => {
     expect(DEFAULT_SETTINGS.import).toEqual({
       notesFolder: "Library",
       filesFolder: "",
-      inboxFolder: "",
       lookUpMetadata: true,
-      ignoredPdfs: [],
     });
   });
 
   it("trims slashes from saved folders and falls back per-field", () => {
-    expect(mergeSettings({ import: { notesFolder: "/Books/", inboxFolder: 3, lookUpMetadata: "no" } }).import).toEqual({
+    expect(mergeSettings({ import: { notesFolder: "/Books/", lookUpMetadata: "no" } }).import).toEqual({
       notesFolder: "Books",
       filesFolder: "",
-      inboxFolder: "",
       lookUpMetadata: true,
-      ignoredPdfs: [],
     });
   });
 

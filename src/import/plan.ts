@@ -126,12 +126,6 @@ export function joinPath(folder: string, name: string): string {
   return trimmed === "" ? name : `${trimmed}/${name}`;
 }
 
-/** True when `path` sits inside `folder` (at any depth). An empty folder contains nothing. */
-export function isInFolder(path: string, folder: string): boolean {
-  const trimmed = folder.replace(/^\/+|\/+$/g, "").trim();
-  return trimmed !== "" && path.startsWith(`${trimmed}/`);
-}
-
 /**
  * The books that appear more than once, as groups of two or more. Only books
  * sharing an ISBN or a title are compared, so a large library stays quick.

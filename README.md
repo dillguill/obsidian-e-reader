@@ -16,15 +16,13 @@ reader writes, so a plain `.base` shows them without any setup. Books without
 a cover get one drawn from their title, and right-clicking or long-pressing a
 card opens it, opens its note, or marks it finished or unread.
 
-**Import.** Drop an EPUB or PDF onto the Library, set an inbox folder, or run
-"Import a book from the vault". EPUBs landing in the inbox are imported
-straight away; PDFs, which are as often papers or receipts as books, wait
-until you tick the ones that are books. The
-title, author, language, cover and more are read from the file itself, and
-Open Library can fill in what the file does not say (ISBN, page count,
-subjects, a cover). The note goes to your book notes folder (`Library` by
-default) and the file to wherever Obsidian puts attachments, or a folder you
-choose. A book already in the library is never imported twice: the same
+**Import.** Drop an EPUB or PDF onto the Library, run "Import a book from the
+vault", or choose **Import as book** in a file's menu. Nothing is imported
+until you ask; there is no watched folder. The title, author, language, cover
+and more are read from the file itself, and Open Library can fill in what the
+file does not say (ISBN, page count, subjects, a cover). The note goes to your
+book notes folder (`Library` by default) and the file to wherever Obsidian
+puts attachments, or a folder you choose. A book already in the library is never imported twice: the same
 ISBN, or the same title (subtitle aside) by the same author, or by anyone when
 the existing note has no author. A failed import leaves nothing behind.
 **Find duplicate books** lists books that are in the library more than once
@@ -39,7 +37,7 @@ skipped. It saves a book note with those but no file. A card's menu also has
 **Update details…**, which looks the book up again and writes only what you
 tick. In the
 library it shows faded and labelled *Wishlist*; opening it offers **Add
-file…**, and importing the book later (by drop, inbox or command) fills that
+file…**, and importing the book later (by drop or command) fills that
 same note instead of making a second one. **Read later** and **Add to
 wishlist** in a card's menu add a status to the note: a `read-later` or
 `wishlist` tag by default, or values in a list property you choose in

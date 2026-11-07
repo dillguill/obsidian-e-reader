@@ -53,12 +53,11 @@ describe("BookImporter", () => {
 
   it("moves a file already in the vault rather than copying it", async () => {
     const { app, importer } = setup();
-    const file = await app.vault.createBinary("Inbox/download (1).epub", await epub("Emma", "Jane Austen", false));
+    const file = await app.vault.createBinary("Downloads/download (1).epub", await epub("Emma", "Jane Austen", false));
     const result = await importer.import({ kind: "vault", file });
     expect(result.status).toBe("imported");
     expect(file.path).toBe("Library/files/Emma.epub");
-    expect(app.vault.getAbstractFileByPath("Inbox/download (1).epub")).toBeNull();
-    expect(importer.wrote("Library/files/Emma.epub")).toBe(true);
+    expect(app.vault.getAbstractFileByPath("Downloads/download (1).epub")).toBeNull();
   });
 
   it("refuses a duplicate before writing anything", async () => {
@@ -81,13 +80,13 @@ describe("BookImporter", () => {
 
   it("undoes everything when writing the note fails", async () => {
     const { app, importer } = setup();
-    const file = await app.vault.createBinary("Inbox/x.epub", await epub("Emma", "Jane Austen"));
+    const file = await app.vault.createBinary("Downloads/x.epub", await epub("Emma", "Jane Austen"));
     app.fileManager.processFrontMatter = async () => {
       throw new Error("disk full");
     };
     await expect(importer.import({ kind: "vault", file })).rejects.toThrow("disk full");
-    expect(file.path).toBe("Inbox/x.epub");
-    expect(app.vault.getFiles().map((f) => f.path)).toEqual(["Inbox/x.epub"]);
+    expect(file.path).toBe("Downloads/x.epub");
+    expect(app.vault.getFiles().map((f) => f.path)).toEqual(["Downloads/x.epub"]);
     expect(app.vault.getAbstractFileByPath("Library")).toBeNull();
   });
 

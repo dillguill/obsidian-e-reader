@@ -119,16 +119,8 @@ export interface ImportSettings {
    * own "Default location for new attachments", relative to the new note.
    */
   filesFolder: string;
-  /** Folder watched for new EPUBs and PDFs to import. Empty turns watching off. */
-  inboxFolder: string;
   /** Fill fields the file does not carry from Open Library. */
   lookUpMetadata: boolean;
-  /**
-   * PDFs in the inbox the reader said are not books. A PDF is as likely to be
-   * a receipt or a paper as a book, so the inbox asks before importing one,
-   * and these are not asked about again.
-   */
-  ignoredPdfs: string[];
 }
 
 /** Toolbar state that persists across closing and reopening a book. */
@@ -354,7 +346,7 @@ export const DEFAULT_SETTINGS: Settings = {
   ],
   readers: { epub: "plugin", pdf: "plugin" },
   panes: { outline: true, highlights: true, hideNativeOutline: false },
-  import: { notesFolder: "Library", filesFolder: "", inboxFolder: "", lookUpMetadata: true, ignoredPdfs: [] },
+  import: { notesFolder: "Library", filesFolder: "", lookUpMetadata: true },
   highlights: {
     template: "",
     folder: "Highlights",
@@ -527,11 +519,7 @@ function mergeImport(saved: Record<string, unknown>): ImportSettings {
   return {
     notesFolder: mergeFolder(from["notesFolder"], defaults.notesFolder),
     filesFolder: mergeFolder(from["filesFolder"], defaults.filesFolder),
-    inboxFolder: mergeFolder(from["inboxFolder"], defaults.inboxFolder),
     lookUpMetadata: mergeBoolean(from["lookUpMetadata"], defaults.lookUpMetadata),
-    ignoredPdfs: Array.isArray(from["ignoredPdfs"])
-      ? from["ignoredPdfs"].filter((path): path is string => typeof path === "string")
-      : [],
   };
 }
 

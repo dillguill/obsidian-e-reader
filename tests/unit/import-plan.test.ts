@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { coverExtension, fillGaps } from "../../src/import/metadata";
 import { matchFromSearch, querySearchUrl, resultsFromSearch, searchUrl } from "../../src/import/open-library";
-import { bookIdentity, buildFrontmatter, isInFolder, joinPath, normalizeForMatch, normalizeIsbn, safeFileName, sameBook, groupDuplicates, detailRows, keepDetails } from "../../src/import/plan";
+import { bookIdentity, buildFrontmatter, joinPath, normalizeForMatch, normalizeIsbn, safeFileName, sameBook, groupDuplicates, detailRows, keepDetails } from "../../src/import/plan";
 
 const NAMES = { marker: "type", markerValue: "book", cover: "cover", attachments: "attachments" };
 
@@ -105,12 +105,6 @@ describe("paths", () => {
   it("joins onto a folder or the vault root", () => {
     expect(joinPath("Library/", "a.md")).toBe("Library/a.md");
     expect(joinPath("", "a.md")).toBe("a.md");
-  });
-
-  it("knows what sits inside a folder, and that an empty folder holds nothing", () => {
-    expect(isInFolder("Inbox/sub/a.epub", "Inbox")).toBe(true);
-    expect(isInFolder("Inboxes/a.epub", "Inbox")).toBe(false);
-    expect(isInFolder("a.epub", "")).toBe(false);
   });
 });
 

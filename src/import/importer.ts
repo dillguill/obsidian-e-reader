@@ -20,7 +20,7 @@ import { type BookIdentity, bookIdentity, buildFrontmatter, joinPath, safeFileNa
 
 export const IMPORTABLE_EXTENSIONS: ReadonlySet<string> = new Set(["epub", "pdf"]);
 
-/** A book already in the vault (the inbox, a command), or one dropped in from outside it. */
+/** A book file already in the vault (picked by a command), or one dropped in from outside it. */
 export type ImportSource = { kind: "vault"; file: TFile } | { kind: "external"; name: string; data: ArrayBuffer };
 
 export type ImportResult =
@@ -100,19 +100,12 @@ async function rollBack(undo: (() => Promise<unknown>)[]): Promise<void> {
 export class BookImporter {
   /** One import at a time, so two arriving together cannot both pass the duplicate check. */
   private queue: Promise<unknown> = Promise.resolve();
-  /** Paths this importer has just written, so the inbox does not try to import its own output. */
-  private readonly written = new Set<string>();
 
   constructor(
     private readonly app: App,
     private readonly getSettings: () => Settings,
     private readonly readPdf: PdfMetadataReader,
   ) {}
-
-  /** Whether `path` was written by an import rather than arriving from outside. */
-  wrote(path: string): boolean {
-    return this.written.has(path);
-  }
 
   import(source: ImportSource): Promise<ImportResult> {
     return this.enqueue(() => this.run(source));
@@ -393,14 +386,12 @@ export class BookImporter {
       const from = bookFile.path;
       if (parentOf(from) !== parentOf(bookPath) || basenameOf(from) !== basenameOf(bookPath)) {
         await this.ensureFolder(parentOf(bookPath), undo);
-        this.written.add(bookPath);
         await fileManager.renameFile(bookFile, bookPath);
         undo.push(() => fileManager.renameFile(bookFile, from));
       }
       return bookFile;
     }
     await this.ensureFolder(parentOf(bookPath), undo);
-    this.written.add(bookPath);
     const created = await vault.createBinary(bookPath, source.data);
     undo.push(() => vault.delete(created));
     return created;
@@ -414,7 +405,6 @@ export class BookImporter {
   ): Promise<TFile> {
     const coverPath = await this.filePath(`${name} cover.${cover.extension}`, notePath);
     await this.ensureFolder(parentOf(coverPath), undo);
-    this.written.add(coverPath);
     const created = await this.app.vault.createBinary(coverPath, cover.data);
     undo.push(() => this.app.vault.delete(created));
     return created;

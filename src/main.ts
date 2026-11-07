@@ -13,7 +13,7 @@ import { readEpubImages, readEpubMetadata } from "./import/epub-metadata";
 import type { BookCover } from "./import/metadata";
 import { coverChoices, coverImageUrl, fetchCover, findBook } from "./import/open-library";
 import { type CoverOption, type DetailOption, pickCover, pickDetails } from "./import/review-modals";
-import { detailRows, groupDuplicates, isInFolder, keepDetails } from "./import/plan";
+import { detailRows, groupDuplicates, keepDetails } from "./import/plan";
 import { DuplicatesModal } from "./library/duplicates-modal";
 import { LIBRARY_VIEW_TYPE, LibraryView } from "./library/library-view";
 import { readPdfMetadata } from "./reader/pdf/adapter";
@@ -23,13 +23,6 @@ import { HIGHLIGHTS_VIEW_TYPE, HighlightsView } from "./sidebar/highlights-view"
 import { OUTLINE_VIEW_TYPE, OutlineView } from "./sidebar/outline-view";
 import { EReaderSettingTab, type SettingsHost } from "./settings/settings-tab";
 import { type Settings, DEFAULT_SETTINGS, SETTINGS_VERSION, mergeSettings } from "./settings/settings-model";
-
-/**
- * How long a new file in the inbox must sit unchanged before it is imported.
- * A sync client or a browser writes a download in pieces, and the vault
- * reports the file as created at the first of them.
- */
-const INBOX_SETTLE_MS = 2000;
 
 /** Obsidian's own outline pane. Closed once at startup when the reader asks for it. */
 const NATIVE_OUTLINE_VIEW_TYPE = "outline";
@@ -94,13 +87,6 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
   /** The reader's own event channel, so sidebar panes can follow it without a workspace-wide event name. */
   private readonly readerEvents = new ReaderEvents();
   private readonly importer = new BookImporter(this.app, () => this.settings, readPdfMetadata);
-  /** Inbox files waiting to settle, by path. */
-  private readonly inboxTimers = new Map<string, number>();
-  /** Inbox files already reported or declined this session, so a rescan does not raise them again. */
-  private readonly inboxSkipped = new Set<string>();
-  /** Inbox files that have settled, gathered so files arriving together are handled together. */
-  private readonly settled = new Map<string, TFile>();
-  private settledTimer: number | null = null;
 
   override async onload(): Promise<void> {
     try {
@@ -347,11 +333,6 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
       }
       void this.app.workspace.requestSaveLayout();
 
-      // Registered only once the vault has loaded: before that, every
-      // existing file is reported as created.
-      this.registerEvent(this.app.vault.on("create", (file) => this.onInboxCandidate(file)));
-      this.registerEvent(this.app.vault.on("modify", (file) => this.onInboxCandidate(file)));
-      this.scanInbox();
       void this.migrateReadLater().then(() => this.migrateWishlist());
     });
   }
@@ -398,100 +379,6 @@ export default class EReaderPlugin extends Plugin implements SettingsHost {
     }
     delete this.settings.pendingWishlistMigration;
     await this.saveSettings();
-  }
-
-  /** Imports whatever is already sitting in the inbox. Called at startup and when the inbox setting changes. */
-  scanInbox(): void {
-    const inbox = this.settings.import.inboxFolder;
-    if (inbox === "") return;
-    // A book's own file can live in the inbox, when the inbox is also where
-    // book files are kept. Those are the library, not new arrivals, and
-    // reading them all again at every start can take a phone down.
-    const attached = this.importer.attachedPaths();
-    for (const file of this.app.vault.getFiles()) {
-      if (!attached.has(file.path)) this.onInboxCandidate(file);
-    }
-  }
-
-  /** Schedules an inbox file for import once it has stopped changing. */
-  private onInboxCandidate(file: unknown): void {
-    if (!(file instanceof TFile) || !IMPORTABLE_EXTENSIONS.has(file.extension)) return;
-    if (!isInFolder(file.path, this.settings.import.inboxFolder) || this.importer.wrote(file.path)) return;
-    if (this.inboxSkipped.has(file.path)) return;
-    if (file.extension === "pdf" && this.settings.import.ignoredPdfs.includes(file.path)) return;
-    const pending = this.inboxTimers.get(file.path);
-    if (pending !== undefined) window.clearTimeout(pending);
-    const timer = window.setTimeout(() => {
-      this.inboxTimers.delete(file.path);
-      // It may have been moved or deleted while settling.
-      if (this.app.vault.getAbstractFileByPath(file.path) !== file) return;
-      this.queueSettled(file);
-    }, INBOX_SETTLE_MS);
-    this.inboxTimers.set(file.path, timer);
-    this.registerInterval(timer);
-  }
-
-  /**
-   * Gathers settled inbox files, then imports the EPUBs and asks about the
-   * PDFs. An EPUB is a book; a PDF is as likely to be a paper or a receipt,
-   * so nothing happens to one until the reader says so.
-   */
-  private queueSettled(file: TFile): void {
-    if (file.extension === "pdf" && this.settings.import.ignoredPdfs.includes(file.path)) return;
-    this.settled.set(file.path, file);
-    if (this.settledTimer !== null) window.clearTimeout(this.settledTimer);
-    this.settledTimer = window.setTimeout(() => {
-      this.settledTimer = null;
-      const attached = this.importer.attachedPaths();
-      const files = [...this.settled.values()].filter(
-        (f) => this.app.vault.getAbstractFileByPath(f.path) === f && !attached.has(f.path),
-      );
-      this.settled.clear();
-      for (const f of files) this.inboxSkipped.add(f.path);
-      const epubs = files.filter((f) => f.extension === "epub");
-      const pdfs = files.filter((f) => f.extension === "pdf");
-      if (epubs.length > 0) void this.importInbox(epubs);
-      if (pdfs.length === 0) return;
-      new InboxPdfModal(this, pdfs, (chosen, ignored) => {
-        if (ignored.length > 0) {
-          this.settings.import.ignoredPdfs.push(...ignored.map((f) => f.path));
-          void this.saveSettings();
-        }
-        if (chosen.length > 0) void this.importInbox(chosen);
-      }).open();
-    }, INBOX_SETTLE_MS);
-    this.registerInterval(this.settledTimer);
-  }
-
-  /** Imports a batch from the inbox and reports it in one notice rather than one per file. */
-  private async importInbox(files: TFile[]): Promise<void> {
-    const imported: string[] = [];
-    const duplicates: string[] = [];
-    const failed: string[] = [];
-    for (const file of files) {
-      try {
-        const result = await this.importer.import({ kind: "vault", file });
-        if (result.status === "imported") imported.push(result.title);
-        else if (result.status === "duplicate") {
-          duplicates.push(result.title);
-          this.inboxSkipped.add(file.path);
-        }
-      } catch (error) {
-        console.error(`[e-reader] could not import ${file.path}`, error);
-        failed.push(file.name);
-        this.inboxSkipped.add(file.path);
-      }
-    }
-    const lines: string[] = [];
-    if (imported.length === 1) lines.push(`Imported “${imported[0]}”.`);
-    else if (imported.length > 1) lines.push(`Imported ${imported.length} books.`);
-    if (duplicates.length > 0) {
-      lines.push(`${duplicates.length === 1 ? `“${duplicates[0]}” is` : `${duplicates.length} books are`} already in your library.`);
-    }
-    if (failed.length > 0) {
-      lines.push(`Could not import ${failed.length === 1 ? failed[0] : `${failed.length} files`}; the developer console has the details.`);
-    }
-    if (lines.length > 0) new Notice(lines.join("\n"), failed.length > 0 ? 10000 : 5000);
   }
 
   /** Runs an import and reports how it went. */
@@ -826,83 +713,6 @@ class ImportSuggestModal extends FuzzySuggestModal<TFile> {
 /** An Open Library cover to choose from: a thumbnail shown, the large image saved. */
 function remoteCover(id: number): CoverOption {
   return { src: coverImageUrl(id, "M"), label: "Open Library cover", load: () => fetchCover(coverImageUrl(id, "L")) };
-}
-
-const PDF_PAGE_SIZE = 50;
-
-/** Asks which of the PDFs that arrived in the inbox are books. */
-class InboxPdfModal extends Modal {
-  private readonly chosen = new Set<TFile>();
-  private settled = false;
-
-  constructor(
-    plugin: EReaderPlugin,
-    private readonly files: TFile[],
-    private readonly onDone: (chosen: TFile[], ignored: TFile[]) => void,
-  ) {
-    super(plugin.app);
-  }
-
-  override onOpen(): void {
-    const { contentEl } = this;
-    this.setTitle(this.files.length === 1 ? "Import this PDF as a book?" : `Import these ${this.files.length} PDFs as books?`);
-    contentEl.createEl("p", {
-      text:
-        "PDFs in your inbox are only imported when you say so. Tick the ones that are books; " +
-        "the rest are not asked about again. Add one later with “Import as book” in its file menu.",
-      cls: "setting-item-description",
-    });
-    const list = contentEl.createDiv();
-    const footer = contentEl.createDiv();
-    // Hundreds of rows at once can take a phone down, so they come a page at a time.
-    let shown = 0;
-    const more = new Setting(footer).addButton((button) =>
-      button.setButtonText("Show more").onClick(() => showPage()),
-    );
-    const showPage = (): void => {
-      const end = Math.min(this.files.length, shown + PDF_PAGE_SIZE);
-      for (; shown < end; shown++) {
-        const file = this.files[shown];
-        if (file) this.renderRow(list, file);
-      }
-      more.settingEl.toggle(shown < this.files.length);
-      more.setName(shown < this.files.length ? `Showing ${shown} of ${this.files.length}` : "");
-    };
-    showPage();
-    new Setting(footer).addButton((button) =>
-      button
-        .setButtonText("Import")
-        .setCta()
-        .onClick(() => this.finish()),
-    );
-  }
-
-  private renderRow(list: HTMLElement, file: TFile): void {
-    new Setting(list)
-      .setName(file.basename)
-      .setDesc(file.parent?.path ?? "")
-      .addToggle((toggle) =>
-        toggle.setValue(false).onChange((on) => {
-          if (on) this.chosen.add(file);
-          else this.chosen.delete(file);
-        }),
-      );
-  }
-
-  override onClose(): void {
-    this.contentEl.empty();
-    // Closing counts as an answer too: whatever is ticked is imported and
-    // the rest are not asked about again, so the same list cannot come
-    // back at every start.
-    if (!this.settled) this.finish();
-  }
-
-  private finish(): void {
-    if (this.settled) return;
-    this.settled = true;
-    this.onDone([...this.chosen], this.files.filter((file) => !this.chosen.has(file)));
-    this.close();
-  }
 }
 
 /** Picks one of the configured highlight types. */
